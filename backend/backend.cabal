@@ -1,0 +1,29 @@
+name: backend
+version: 0.1
+cabal-version: >= 1.8
+build-type: Simple
+
+library
+  hs-source-dirs: src
+  if impl(ghcjs)
+    buildable: False
+  build-depends: base
+               , common
+               , frontend
+               , obelisk-backend
+               , obelisk-route
+  exposed-modules:
+    Backend
+  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
+
+executable backend
+  main-is: main.hs
+  hs-source-dirs: src-bin
+  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -threaded -fno-show-valid-hole-fits
+  if impl(ghcjs)
+    buildable: False
+  build-depends: base
+               , backend
+               , common
+               , frontend
+               , obelisk-backend

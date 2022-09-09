@@ -1,0 +1,16 @@
+.attr-cache
+.cabal-sandbox
+*.hi
+*.o
+cabal.project.local
+cabal.sandbox.config
+ctags
+dist-newstyle/
+dist/
+ghcid-output.txt
+profile/
+result
+result-*
+tags
+TAGS
+static.out
