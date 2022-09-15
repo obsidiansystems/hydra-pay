@@ -8,10 +8,20 @@ library
   if impl(ghcjs)
     buildable: False
   build-depends: base
+
                , common
                , frontend
                , obelisk-backend
                , obelisk-route
+               , process
+               , async
+               , which
+               , monad-logger
+               , logging-effect
+               , prettyprinter
+
+  default-options:
+
   exposed-modules:
     Backend
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
