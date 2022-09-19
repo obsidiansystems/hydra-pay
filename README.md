@@ -31,7 +31,9 @@ Foundational:
 - [ ] Automatic seeding under devnet
 - [ ] Hydra Node communication API for participants
 - [ ] Simple frontend for Head interaction
+- [ ] How To Run
 - [ ] Integration of hydra libraries
 - [ ] Choice of network: Devnet, Testnet, Preview, Preprod, Mainnet
 - [ ] API Documentation
 - [ ] Initial client interaction library
+- [ ] How to Contribute
