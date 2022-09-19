@@ -19,6 +19,8 @@ library
                , monad-logger
                , logging-effect
                , prettyprinter
+               , string-interpolate
+               , containers
 
   default-options:
 

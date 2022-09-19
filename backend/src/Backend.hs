@@ -2,6 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Backend where
 
@@ -9,15 +10,17 @@ import Common.Route
 import Control.Monad
 import Obelisk.Backend
 
+import Control.Monad (forM)
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
+import Data.List as List
+import Data.String.Interpolate (i)
 import qualified Data.Text as T
 import Data.Text.Prettyprint.Doc
 
 import GHC.IO.Handle
 
-import Control.Exception
 import Control.Concurrent
 import System.Process
 import System.Which
@@ -31,6 +34,10 @@ cardanoCliPath = $(staticWhich "cardano-cli")
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
+hydraToolsPath :: FilePath
+hydraToolsPath = $(staticWhich "hydra-tools")
+
+
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")
 
@@ -39,26 +46,35 @@ prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
   when (length output > 0) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
 
-participants :: [String]
-participants = ["alice", "bob", "carol"]
-
-standupHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => [String] -> m [ProcessHandle]
-standupHydraNetwork names = do
+standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m [ProcessHandle]
+standupDemoHydraNetwork = do
   -- TODO(skylar): Read the env file first
-  env <- readEnv ".env"
-  result <- liftIO $ mapM (createProcessGiveHandle) $ generateHydraNetworkCPs env names
-  logMessage $ WithSeverity Informational $ "Hydra Network Running for peers: " <> pretty names
+  env' <- readEnv ".env"
+  result <- liftIO $ mapM createProcessGiveHandle $ generateHydraNetworkCPs env' sharedInfo nodes
+  logMessage $ WithSeverity Informational $ "Hydra Network Running for peers Alice, Bob, and Carol"
   pure result
   where
+    portNum p n = p * 1000 + n
+    node :: Int -> String -> HydraNodeInfo
+    node n name = HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n)
+                (KeyPair [i|devnet/credentials/#{name}.sk|] [i|devnet/credentials/#{name}.vk|])
+                (KeyPair [i|#{name}.sk|] [i|#{name}.vk|])
+    nodes = [ node 1 "alice", node 2 "bob", node 3 "carol" ]
+    sharedInfo = HydraSharedInfo
+      { _hydraScriptsTxId = "5f15831e663dd545cdb746a29c174e31544413b1cdb755245549dcf7bfc26485"
+      , _ledgerGenesis = "devnet/genesis-shelley.json"
+      , _ledgerProtocolParameters = "devnet/protocol-parameters.json"
+      , _networkId = "42"
+      , _nodeSocket = "devnet/node.socket"
+      }
     createProcessGiveHandle cp = do
       (_,_,_,handle) <- createProcess cp
       pure handle
 
 -- | Given the names of the participants generate the CreateProcess for all hydra-nodes
-generateHydraNetworkCPs :: [(String, String)] -> [String] -> [CreateProcess]
-generateHydraNetworkCPs env names = map (\p -> mkHydraNodeCP env p (filter (/=p) peers)) peers
-  where
-    peers = zip [1..] names
+generateHydraNetworkCPs :: [(String, String)] -> HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
+generateHydraNetworkCPs env' sharedInfo nodes =
+  map (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= (_nodeId n)) . _nodeId) nodes)) nodes
 
 -- TODO(skylar): What about failure??
 -- We can either fail by having the file be not found, or when we can't parse
@@ -71,29 +87,128 @@ readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
     parseVarName = takeWhile (/= '=')
     parseVarVal = drop 1 . dropWhile (/= '=')
 
+-- FIXME(aleijnse): env is not used
 -- | Takes the node participant and the list of peers
-mkHydraNodeCP :: [(String, String)] -> (Int, String) -> [(Int, String)] -> CreateProcess
-mkHydraNodeCP env (pid, name) peers =
-  (proc hydraNodePath
-  (["--node-id", show pid,
-    "--port", "500" <> show pid,
-    "--api-port", "400" <> show pid,
-    "--monitoring-port", "600" <> show pid,
-    "--hydra-signing-key", name <> ".sk",
-    "--hydra-scripts-tx-id",  "5f15831e663dd545cdb746a29c174e31544413b1cdb755245549dcf7bfc26485",
-    "--cardano-signing-key", "devnet/credentials/" <> name <> ".sk",
-    "--ledger-genesis", "devnet/genesis-shelley.json",
-    "--ledger-protocol-parameters", "devnet/protocol-parameters.json",
-    "--network-id", "42",
-    "--node-socket", "/home/yasuke/code/ob-hydra-poc/devnet/node.socket"
-  ] <> mconcat (map peerArgs peers))) { std_out = CreatePipe
-                                      }
-  where
-    peerArgs (peerId, peerName) =
-      [ "--peer", "127.0.0.1:500" <> show peerId
-      , "--hydra-verification-key", peerName <> ".vk"
-      , "--cardano-verification-key", "devnet/credentials/" <> peerName <> ".vk"
-      ]
+mkHydraNodeCP :: [(String, String)] -> HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
+mkHydraNodeCP env' sharedInfo node peers =
+  (proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
+  { std_out = CreatePipe
+  , env = Just env'
+  }
+
+data KeyPair = KeyPair
+  { _signingKey :: String
+  , _verificationKey :: String
+  }
+
+-- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
+-- argument results in "my/keys/alice.cardano.{vk,sk}" keys being
+-- written.
+generateCardanoKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateCardanoKeys path = do
+  output <- liftIO $
+    readCreateProcess
+    (proc cardanoCliPath [ "address"
+                         , "key-gen"
+                         , "--verification-key-file"
+                         , [i|#{path}.cardano.vk|]
+                         , "--signing-key-file"
+                         , [i|#{path}.cardano.sk|]
+                         ])
+    ""
+  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  pure $ KeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
+
+
+-- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
+-- argument results in "my/keys/alice.hydra.{vk,sk}" keys being
+-- written.
+generateHydraKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateHydraKeys path = do
+  output <- liftIO $
+    readCreateProcess
+    (proc hydraToolsPath [ "gen-hydra-key"
+                         , "--output-file"
+                         , [i|#{path}.hydra|]
+                         ])
+    ""
+  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  pure $ KeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
+
+data HydraSharedInfo = HydraSharedInfo
+  { _hydraScriptsTxId :: String
+  , _ledgerGenesis :: String -- TODO: Path
+  , _ledgerProtocolParameters :: String -- TODO: Path
+  , _networkId :: String
+  , _nodeSocket :: String -- TODO: Path
+  }
+
+data HydraNodeInfo = HydraNodeInfo
+  { _nodeId :: Int
+  , _port :: Int
+  , _apiPort :: Int
+  , _monitoringPort :: Int
+  , _cardanoKeys :: KeyPair
+  , _hydraKeys :: KeyPair
+  }
+
+-- | Max 1000 nodes.
+sequentialNodes :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => String -> Int -> m [HydraNodeInfo]
+sequentialNodes prefix numNodes = do
+  forM [1 .. numNodes] $ \n -> do
+    let portNum p = p * 1000 + n
+    cks <- generateCardanoKeys [i|#{prefix}#{n}|]
+    hks <- generateHydraKeys [i|#{prefix}#{n}|]
+    pure $ HydraNodeInfo
+           { _nodeId = n
+           , _port = portNum 5
+           , _apiPort = portNum 9
+           , _monitoringPort = portNum 6
+           , _cardanoKeys = cks
+           , _hydraKeys = hks
+           }
+
+sharedArgs :: HydraSharedInfo -> [String]
+sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams networkId nodeSocket) =
+  [ "--ledger-genesis"
+  , ledgerGenesis
+  , "--ledger-protocol-parameters"
+  , protocolParams
+  , "--network-id"
+  , networkId
+  , "--node-socket"
+  , nodeSocket
+  , "--hydra-scripts-tx-id"
+  , hydraScriptsTxId
+  ]
+
+nodeArgs :: HydraNodeInfo -> [String]
+nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
+           (KeyPair cskPath _cvkPath)
+           (KeyPair hskPath _hvkPath)) =
+  [ "--node-id"
+  , show nodeId
+  , "--port"
+  , show port
+  , "--api-port"
+  , show apiPort
+  , "--monitoring-port"
+  , show monitoringPort
+  , "--hydra-signing-key"
+  , hskPath
+  , "--cardano-signing-key"
+  , cskPath
+  ]
+
+peerArgs :: HydraNodeInfo -> [String]
+peerArgs ni =
+  [ "--peer"
+  , [i|127.0.0.1:#{_nodeId ni}|]
+  , "--hydra-verification-key"
+  , _verificationKey . _hydraKeys $ ni
+  , "--cardano-verification-key"
+  , _verificationKey . _cardanoKeys $ ni
+  ]
 
 cardanoNodeCreateProcess :: CreateProcess
 cardanoNodeCreateProcess =
@@ -116,11 +231,6 @@ cardanoNodeCreateProcess =
    ]) { std_out = CreatePipe
       }
 
-spawnCardanoNode :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ProcessHandle
-spawnCardanoNode = do
-  (_, stdout, _, pc) <- liftIO $ createProcess cardanoNodeCreateProcess
-  pure pc
-
 seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 seedDevnet = do
   output <- liftIO $ readCreateProcess devnetCp ""
@@ -136,13 +246,12 @@ backend = Backend
   { _backend_run = \serve -> do
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
-        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ stdout _ handle -> do
+        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
           flip runLoggingT (print . renderWithSeverity id) $ do
             logMessage $ WithSeverity Informational "Cardano node is running\nIf you need to seed run the ./seed-devnet.sh command"
-            -- NOTE(skylar): Delay or the socket fails
+            -- NOTE(skylar): Without the delay the socket fails...
             liftIO $ threadDelay $ seconds 2
-            standupHydraNetwork  participants
-
+            void $ standupDemoHydraNetwork
           serve $ const $ return ()
   , _backend_routeEncoder = fullRouteEncoder
   }

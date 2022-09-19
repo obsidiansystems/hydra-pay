@@ -1,8 +1,7 @@
 {
-  "owner": "obsidiansystems",
+  "owner": "input-output-hk",
   "repo": "hydra-poc",
-  "branch": "yasuke/bump-demo",
   "private": false,
-  "rev": "bbb76bc39b99d3ad8761d4de90789b3ea10982c0",
-  "sha256": "16ndwg5cgl4l74z9fizai97lqbbqcfwck773vl6dgvzydvsm1672"
+  "rev": "b0ebec965f27553a1c99e5457441219dcb9306d6",
+  "sha256": "0i9sflwpy87hhrbb6c0wbjs1mj2nsln69yah6vnacb6l0j47ik4b"
 }

@@ -75,6 +75,7 @@ in
           hydra-poc.cardano-node.cardano-node
           hydra-poc.cardano-node.cardano-cli
           hydra-poc.hsPkgs.hydra-node.components.exes.hydra-node
+          hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools
           pkgs.jq
           pkgs.coreutils
         ];
