@@ -153,8 +153,9 @@ data HydraNodeInfo = HydraNodeInfo
   }
 
 -- | Max 1000 nodes.
-sequentialNodes :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => String -> Int -> m [HydraNodeInfo]
+sequentialNodes :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m, Alternative m) => String -> Int -> m [HydraNodeInfo]
 sequentialNodes prefix numNodes = do
+  guard (numNodes < 1000)
   forM [1 .. numNodes] $ \n -> do
     let portNum p = p * 1000 + n
     cks <- generateCardanoKeys [i|#{prefix}#{n}|]
