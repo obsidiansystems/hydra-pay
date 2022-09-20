@@ -6,20 +6,22 @@
 
 module Backend where
 
+import Prelude hiding (filter)
+
 import Common.Route
 import Control.Monad
 import Obelisk.Backend
 
-import Control.Monad (forM)
+import Control.Applicative (Alternative)
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
-import Data.List as List
+import qualified Data.Map as Map
+import Data.Map (Map)
+import Data.Witherable
 import Data.String.Interpolate (i)
 import qualified Data.Text as T
 import Data.Text.Prettyprint.Doc
-
-import GHC.IO.Handle
 
 import Control.Concurrent
 import System.Process
@@ -44,22 +46,24 @@ jqPath = $(staticWhich "jq")
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
-  when (length output > 0) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
 
-standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m [ProcessHandle]
+standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m (Map String ProcessHandle)
 standupDemoHydraNetwork = do
   -- TODO(skylar): Read the env file first
   env' <- readEnv ".env"
-  result <- liftIO $ mapM createProcessGiveHandle $ generateHydraNetworkCPs env' sharedInfo nodes
-  logMessage $ WithSeverity Informational $ "Hydra Network Running for peers Alice, Bob, and Carol"
+  result <- liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
+  logMessage $ WithSeverity Informational "Hydra Network Running for peers Alice, Bob, and Carol"
   pure result
   where
     portNum p n = p * 1000 + n
-    node :: Int -> String -> HydraNodeInfo
-    node n name = HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n)
-                (KeyPair [i|devnet/credentials/#{name}.sk|] [i|devnet/credentials/#{name}.vk|])
-                (KeyPair [i|#{name}.sk|] [i|#{name}.vk|])
-    nodes = [ node 1 "alice", node 2 "bob", node 3 "carol" ]
+    node n name =
+      ( name
+      , HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n)
+        (KeyPair [i|devnet/credentials/#{name}.sk|] [i|devnet/credentials/#{name}.vk|])
+        (KeyPair [i|#{name}.sk|] [i|#{name}.vk|])
+      )
+    nodes = Map.fromList [ node 1 "alice", node 2 "bob", node 3 "carol" ]
     sharedInfo = HydraSharedInfo
       { _hydraScriptsTxId = "5f15831e663dd545cdb746a29c174e31544413b1cdb755245549dcf7bfc26485"
       , _ledgerGenesis = "devnet/genesis-shelley.json"
@@ -74,12 +78,12 @@ standupDemoHydraNetwork = do
 -- | Given the names of the participants generate the CreateProcess for all hydra-nodes
 generateHydraNetworkCPs :: [(String, String)] -> HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
 generateHydraNetworkCPs env' sharedInfo nodes =
-  map (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= (_nodeId n)) . _nodeId) nodes)) nodes
+  map (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
 
 -- TODO(skylar): What about failure??
 -- We can either fail by having the file be not found, or when we can't parse
 -- for the parse part we should use attoparsec or something...
-readEnv :: MonadIO m => FilePath -> m ([(String, String)])
+readEnv :: MonadIO m => FilePath -> m [(String, String)]
 readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
   where
     parseEnvVars = fmap (\x -> (parseVarName x, parseVarVal x)) . lines
@@ -252,7 +256,7 @@ backend = Backend
             logMessage $ WithSeverity Informational "Cardano node is running\nIf you need to seed run the ./seed-devnet.sh command"
             -- NOTE(skylar): Without the delay the socket fails...
             liftIO $ threadDelay $ seconds 2
-            void $ standupDemoHydraNetwork
+            void standupDemoHydraNetwork
           serve $ const $ return ()
   , _backend_routeEncoder = fullRouteEncoder
   }

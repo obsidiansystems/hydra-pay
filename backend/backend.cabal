@@ -21,6 +21,8 @@ library
                , prettyprinter
                , string-interpolate
                , containers
+               , text
+               , witherable
 
   default-options:
 
