@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Backend where
 
@@ -253,11 +254,16 @@ backend = Backend
         prepareDevnet
         liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
           flip runLoggingT (print . renderWithSeverity id) $ do
-            logMessage $ WithSeverity Informational "Cardano node is running\nIf you need to seed run the ./seed-devnet.sh command"
+            logMessage $ WithSeverity Informational [i|
+              Cardano node is running
+              If you need to seed run the ./seed-devnet.sh command:
+              CARDANO_NODE_SOCKET_PATH=devnet/node.socket ./demo/seed-devnet.sh #{cardanoCliPath} #{hydraNodePath} #{jqPath}
+              |]
             -- NOTE(skylar): Without the delay the socket fails...
             liftIO $ threadDelay $ seconds 2
             void standupDemoHydraNetwork
-          serve $ const $ return ()
+          serve $ \case
+            _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
   }
 
