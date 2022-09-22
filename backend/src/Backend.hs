@@ -1,4 +1,6 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -10,9 +12,12 @@ module Backend where
 import Prelude hiding (filter)
 
 import Common.Route
+import Common.Api
 import Control.Monad
 import Obelisk.Backend
+import Obelisk.Route
 
+import System.Directory
 import Control.Applicative (Alternative)
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -28,6 +33,15 @@ import Control.Concurrent
 import System.Process
 import System.Which
 
+import Data.Aeson as Aeson
+
+import Data.Some
+
+import Network.WebSockets
+import Network.WebSockets.Snap
+
+import Reflex.Dom.GadtApi.WebSocket
+
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
 
@@ -40,9 +54,22 @@ hydraNodePath = $(staticWhich "hydra-node")
 hydraToolsPath :: FilePath
 hydraToolsPath = $(staticWhich "hydra-tools")
 
-
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")
+
+queryUTXOs :: MonadIO m => m (T.Text)
+queryUTXOs = liftIO $
+  T.pack <$> readCreateProcess queryProc ""
+  where
+    queryProc =
+      (proc cardanoCliPath [ "query"
+                           , "utxo"
+                           , "--whole-utxo"
+                           , "--testnet-magic"
+                           , "42"
+                           ])
+      { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+
 
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
@@ -261,11 +288,39 @@ backend = Backend
               |]
             -- NOTE(skylar): Without the delay the socket fails...
             liftIO $ threadDelay $ seconds 2
-            void standupDemoHydraNetwork
+            -- void standupDemoHydraNetwork
           serve $ \case
+            BackendRoute_Api :/ () -> do
+              liftIO $ putStrLn "Did it"
+              runWebSocketsSnap $ \pendingConnection -> do
+              conn <- acceptRequest pendingConnection
+              forkPingThread conn 30
+              forever $ do
+                d <- receiveData conn
+                case d of
+                  Just req -> do
+                    r <- mkTaggedResponse req handleDemoApi
+                    case r of
+                      Left err -> error err
+                      Right rsp ->
+                        sendDataMessage conn $ Text (Aeson.encode rsp) Nothing
+
+                  _ -> pure ()
+
+                pure ()
+
             _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
   }
+
+handleDemoApi :: DemoApi a -> IO a
+handleDemoApi = \case
+  DemoApi_GetWholeUTXO -> queryUTXOs
+
+-- Suprised this doesn't exist :D
+instance (ToJSON a, FromJSON a) => WebSocketsData (Maybe a) where
+  fromDataMessage = Aeson.decode . fromDataMessage
+  toLazyByteString = Aeson.encode
 
 seconds :: Int -> Int
 seconds = (* 1000000)

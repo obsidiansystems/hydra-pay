@@ -9,6 +9,10 @@ library
                , obelisk-route
                , mtl
                , text
+               , reflex-gadt-api
+               , aeson
+               , aeson-gadt-th
+               , constraints-extras
   exposed-modules:
     Common.Api
     Common.Route

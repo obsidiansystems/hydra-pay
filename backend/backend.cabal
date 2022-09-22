@@ -8,7 +8,6 @@ library
   if impl(ghcjs)
     buildable: False
   build-depends: base
-
                , common
                , frontend
                , obelisk-backend
@@ -23,6 +22,10 @@ library
                , containers
                , text
                , witherable
+               , websockets-snap
+               , websockets
+               , some
+               , directory
 
   default-options:
 
