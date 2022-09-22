@@ -42,6 +42,9 @@ import Network.WebSockets.Snap
 
 import Reflex.Dom.GadtApi.WebSocket
 
+import qualified Network.WebSockets as WS
+import Debug.Trace
+
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
 
@@ -73,8 +76,12 @@ queryUTXOs = liftIO $
 
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
-  output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
-  when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  -- output <- liftIO $ readCreateProcess (shell "rm -rf devnet") ""
+  -- output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
+  
+  -- -- output <- liftIO $ readCreateProcess (shell "cp -a devnet-seeded devnet") ""
+  -- when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  pure ()
 
 standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m (Map String ProcessHandle)
 standupDemoHydraNetwork = do
@@ -123,10 +130,10 @@ readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
 -- | Takes the node participant and the list of peers
 mkHydraNodeCP :: [(String, String)] -> HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
 mkHydraNodeCP env' sharedInfo node peers =
-  (proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
-  { std_out = CreatePipe
+  traceShow (sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers) ((proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
+  { std_out = Inherit
   , env = Just env'
-  }
+  })
 
 data KeyPair = KeyPair
   { _signingKey :: String
@@ -225,8 +232,9 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   , show port
   , "--api-port"
   , show apiPort
-  , "--monitoring-port"
-  , show monitoringPort
+  -- TODO(parenthetical): Not needed for now but put back at some point.
+  -- , "--monitoring-port"
+  -- , show monitoringPort
   , "--hydra-signing-key"
   , hskPath
   , "--cardano-signing-key"
@@ -236,7 +244,7 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
 peerArgs :: HydraNodeInfo -> [String]
 peerArgs ni =
   [ "--peer"
-  , [i|127.0.0.1:#{_nodeId ni}|]
+  , [i|127.0.0.1:#{_port ni}|]
   , "--hydra-verification-key"
   , _verificationKey . _hydraKeys $ ni
   , "--cardano-verification-key"
@@ -266,11 +274,12 @@ cardanoNodeCreateProcess =
 
 seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 seedDevnet = do
+  liftIO $ putStrLn ("./demo/seed-devnet.sh " <> cardanoCliPath <> " " <> hydraNodePath <> " " <> jqPath)
   output <- liftIO $ readCreateProcess devnetCp ""
   logMessage $ WithSeverity Informational $ pretty $ T.pack output
   where
     devnetCp =
-      (shell ("./seed-devnet.sh " <> cardanoCliPath <> " " <> hydraNodePath <> " " <> jqPath))
+      (shell ("./demo/seed-devnet.sh " <> cardanoCliPath <> " " <> hydraNodePath <> " " <> jqPath))
       { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")]
       }
 
@@ -278,8 +287,9 @@ backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
       flip runLoggingT (print . renderWithSeverity id) $ do
-        prepareDevnet
-        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
+        -- prepareDevnet
+--        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
+        liftIO $ do
           flip runLoggingT (print . renderWithSeverity id) $ do
             logMessage $ WithSeverity Informational [i|
               Cardano node is running
@@ -287,25 +297,27 @@ backend = Backend
               CARDANO_NODE_SOCKET_PATH=devnet/node.socket ./demo/seed-devnet.sh #{cardanoCliPath} #{hydraNodePath} #{jqPath}
               |]
             -- NOTE(skylar): Without the delay the socket fails...
-            liftIO $ threadDelay $ seconds 2
-            -- void standupDemoHydraNetwork
+            -- liftIO $ threadDelay $ seconds 4
+            -- seedDevnet
+            liftIO $ threadDelay $ seconds 4
+            void standupDemoHydraNetwork
           serve $ \case
             BackendRoute_Api :/ () -> do
               liftIO $ putStrLn "Did it"
               runWebSocketsSnap $ \pendingConnection -> do
-              conn <- acceptRequest pendingConnection
-              forkPingThread conn 30
-              forever $ do
-                d <- receiveData conn
-                case d of
-                  Just req -> do
-                    r <- mkTaggedResponse req handleDemoApi
-                    case r of
-                      Left err -> error err
-                      Right rsp ->
-                        sendDataMessage conn $ Text (Aeson.encode rsp) Nothing
-
-                  _ -> pure ()
+                conn <- acceptRequest pendingConnection
+                forkPingThread conn 30
+                forever $ do
+                  d <- receiveData conn
+                  case d of
+                    Just req -> do
+                      r <- mkTaggedResponse req handleDemoApi
+                      case r of
+                        Left err -> error err
+                        Right rsp ->
+                          sendDataMessage conn $ Text (Aeson.encode rsp) Nothing
+  
+                    _ -> pure ()
 
                 pure ()
 
