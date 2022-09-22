@@ -26,6 +26,8 @@ library
                , websockets
                , some
                , directory
+               , reflex-gadt-api
+               , aeson
 
   default-options:
 
