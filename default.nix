@@ -47,6 +47,7 @@ in
   overrides = foldExtensions [
     # cardano-libs-overlay
     (self: super: {
+      reflex-gadt-api = self.callHackage "reflex-gadt-api" "2.0.0.0" {};
       # base16 = haskellLib.markUnbroken (super.base16);
       # secp256k1 = haskellLib.markUnbroken (super.secp256k1);
       # text-conversions = self.callHackage "text-conversions" "0.3.1" {}; # compatible with base16-bytestring 1.x
