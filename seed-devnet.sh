@@ -5,7 +5,22 @@
 set -eo pipefail
 
 MARKER_DATUM_HASH="a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3"
-SCRIPT_DIR=.
+
+REALPATH_CMD=
+if [[ -n ${4} ]]; then
+    echo >&2 "Using provided realpath command: ${4}"
+    $(${4} --version > /dev/null)
+    REALPATH_CMD=${4}
+fi
+
+DIRNAME_CMD=
+if [[ -n ${5} ]]; then
+    echo >&2 "Using provided dirname command: ${5}"
+    $(${5} --version > /dev/null)
+    DIRNAME_CMD=${5}
+fi
+
+SCRIPT_DIR=$(${REALPATH_CMD} $(${DIRNAME_CMD} $(${REALPATH_CMD} $0)))
 NETWORK_ID=42
 
 CCLI_CMD=
@@ -30,7 +45,6 @@ if [[ -n ${3} ]]; then
     $(${3} --version > /dev/null)
     JQ_CMD=${3}
 fi
-
 
 # Invoke cardano-cli in running cardano-node container or via provided cardano-cli
 function ccli() {

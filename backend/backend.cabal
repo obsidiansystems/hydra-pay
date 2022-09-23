@@ -28,8 +28,24 @@ library
                , directory
                , reflex-gadt-api
                , aeson
+               , gargoyle-postgresql
+               , gargoyle-postgresql-connect
+               , gargoyle-postgresql-nix
+               , gargoyle
+               , resource-pool
+               , postgresql-simple
+               , beam-core
+               , beam-postgres
+               , beam-automigrate
 
-  default-options:
+  default-extensions:
+    OverloadedStrings
+    LambdaCase
+    GADTs
+    ScopedTypeVariables
+    OverloadedStrings
+    FlexibleContexts
+    QuasiQuotes
 
   exposed-modules:
     Backend

@@ -1,15 +1,10 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Backend where
 
 import Prelude hiding (filter)
+
+import Hydra.Devnet
 
 import Common.Route
 import Common.Api
@@ -22,6 +17,7 @@ import Control.Applicative (Alternative)
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
+import Data.List (intercalate)
 import qualified Data.Map as Map
 import Data.Map (Map)
 import Data.Witherable
@@ -45,20 +41,14 @@ import Reflex.Dom.GadtApi.WebSocket
 import qualified Network.WebSockets as WS
 import Debug.Trace
 
-cardanoNodePath :: FilePath
-cardanoNodePath = $(staticWhich "cardano-node")
-
-cardanoCliPath :: FilePath
-cardanoCliPath = $(staticWhich "cardano-cli")
-
-hydraNodePath :: FilePath
-hydraNodePath = $(staticWhich "hydra-node")
-
 hydraToolsPath :: FilePath
 hydraToolsPath = $(staticWhich "hydra-tools")
 
-jqPath :: FilePath
-jqPath = $(staticWhich "jq")
+realpathPath :: FilePath
+realpathPath = $(staticWhich "realpath")
+
+dirnamePath :: FilePath
+dirnamePath = $(staticWhich "dirname")
 
 queryUTXOs :: MonadIO m => m (T.Text)
 queryUTXOs = liftIO $
@@ -73,21 +63,15 @@ queryUTXOs = liftIO $
                            ])
       { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
-
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
-  -- output <- liftIO $ readCreateProcess (shell "rm -rf devnet") ""
-  -- output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
-  
-  -- -- output <- liftIO $ readCreateProcess (shell "cp -a devnet-seeded devnet") ""
-  -- when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
+  when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
   pure ()
 
-standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m (Map String ProcessHandle)
-standupDemoHydraNetwork = do
-  -- TODO(skylar): Read the env file first
-  env' <- readEnv ".env"
-  result <- liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
+standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => HydraScriptTxId -> m (Map String ProcessHandle)
+standupDemoHydraNetwork hstxid = do
+  result <- liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP hstxid sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
   logMessage $ WithSeverity Informational "Hydra Network Running for peers Alice, Bob, and Carol"
   pure result
   where
@@ -111,9 +95,9 @@ standupDemoHydraNetwork = do
       pure handle
 
 -- | Given the names of the participants generate the CreateProcess for all hydra-nodes
-generateHydraNetworkCPs :: [(String, String)] -> HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
-generateHydraNetworkCPs env' sharedInfo nodes =
-  map (\n -> mkHydraNodeCP env' sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
+generateHydraNetworkCPs :: HydraScriptTxId -> HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
+generateHydraNetworkCPs hstxid sharedInfo nodes =
+  map (\n -> mkHydraNodeCP hstxid sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
 
 -- TODO(skylar): What about failure??
 -- We can either fail by having the file be not found, or when we can't parse
@@ -126,13 +110,12 @@ readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
     parseVarName = takeWhile (/= '=')
     parseVarVal = drop 1 . dropWhile (/= '=')
 
--- FIXME(aleijnse): env is not used
 -- | Takes the node participant and the list of peers
-mkHydraNodeCP :: [(String, String)] -> HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
-mkHydraNodeCP env' sharedInfo node peers =
+mkHydraNodeCP :: HydraScriptTxId -> HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
+mkHydraNodeCP hstxid sharedInfo node peers =
   traceShow (sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers) ((proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
   { std_out = Inherit
-  , env = Just env'
+  , env = Just [("HYDRA_SCRIPTS_TX_ID", T.unpack hstxid)]
   })
 
 data KeyPair = KeyPair
@@ -272,38 +255,43 @@ cardanoNodeCreateProcess =
    ]) { std_out = CreatePipe
       }
 
-seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
-seedDevnet = do
-  liftIO $ putStrLn ("./demo/seed-devnet.sh " <> cardanoCliPath <> " " <> hydraNodePath <> " " <> jqPath)
+devnetMagic :: Int
+devnetMagic = 42
+  {-
   output <- liftIO $ readCreateProcess devnetCp ""
   logMessage $ WithSeverity Informational $ pretty $ T.pack output
   where
+    shellStr = intercalate " " ["./seed-devnet.sh", cardanoCliPath, hydraNodePath, jqPath, realpathPath]
     devnetCp =
-      (shell ("./demo/seed-devnet.sh " <> cardanoCliPath <> " " <> hydraNodePath <> " " <> jqPath))
+      (shell shellStr)
       { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")]
       }
+-}
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
       flip runLoggingT (print . renderWithSeverity id) $ do
-        -- prepareDevnet
---        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
-        liftIO $ do
+        prepareDevnet
+        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
           flip runLoggingT (print . renderWithSeverity id) $ do
             logMessage $ WithSeverity Informational [i|
               Cardano node is running
-              If you need to seed run the ./seed-devnet.sh command:
-              CARDANO_NODE_SOCKET_PATH=devnet/node.socket ./demo/seed-devnet.sh #{cardanoCliPath} #{hydraNodePath} #{jqPath}
               |]
-            -- NOTE(skylar): Without the delay the socket fails...
-            -- liftIO $ threadDelay $ seconds 4
-            -- seedDevnet
-            liftIO $ threadDelay $ seconds 4
-            void standupDemoHydraNetwork
+            liftIO $ threadDelay $ seconds 2
+
+            -- NOTE(skylar): Currently just using this as "did we do the setup?"
+            envExists <- liftIO $ doesFileExist ".env"
+            when (not envExists) $ do
+              _ <- seedDevnet
+              logMessage $ WithSeverity Informational [i|
+              Devnet has been seeded
+              |]
+            hstxid <- publishReferenceScripts
+            standupDemoHydraNetwork hstxid
+            pure ()
           serve $ \case
             BackendRoute_Api :/ () -> do
-              liftIO $ putStrLn "Did it"
               runWebSocketsSnap $ \pendingConnection -> do
                 conn <- acceptRequest pendingConnection
                 forkPingThread conn 30

@@ -102,7 +102,7 @@ app :: forall t m. ( Prerender t m
        , Requester t (Client m)
        , Request (Client m) ~ DemoApi
        , Response (Client m) ~ Either T.Text) => m ()
-app = elClass "div" "w-screen h-screen bg-gray-900" $ do
+app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
   elClass "div" "p-4 m-4 text-white text-5xl font-bold" $ text "Hydra Proof Of Concept Demo"
 
   elClass "div" "p-4 m-4 rounded-lg bg-gray-800 text-white" $ do
