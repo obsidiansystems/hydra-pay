@@ -92,7 +92,7 @@ eitherToMaybe _ = Nothing
 -- NOTE(skylar): This is just for knowing what options to present
 data HeadState
   = Idle
-  | Intializing
+  | Initializing
   | Open
   deriving (Eq, Show)
 
@@ -135,16 +135,21 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
       , ("carol", "ws://localhost:9003")
       ]
 
-  prerender_ blank $ do
-    headState <- holdDyn Idle never
+  prerender_ blank $ mdo
+    headState <- holdDyn Idle newState
 
     elClass "div" "ml-4 mt-8 mr-4 mb-2 w-full font-black text-green-500" $ dyn_ $ ffor headState $ \case
       Idle -> do
         elClass "div" "text-lg" $ text "Head State: IDLE"
-        elClass "div" "text-green-700 text-sm" $ text "Waiting for participant to commit..."
+        elClass "div" "text-green-700 text-sm" $ text "Waiting for participant to init..."
+
+      Initializing -> do
+        elClass "div" "text-lg" $ text "Head State: Initializing"
+        elClass "div" "text-green-700 text-sm" $ text $ "Waiting for commits from: " <> (T.intercalate ", " $ fmap fst participants)
+
       _ -> blank
 
-    elClass "div" "ml-4 mr-4 overflow-hidden rounded-lg bg-gray-800" $ mdo
+    newState <- elClass "div" "ml-4 mr-4 overflow-hidden rounded-lg bg-gray-800" $ mdo
       rec
         currentTab <- holdDyn (fst . head $ participants) changeTab
 
@@ -159,7 +164,7 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
           pure $ name <$ domEvent Click buttonEl
 
       -- participants
-      forM_ participants
+      fmap leftmost $ forM participants
         $ \(name, wsUrl) -> do
             let
                isSelected = (== name) <$> currentTab
@@ -170,12 +175,25 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
             elDynClass "div" (mkClasses <$> isSelected) $ mdo
               let wsCfg :: (WebSocketConfig t T.Text) = WebSocketConfig (fmap pure action) never False []
               ws <- textWebSocket wsUrl wsCfg
+              let
+                webSocketMessage = _webSocket_recv ws
+
+                processLog msg
+                  | T.isInfixOf "ReadyToCommit" msg  = Just Initializing
+                  | T.isInfixOf "HeadIsOpen" msg = Just Open
+                  | otherwise = Nothing
+
+                stateChange = fmapMaybe processLog webSocketMessage
 
               actionEv :: _ <- dyn $ ffor headState $ \case
                 Idle -> do
                   elClass "div" "p-8 flex flex-row items-center justify-center" $ do
                     (buttonEl, _) <- elClass' "button" "bg-blue-500 hover:bg-blue-400 active:bg-blue-300 text-white font-bold text-xl px-4 py-2 rounded-md" $ text $ "Initialize head as " <> name
                     pure $ "{ \"tag\": \"Init\", \"contestationPeriod\": 60 }" <$ domEvent Click buttonEl
+                Initializing -> do
+                  elClass "div" "p-8 flex flex-row items-center justify-center" $ do
+                    text $ "Getting " <> name <> "'s UTXOs"
+                  pure never
                 _ ->
                   text "Not handled" >> pure never
 
@@ -184,7 +202,7 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
               elClass "div" "p-2 bg-gray-800 rounded-md drop-shadow" $ do
                 el "ul" $ do
                   comms <- foldDyn (++) [] $
-                    (fmap ((:[]) . ("Rcv: " <>)) $ _webSocket_recv ws)
+                    (fmap ((:[]) . ("Rcv: " <>)) $ webSocketMessage)
                     <>
                     fmap (fmap ("Snd: " <>)) never
                   dyn_ $ fmap (mapM (el "li" . text) . reverse) comms
@@ -196,5 +214,5 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
                              -- ,
                                current toSendDyn <@ domEvent Click buttonEl
                              ]-}
-              pure ()
+              pure stateChange
     pure ()
