@@ -72,7 +72,7 @@ standupDemoHydraNetwork hstxid actors = do
       ( name
       , HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n) keys
       )
-    nodes = Map.fromList . fmap node $ zip [0 ..] (Map.toList actors)
+    nodes = Map.fromList . fmap node $ zip [1 ..] (Map.toList actors)
     sharedInfo = HydraSharedInfo
       { _hydraScriptsTxId = T.unpack hstxid
       , _ledgerGenesis = "devnet/genesis-shelley.json"
