@@ -15,6 +15,16 @@ library
                , obelisk-generated-static
                , text
                , reflex-gadt-api
+  default-extensions:
+    RecursiveDo
+    RankNTypes
+    FlexibleContexts
+    PartialTypeSignatures
+    ScopedTypeVariables
+    OverloadedStrings
+    TypeFamilies
+    RecursiveDo
+    LambdaCase
   exposed-modules:
     Frontend
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

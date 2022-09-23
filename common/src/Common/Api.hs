@@ -1,16 +1,4 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 module Common.Api where
 
@@ -19,9 +7,13 @@ import Data.Aeson (ToJSON(..), FromJSON(..))
 import Data.Aeson.GADT.TH (deriveJSONGADT)
 import Data.Constraint.Extras (Has)
 import Data.Constraint.Extras.TH (deriveArgDict)
+import GHC.Generics
+import Data.Map (Map)
+
+import Hydra.Types
 
 data DemoApi :: * -> * where
-  DemoApi_GetWholeUTXO :: DemoApi T.Text
+  DemoApi_GetWholeUTXO :: DemoApi WholeUTXO
 
 deriveJSONGADT ''DemoApi
 deriveArgDict ''DemoApi

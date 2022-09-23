@@ -13,7 +13,24 @@ library
                , aeson
                , aeson-gadt-th
                , constraints-extras
+
+  default-extensions:
+    DeriveGeneric
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    LambdaCase
+    MultiParamTypeClasses
+    OverloadedStrings
+    QuantifiedConstraints
+    RecursiveDo
+    ScopedTypeVariables
+    TypeFamilies
+    UndecidableInstances
+
   exposed-modules:
     Common.Api
     Common.Route
+
+    Hydra.Types
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

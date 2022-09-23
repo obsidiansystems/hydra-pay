@@ -42,19 +42,6 @@ import qualified Network.WebSockets as WS
 import Paths
 import qualified Data.Map.Merge.Lazy as Map
 
-queryUTXOs :: MonadIO m => m (T.Text)
-queryUTXOs = liftIO $
-  T.pack <$> readCreateProcess queryProc ""
-  where
-    queryProc =
-      (proc cardanoCliPath [ "query"
-                           , "utxo"
-                           , "--whole-utxo"
-                           , "--testnet-magic"
-                           , "42"
-                           ])
-      { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
-
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""

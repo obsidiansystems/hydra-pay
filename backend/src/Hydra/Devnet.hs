@@ -4,6 +4,8 @@
 
 module Hydra.Devnet where
 
+import GHC.Generics
+
 import System.Which
 import System.Directory
 import System.Process
@@ -11,11 +13,14 @@ import System.Process
 import Control.Monad
 import Control.Monad.Log
 import Control.Monad.IO.Class
+import Data.Aeson
 
 import Control.Concurrent
 
 import Data.Traversable
 import Data.Foldable
+
+import Data.Map (Map)
 
 import Data.Bool
 import Data.Text.Prettyprint.Doc
@@ -27,6 +32,10 @@ import qualified Data.Map as Map
 import Data.String.Interpolate (i)
 import qualified Data.Set as Set
 import Paths
+
+import qualified Data.ByteString.Lazy.Char8 as BS
+
+import Hydra.Types
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
@@ -53,15 +62,7 @@ type CardanoNodeSocketPath = FilePath
 type Lovelace = Int
 type CardanoSigningKeyPath = String
 
--- | Cardano address
-type Address = String
-
-type TxInInfo = T.Text
-type TxIn = T.Text
 type TxId = T.Text
-
-fuelMarkerDatumHash :: T.Text
-fuelMarkerDatumHash = "a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3"
 
 type HydraScriptTxId = T.Text
 
@@ -249,6 +250,23 @@ getFaucetTxIn = getFaucetAddress >>= getFirstTxIn
 
 minTxLovelace :: Int
 minTxLovelace = 857690
+
+queryUTXOs :: MonadIO m => m (WholeUTXO)
+queryUTXOs = liftIO $ do
+  str <- readCreateProcess queryProc ""
+  putStrLn str
+  pure $ maybe mempty id $ decode $ BS.pack str
+  where
+    queryProc =
+      (proc cardanoCliPath [ "query"
+                           , "utxo"
+                           , "--whole-utxo"
+                           , "--testnet-magic"
+                           , "42"
+                           , "--out-file"
+                           , "/dev/stdout"
+                           ])
+      { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
 signSeedTx :: ActorName -> IO ()
 signSeedTx name = do

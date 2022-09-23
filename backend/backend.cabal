@@ -37,6 +37,7 @@ library
                , beam-core
                , beam-postgres
                , beam-automigrate
+               , bytestring
 
   default-extensions:
     OverloadedStrings
@@ -46,6 +47,7 @@ library
     OverloadedStrings
     FlexibleContexts
     QuasiQuotes
+    DeriveGeneric
 
   exposed-modules:
     Backend
