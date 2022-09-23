@@ -21,6 +21,12 @@ import Data.Bool
 import Data.Text.Prettyprint.Doc
 import qualified Data.Text as T
 import Data.String (fromString)
+import Data.Map (Map)
+import Data.Set (Set)
+import qualified Data.Map as Map
+import Data.String.Interpolate (i)
+import qualified Data.Set as Set
+import Paths
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
@@ -45,6 +51,7 @@ jqPath = $(staticWhich "jq")
 type ActorName = String
 type CardanoNodeSocketPath = FilePath
 type Lovelace = Int
+type CardanoSigningKeyPath = String
 
 -- | Cardano address
 type Address = String
@@ -60,6 +67,80 @@ type HydraScriptTxId = T.Text
 
 devnetNetworkId :: Int
 devnetNetworkId = 42
+
+-- !!!!!!!!!!!!!!
+-- FIXME(parenthetical): don't hardcode credentials path, but pass around key paths or the keys themselves
+-- !!!!!!!!!!!!!!
+
+-- FIXME(parenthetical): Major hax re: keys existing/hard coded paths.
+generateDemoKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m (Map String HydraKeyInfo)
+generateDemoKeys = do
+  liftIO $ createDirectoryIfMissing True "credentials"
+  sequence . flip Map.fromSet demoActors $ \actor -> do
+    keysExist <- liftIO $ doesFileExist [i|credentials/#{actor}.cardano.vk|]
+    unless keysExist $ do
+      ck <- generateCardanoKeys [i|credentials/#{actor}|]
+      hk <- generateHydraKeys [i|credentials/#{actor}|]
+      logMessage $ WithSeverity Informational $ fromString $ [i|Generated new keys #{ck} #{hk}|]
+      pure ()
+    let hopefullyTheCorrectPaths =
+          HydraKeyInfo
+          (KeyPair [i|credentials/#{actor}.cardano.sk|] [i|credentials/#{actor}.cardano.vk|])
+          (KeyPair [i|credentials/#{actor}.hydra.sk|] [i|credentials/#{actor}.hydra.vk|])
+    logMessage $ WithSeverity Informational $ fromString $ [i|Returning keys #{hopefullyTheCorrectPaths}|]
+    pure hopefullyTheCorrectPaths
+    
+
+
+demoActors :: Set String
+demoActors = Set.fromList ["alice", "bob", "carol"]
+
+data KeyPair = KeyPair
+  { _signingKey :: String
+  , _verificationKey :: String
+  }
+  deriving (Show,Read)
+
+
+data HydraKeyInfo = HydraKeyInfo
+  { _cardanoKeys :: KeyPair
+  , _hydraKeys :: KeyPair
+  }
+  deriving (Show,Read)
+
+-- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
+-- argument results in "my/keys/alice.cardano.{vk,sk}" keys being
+-- written.
+generateCardanoKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateCardanoKeys path = do
+  output <- liftIO $
+    readCreateProcess
+    (proc cardanoCliPath [ "address"
+                         , "key-gen"
+                         , "--verification-key-file"
+                         , [i|#{path}.cardano.vk|]
+                         , "--signing-key-file"
+                         , [i|#{path}.cardano.sk|]
+                         ])
+    ""
+  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  pure $ KeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
+
+-- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
+-- argument results in "my/keys/alice.hydra.{vk,sk}" keys being
+-- written.
+generateHydraKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateHydraKeys path = do
+  output <- liftIO $
+    readCreateProcess
+    (proc hydraToolsPath [ "gen-hydra-key"
+                         , "--output-file"
+                         , [i|#{path}.hydra|]
+                         ])
+    ""
+  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  pure $ KeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
+
 
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
 publishReferenceScripts = do
@@ -81,14 +162,17 @@ writeEnv :: HydraScriptTxId -> IO ()
 writeEnv hstxid = do
   writeFile ".env" $ "HYDRA_SCRIPTS_TX_ID=" <> T.unpack hstxid
 
-seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
-seedDevnet = do
+
+demoActorAmounts :: Map String Lovelace
+demoActorAmounts = Map.fromList [("alice", 1000000000), ("bob", 500000000), ("carol", 250000000)]
+
+
+-- TODO(parenthetical): Use the keypair values (_demoKeys) once all the other functions use key paths instead of credentials/${name}*
+-- | Needs Cardano keys.
+seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Map String (KeyPair, Lovelace) -> m HydraScriptTxId
+seedDevnet actors = do
   logMessage $ WithSeverity Informational "Creating payment keys"
-  for_ actors $ \(name, amount) -> do
-    keysExist <- liftIO $ doesFileExist $ "credentials/" <> name <> ".vk"
-    unless keysExist $ do
-      logMessage $ WithSeverity Informational $ fromString $ fromString "Keys did not exist for actor " <> fromString name
-      liftIO $ createActorPaymentKeys name
+  for_ (Map.toList actors) $ \(name, (_, amount)) -> do
     seedActorFromFaucetAndWait name amount False
     seedActorFromFaucetAndWait name 100000000 True
 
@@ -98,11 +182,9 @@ seedDevnet = do
   logMessage $ WithSeverity Informational "Writing .env"
   liftIO $ writeEnv hstxid
   pure hstxid
-  where
-    -- FIXME(parenthetical): Pass in actors + keys (don't generate keys here)
-    actors = [("alice", 1000000000), ("bob", 500000000), ("carol", 250000000)]
 
 -- TODO(skylar): Currently always uses the devnet socket, but we likely don't want to use anything else
+-- FIXME(parenthetical): Duplicated in generateCardanoKeys
 createActorPaymentKeys :: ActorName -> IO ()
 createActorPaymentKeys name = do
   createDirectoryIfMissing False "credentials"
@@ -112,9 +194,9 @@ createActorPaymentKeys name = do
     cp = (proc cardanoCliPath [ "address"
                               , "key-gen"
                               , "--verification-key-file"
-                              , "credentials/" <> name <> ".vk"
+                              , "credentials/" <> name <> ".cardano..vk"
                               , "--signing-key-file"
-                              , "credentials/" <> name <> ".sk"
+                              , "credentials/" <> name <> ".cardano.sk"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
 seedActorFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => ActorName -> Lovelace -> Bool -> m ()
@@ -271,7 +353,7 @@ getActorAddress name = readCreateProcess cp ""
     cp = (proc cardanoCliPath [ "address"
                               , "build"
                               , "--payment-verification-key-file"
-                              , "credentials/" <> name <> ".vk"
+                              , "credentials/" <> name <> ".cardano.vk"
                               -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
                               , "42"
