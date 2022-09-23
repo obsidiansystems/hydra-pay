@@ -71,7 +71,7 @@ prepareDevnet = do
 
 standupDemoHydraNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => HydraScriptTxId -> m (Map String ProcessHandle)
 standupDemoHydraNetwork hstxid = do
-  result <- liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP hstxid sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
+  result <- liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
   logMessage $ WithSeverity Informational "Hydra Network Running for peers Alice, Bob, and Carol"
   pure result
   where
@@ -84,7 +84,7 @@ standupDemoHydraNetwork hstxid = do
       )
     nodes = Map.fromList [ node 1 "alice", node 2 "bob", node 3 "carol" ]
     sharedInfo = HydraSharedInfo
-      { _hydraScriptsTxId = "5f15831e663dd545cdb746a29c174e31544413b1cdb755245549dcf7bfc26485"
+      { _hydraScriptsTxId = T.unpack hstxid
       , _ledgerGenesis = "devnet/genesis-shelley.json"
       , _ledgerProtocolParameters = "devnet/protocol-parameters.json"
       , _networkId = "42"
@@ -95,9 +95,9 @@ standupDemoHydraNetwork hstxid = do
       pure handle
 
 -- | Given the names of the participants generate the CreateProcess for all hydra-nodes
-generateHydraNetworkCPs :: HydraScriptTxId -> HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
-generateHydraNetworkCPs hstxid sharedInfo nodes =
-  map (\n -> mkHydraNodeCP hstxid sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
+generateHydraNetworkCPs :: HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
+generateHydraNetworkCPs sharedInfo nodes =
+  map (\n -> mkHydraNodeCP sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
 
 -- TODO(skylar): What about failure??
 -- We can either fail by having the file be not found, or when we can't parse
@@ -111,11 +111,10 @@ readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
     parseVarVal = drop 1 . dropWhile (/= '=')
 
 -- | Takes the node participant and the list of peers
-mkHydraNodeCP :: HydraScriptTxId -> HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
-mkHydraNodeCP hstxid sharedInfo node peers =
+mkHydraNodeCP :: HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
+mkHydraNodeCP sharedInfo node peers =
   traceShow (sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers) ((proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
   { std_out = Inherit
-  , env = Just [("HYDRA_SCRIPTS_TX_ID", T.unpack hstxid)]
   })
 
 data KeyPair = KeyPair
@@ -287,8 +286,9 @@ backend = Backend
               logMessage $ WithSeverity Informational [i|
               Devnet has been seeded
               |]
-            hstxid <- publishReferenceScripts
-            standupDemoHydraNetwork hstxid
+            -- hstxid <- publishReferenceScripts
+            theEnv <- fmap Map.fromList $ readEnv ".env"
+            standupDemoHydraNetwork (T.pack $ theEnv Map.! "HYDRA_SCRIPTS_TX_ID")
             pure ()
           serve $ \case
             BackendRoute_Api :/ () -> do

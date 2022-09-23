@@ -20,6 +20,7 @@ import Data.Foldable
 import Data.Bool
 import Data.Text.Prettyprint.Doc
 import qualified Data.Text as T
+import Data.String (fromString)
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
@@ -72,7 +73,9 @@ publishReferenceScripts = do
                               , "devnet/node.socket"
                               , "--cardano-signing-key"
                               , "devnet/credentials/faucet.sk"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                              ])
+         -- TODO: is this node socket path in env needed?
+         { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
 writeEnv :: HydraScriptTxId -> IO ()
 writeEnv hstxid = do
@@ -82,10 +85,10 @@ seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptT
 seedDevnet = do
   logMessage $ WithSeverity Informational "Creating payment keys"
   for_ actors $ \(name, amount) -> do
-
-    liftIO $ do
-      keysExist <- doesFileExist $ "credentials/" <> name <> ".vk"
-      when (not keysExist) $ createActorPaymentKeys name
+    keysExist <- liftIO $ doesFileExist $ "credentials/" <> name <> ".vk"
+    unless keysExist $ do
+      logMessage $ WithSeverity Informational $ fromString $ fromString "Keys did not exist for actor " <> fromString name
+      liftIO $ createActorPaymentKeys name
     seedActorFromFaucetAndWait name amount False
     seedActorFromFaucetAndWait name 100000000 True
 
@@ -96,6 +99,7 @@ seedDevnet = do
   liftIO $ writeEnv hstxid
   pure hstxid
   where
+    -- FIXME(parenthetical): Pass in actors + keys (don't generate keys here)
     actors = [("alice", 1000000000), ("bob", 500000000), ("carol", 250000000)]
 
 -- TODO(skylar): Currently always uses the devnet socket, but we likely don't want to use anything else
@@ -234,9 +238,10 @@ buildSeedTx name amount isFuel = do
                               , hash
                               , "--tx-out"
                               , addr <> "+" <> show amount
-                              , bool "" "--tx-out-datum-hash" isFuel
-                              , bool "" (T.unpack fuelMarkerDatumHash) isFuel
-                              , "--out-file"
+                              ]
+                              <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] isFuel
+                              <> 
+                              [ "--out-file"
                               , filename
                               -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
