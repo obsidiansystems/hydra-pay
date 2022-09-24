@@ -28,9 +28,11 @@ This will cover:
 Foundational:
 - [x] Spawn devnet node
 - [x] Standup Hydra network from participant names
-- [ ] Automatic seeding under devnet
-- [ ] Hydra Node communication API for participants
-- [ ] Simple frontend for Head interaction
+- [x] Automatic seeding under devnet
+- [x] Hydra Node communication API for participants
+- [x] Simple frontend for Head interaction
+- [ ] Complete frontend for Head interaction
+- [ ] Coin selection for participants
 - [ ] How To Run
 - [ ] Integration of hydra libraries
 - [ ] Choice of network: Devnet, Testnet, Preview, Preprod, Mainnet
