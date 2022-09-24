@@ -76,9 +76,6 @@ generateHydraNetworkCPs :: HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
 generateHydraNetworkCPs sharedInfo nodes =
   map (\n -> mkHydraNodeCP sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
 
--- TODO(skylar): What about failure??
--- We can either fail by having the file be not found, or when we can't parse
--- for the parse part we should use attoparsec or something...
 readEnv :: MonadIO m => FilePath -> m [(String, String)]
 readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
   where
@@ -151,7 +148,6 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   , show port
   , "--api-port"
   , show apiPort
-  -- TODO(parenthetical): Not needed for now but put back at some point.
   -- , "--monitoring-port"
   -- , show monitoringPort
   , "--hydra-signing-key"
@@ -193,16 +189,6 @@ cardanoNodeCreateProcess =
 
 devnetMagic :: Int
 devnetMagic = 42
-  {-
-  output <- liftIO $ readCreateProcess devnetCp ""
-  logMessage $ WithSeverity Informational $ pretty $ T.pack output
-  where
-    shellStr = intercalate " " ["./seed-devnet.sh", cardanoCliPath, hydraNodePath, jqPath, realpathPath]
-    devnetCp =
-      (shell shellStr)
-      { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")]
-      }
--}
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
@@ -216,7 +202,6 @@ backend = Backend
               |]
             liftIO $ threadDelay $ seconds 2
 
-            -- NOTE(skylar): Currently just using this as "did we do the setup?"
             envExists <- liftIO $ doesFileExist ".env"
             demoKeys <- generateDemoKeys
             unless envExists $ do

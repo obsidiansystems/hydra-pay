@@ -35,7 +35,7 @@ import Hydra.Types as HT
 frontend :: Frontend (R FrontendRoute)
 frontend = Frontend
   { _frontend_head = do
-      el "title" $ text "Obelisk Minimal Example"
+      el "title" $ text "Hydra Head Demo"
       elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
   , _frontend_body = do
@@ -43,7 +43,6 @@ frontend = Frontend
         (_, requests) <- runRequesterT app responses
         responses <- performWebSocketRequests "ws://localhost:8000/api" requests
       pure ()
-      -- prerender_ (pure ()) frontend'
   }
 requestingJs
   :: ( Reflex t
@@ -79,7 +78,6 @@ eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right b) = Just b
 eitherToMaybe _ = Nothing
 
--- FIXME(parenthetical): copied from hydra-demo
 -- data HeadState
 --   = Idle
 --   | Initializing {parties :: [Party], remainingParties :: [Party], utxo :: UTxO}
@@ -89,7 +87,7 @@ eitherToMaybe _ = Nothing
 --   | Final {utxo :: UTxO}
 --   deriving (Eq, Show, Generic)
 
--- NOTE(skylar): This is just for knowing what options to present
+-- | Tracks the state of the head based on Hydra Node responses
 data HeadState
   = Idle
   | Initializing
@@ -149,7 +147,7 @@ app = elClass "div" "w-screen h-screen bg-gray-900 overflow-hidden" $ do
 
       _ -> blank
 
-    newState <- elClass "div" "ml-4 mr-4 overflow-hidden rounded-lg bg-gray-800" $ mdo
+    newState <- elClass "div" "ml-4 mr-4 overflow-hidden rounded-lg hover:drop-shadow-xl transition-all drop-shadow bg-gray-800" $ mdo
       rec
         currentTab <- holdDyn (fst . head $ participants) changeTab
 

@@ -14,8 +14,6 @@ type Address = String
 type TxIn = T.Text
 type WholeUTXO = Map TxIn TxInInfo
 
--- TODO(skylar): This likely has some cardano-equivalent, and that should be used instead
--- though LodeWallet uses blockfrost and those would be different instances anyways...
 data TxInInfo = TxInInfo
   { address :: Address
   , datumhash :: Maybe T.Text

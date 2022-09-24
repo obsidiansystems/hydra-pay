@@ -49,14 +49,7 @@ hydraNodePath = $(staticWhich "hydra-node")
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")
 
--- Create keys for cardano -- we need to keep track of the people created
--- and where their keys live.
--- Create keys for hydra
--- Seed wallets with some amounts
--- Create nodes per participant
--- Run network
-
--- A user like 'alice' that participates in the cardano devnet, and potenially a hydra-head
+-- | A user like 'alice' that participates in the cardano devnet, and potenially a hydra-head
 type ActorName = String
 type CardanoNodeSocketPath = FilePath
 type Lovelace = Int
@@ -69,11 +62,6 @@ type HydraScriptTxId = T.Text
 devnetNetworkId :: Int
 devnetNetworkId = 42
 
--- !!!!!!!!!!!!!!
--- FIXME(parenthetical): don't hardcode credentials path, but pass around key paths or the keys themselves
--- !!!!!!!!!!!!!!
-
--- FIXME(parenthetical): Major hax re: keys existing/hard coded paths.
 generateDemoKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m (Map String HydraKeyInfo)
 generateDemoKeys = do
   liftIO $ createDirectoryIfMissing True "credentials"
@@ -91,8 +79,6 @@ generateDemoKeys = do
     logMessage $ WithSeverity Informational $ fromString $ [i|Returning keys #{hopefullyTheCorrectPaths}|]
     pure hopefullyTheCorrectPaths
     
-
-
 demoActors :: Set String
 demoActors = Set.fromList ["alice", "bob", "carol"]
 
@@ -167,8 +153,6 @@ writeEnv hstxid = do
 demoActorAmounts :: Map String Lovelace
 demoActorAmounts = Map.fromList [("alice", 1000000000), ("bob", 500000000), ("carol", 250000000)]
 
-
--- TODO(parenthetical): Use the keypair values (_demoKeys) once all the other functions use key paths instead of credentials/${name}*
 -- | Needs Cardano keys.
 seedDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Map String (KeyPair, Lovelace) -> m HydraScriptTxId
 seedDevnet actors = do
@@ -184,8 +168,6 @@ seedDevnet actors = do
   liftIO $ writeEnv hstxid
   pure hstxid
 
--- TODO(skylar): Currently always uses the devnet socket, but we likely don't want to use anything else
--- FIXME(parenthetical): Duplicated in generateCardanoKeys
 createActorPaymentKeys :: ActorName -> IO ()
 createActorPaymentKeys name = do
   createDirectoryIfMissing False "credentials"
@@ -315,7 +297,6 @@ submitSeedTx name = do
                               , "42"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
--- TODO(skylar): This should either create a temporary file or otherwise lock the file in the future...
 buildSeedTx :: ActorName -> Lovelace -> Bool -> IO ()
 buildSeedTx name amount isFuel = do
   exists <- doesFileExist filename
@@ -343,7 +324,6 @@ buildSeedTx name amount isFuel = do
                               <> 
                               [ "--out-file"
                               , filename
-                              -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
                               , "42"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
@@ -357,7 +337,6 @@ getFirstTxIn addr =
                               , "utxo"
                               , "--address"
                               , addr
-                              -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
                               , "42"
                               , "--out-file"
@@ -372,7 +351,6 @@ getActorAddress name = readCreateProcess cp ""
                               , "build"
                               , "--payment-verification-key-file"
                               , "credentials/" <> name <> ".cardano.vk"
-                              -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
                               , "42"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
@@ -384,7 +362,6 @@ getFaucetAddress = readCreateProcess cp ""
                               , "build"
                               , "--payment-verification-key-file"
                               , "devnet/credentials/faucet.vk"
-                              -- TODO(skylar): Why isn't this needed in seed-devnet??
                               , "--testnet-magic"
                               , "42"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
