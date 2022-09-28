@@ -35,7 +35,7 @@ Foundational:
 - [ ] Coin selection for participants
 - [ ] How To Run
 - [ ] Integration of hydra libraries
-- [ ] Choice of network: Devnet, Testnet, Preview, Preprod, Mainnet
+- [ ] Choice of network: Devnet, Preview, Preprod, Mainnet
 - [ ] API Documentation
 - [ ] Initial client interaction library
 - [ ] How to Contribute
