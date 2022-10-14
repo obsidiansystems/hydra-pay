@@ -38,6 +38,7 @@ library
                , beam-postgres
                , beam-automigrate
                , bytestring
+               , uuid
 
   default-extensions:
     OverloadedStrings

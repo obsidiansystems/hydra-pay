@@ -13,6 +13,8 @@ library
                , aeson
                , aeson-gadt-th
                , constraints-extras
+               , containers
+               , time
 
   default-extensions:
     DeriveGeneric
@@ -33,4 +35,6 @@ library
     Common.Route
 
     Hydra.Types
+    Hydra.ServerOutput
+    Hydra.ClientInput
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

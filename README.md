@@ -17,6 +17,14 @@ This will cover:
   * Fanout
 * A real-world example application
 
+## Hydra Heads Demo
+This repository currently contains an extended, graphical re-implementation of the original [Hydra Heads demo](https://github.com/input-output-hk/hydra-poc/tree/master/demo) done with [Obelisk](https://github.com/obsidiansystems/obelisk).
+It allows starting and closing a head with an arbitrary number of nodes, each with some initial amount of Ada to perform transactions within the head.
+
+### Running
+To run the demo install [Obelisk](https://github.com/obsidiansystems/obelisk#installing-obelisk) and run `ob run` in the root of the repository.
+The demo can then be viewed in Chrome at `http://localhost:8000/`.
+
 ## :construction: Under Construction
 
 **Hyra Pay** is in-progress, and subject to change as the hydra-head protocol and development requirements evolve to meet the demands of light wallet and dApp developers. 
@@ -31,9 +39,9 @@ Foundational:
 - [x] Automatic seeding under devnet
 - [x] Hydra Node communication API for participants
 - [x] Simple frontend for Head interaction
-- [ ] Complete frontend for Head interaction
+- [x] Complete frontend for Head interaction
 - [ ] Coin selection for participants
-- [ ] How To Run
+- [x] How To Run
 - [ ] Integration of hydra libraries
 - [ ] Choice of network: Devnet, Preview, Preprod, Mainnet
 - [ ] API Documentation

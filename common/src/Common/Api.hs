@@ -11,9 +11,36 @@ import GHC.Generics
 import Data.Map (Map)
 
 import Hydra.Types
+import qualified Data.Map as Map
+import Data.Text (Text)
 
+
+-- | Friendly name for a Hydra node.
+type DemoNodeName = Text
+
+-- | WebSocket URL
+type ApiUrl = Text
+
+type RunningNodes = Map DemoNodeName ( Address -- Cardano address
+                                     , ApiUrl
+                                     )
+
+type HydraDemo =  Map
+                  DemoNodeName
+                  ( Lovelace -- Seed for actor
+                  , Lovelace -- Seed for fuel
+                  )
+
+-- FIXME: Api mixes actor names and addresses, use one or the other.
 data DemoApi :: * -> * where
-  DemoApi_GetWholeUTXO :: DemoApi WholeUTXO
+  DemoApi_GetActorUTXO :: Address -> DemoApi WholeUTXO
+  DemoApi_MkTx
+    :: DemoNodeName -- From
+    -> WholeUTXO
+    -> Lovelace
+    -> DemoNodeName -- To
+    -> DemoApi Text
+  DemoApi_Start :: HydraDemo -> DemoApi RunningNodes
 
 deriveJSONGADT ''DemoApi
 deriveArgDict ''DemoApi

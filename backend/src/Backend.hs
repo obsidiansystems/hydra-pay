@@ -1,6 +1,14 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
+{-# LANGUAGE TupleSections #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Backend where
+module Backend
+
+(backend)
+
+where
 
 import Prelude hiding (filter)
 
@@ -13,46 +21,53 @@ import Obelisk.Backend
 import Obelisk.Route
 
 import System.Directory
-import Control.Applicative (Alternative)
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
-import Data.List (intercalate)
 import qualified Data.Map as Map
-import Data.Map (Map)
+import Data.Map (Map, (!))
 import Data.Witherable
-import Data.String.Interpolate (i)
+import Data.String.Interpolate ( i, iii )
 import qualified Data.Text as T
 import Data.Text.Prettyprint.Doc
 
 import Control.Concurrent
 import System.Process
-import System.Which
 
 import Data.Aeson as Aeson
+    ( decode, encode, ToJSON, FromJSON, (.:), withObject, Value )
 
-import Data.Some
 
 import Network.WebSockets
 import Network.WebSockets.Snap
 
 import Reflex.Dom.GadtApi.WebSocket
 
-import qualified Network.WebSockets as WS
-import Paths
 import qualified Data.Map.Merge.Lazy as Map
-
-prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
-prepareDevnet = do
-  output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
-  when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+import qualified Hydra.Types as HT
+import Data.Maybe (fromJust, fromMaybe)
+import Data.Aeson.Types (parseMaybe)
+import System.IO (IOMode(WriteMode), openFile)
+import Data.IORef (readIORef, writeIORef, IORef, newIORef)
+import Hydra.Types (Address)
+import Data.Text (Text)
+import qualified Data.ByteString.Lazy.Char8 as ByteString.Char8
 
 standupDemoHydraNetwork :: (MonadIO m)
   => HydraScriptTxId
-  -> Map String HydraKeyInfo
-  -> m (Map String ProcessHandle)
+  -> Map Text HydraKeyInfo
+  -> m (Map Text (ProcessHandle, HydraNodeInfo))
 standupDemoHydraNetwork hstxid actors = do
-  liftIO $ mapM createProcessGiveHandle $ (\n -> mkHydraNodeCP sharedInfo n (filter ((/= _nodeId n) . _nodeId) (Map.elems nodes))) <$> nodes
+  liftIO $ createDirectoryIfMissing True "demo-logs"
+  liftIO $ sequence . flip Map.mapWithKey nodes $ \name node -> do
+    logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode
+    errHndl <- openFile [iii|demo-logs/phydra-node-#{name}.error.log|] WriteMode
+    let cp = (mkHydraNodeCP sharedInfo node (filter ((/= _nodeId node) . _nodeId) (Map.elems nodes)))
+             { std_out = UseHandle logHndl
+             , std_err = UseHandle errHndl
+             }
+    (_,_,_,handle) <- createProcess cp
+    pure (handle, node)
   where
     portNum p n = p * 1000 + n
     node (n, (name, keys)) =
@@ -64,25 +79,9 @@ standupDemoHydraNetwork hstxid actors = do
       { _hydraScriptsTxId = T.unpack hstxid
       , _ledgerGenesis = "devnet/genesis-shelley.json"
       , _ledgerProtocolParameters = "devnet/protocol-parameters.json"
-      , _networkId = "42"
+      , _networkId = show devnetMagic
       , _nodeSocket = "devnet/node.socket"
       }
-    createProcessGiveHandle cp = do
-      (_,_,_,handle) <- createProcess cp
-      pure handle
-
--- | Given the names of the participants generate the CreateProcess for all hydra-nodes
-generateHydraNetworkCPs :: HydraSharedInfo -> [HydraNodeInfo] -> [CreateProcess]
-generateHydraNetworkCPs sharedInfo nodes =
-  map (\n -> mkHydraNodeCP sharedInfo n (filter ((/= _nodeId n) . _nodeId) nodes)) nodes
-
-readEnv :: MonadIO m => FilePath -> m [(String, String)]
-readEnv envFilePath = liftIO $ parseEnvVars <$> readFile envFilePath
-  where
-    parseEnvVars = fmap (\x -> (parseVarName x, parseVarVal x)) . lines
-
-    parseVarName = takeWhile (/= '=')
-    parseVarVal = drop 1 . dropWhile (/= '=')
 
 -- | Takes the node participant and the list of peers
 mkHydraNodeCP :: HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
@@ -93,10 +92,10 @@ mkHydraNodeCP sharedInfo node peers =
 
 data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
-  , _ledgerGenesis :: String -- TODO: Path
-  , _ledgerProtocolParameters :: String -- TODO: Path
+  , _ledgerGenesis :: FilePath
+  , _ledgerProtocolParameters :: FilePath
   , _networkId :: String
-  , _nodeSocket :: String -- TODO: Path
+  , _nodeSocket :: FilePath
   }
 
 data HydraNodeInfo = HydraNodeInfo
@@ -106,22 +105,6 @@ data HydraNodeInfo = HydraNodeInfo
   , _monitoringPort :: Int
   , _keys :: HydraKeyInfo
   }
-
--- | Max 1000 nodes.
-sequentialNodes :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m, Alternative m) => String -> Int -> m [HydraNodeInfo]
-sequentialNodes prefix numNodes = do
-  guard (numNodes < 1000)
-  forM [1 .. numNodes] $ \n -> do
-    let portNum p = p * 1000 + n
-    cks <- generateCardanoKeys [i|#{prefix}#{n}|]
-    hks <- generateHydraKeys [i|#{prefix}#{n}|]
-    pure $ HydraNodeInfo
-           { _nodeId = n
-           , _port = portNum 5
-           , _apiPort = portNum 9
-           , _monitoringPort = portNum 6
-           , _keys = HydraKeyInfo cks hks
-           }
 
 sharedArgs :: HydraSharedInfo -> [String]
 sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams networkId nodeSocket) =
@@ -148,8 +131,8 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   , show port
   , "--api-port"
   , show apiPort
-  -- , "--monitoring-port"
-  -- , show monitoringPort
+  , "--monitoring-port"
+  , show monitoringPort
   , "--hydra-signing-key"
   , hskPath
   , "--cardano-signing-key"
@@ -187,12 +170,35 @@ cardanoNodeCreateProcess =
    ]) { std_out = CreatePipe
       }
 
-devnetMagic :: Int
-devnetMagic = 42
+runHydraDemo :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m)
+  => HydraDemo
+  -> m (Map Text ( ProcessHandle
+                   , Address -- Cardano address
+                   , HydraNodeInfo
+                   ))
+runHydraDemo nodes = do
+  keysAddresses <- forM nodes $ \(actorSeed, fuelSeed) -> do
+    keys@(HydraKeyInfo (KeyPair _ vk) _) <- generateKeys
+    addr <- liftIO $ getCardanoAddress vk
+    void $ seedAddressFromFaucetAndWait addr actorSeed False
+    void $ seedAddressFromFaucetAndWait addr fuelSeed True
+    pure (keys, addr)
+  logMessage $ WithSeverity Informational "Publishing reference scripts"
+  hstxid <- publishReferenceScripts
+  handles <- standupDemoHydraNetwork hstxid (fmap fst keysAddresses)
+  logMessage $ WithSeverity Informational [i|"Hydra Network Running for nodes #{Map.keys nodes}|]
+  pure $ Map.merge Map.dropMissing Map.dropMissing (Map.zipWithMatched (\_ addr (handle, nodeInfo) -> (handle, addr, nodeInfo))) (fmap snd keysAddresses) handles
+
+
+type BackendState = Map Text ( ProcessHandle
+                             , Address -- Cardano address
+                             , HydraNodeInfo
+                             )
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
+      hydraProcessHandlesRef :: IORef BackendState <- liftIO (newIORef mempty)
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
         liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
@@ -200,44 +206,58 @@ backend = Backend
             logMessage $ WithSeverity Informational [i|
               Cardano node is running
               |]
-            liftIO $ threadDelay $ seconds 2
+            liftIO $ threadDelay $ seconds 3
+            liftIO . serve $ \case
+              BackendRoute_Api :/ () -> do
+                 runWebSocketsSnap $ \pendingConnection -> do
+                  conn <- acceptRequest pendingConnection
+                  forkPingThread conn 30
+                  forever $ do
+                    d <- receiveData conn
+                    case d of
+                      Just req -> do
+                        r <- mkTaggedResponse req (handleDemoApi hydraProcessHandlesRef)
+                        case r of
+                          Left err -> do
+                            putStrLn [iii|Error mkTaggedResponse: #{err}|]
+                            error err
+                          Right rsp ->
+                            sendDataMessage conn $ Text (Aeson.encode rsp) Nothing
 
-            envExists <- liftIO $ doesFileExist ".env"
-            demoKeys <- generateDemoKeys
-            unless envExists $ do
-              _ <- seedDevnet (Map.merge Map.dropMissing Map.dropMissing (Map.zipWithMatched (const (,))) (fmap _cardanoKeys demoKeys) demoActorAmounts)
-              logMessage $ WithSeverity Informational [i|
-              Devnet has been seeded
-              |]
-            theEnv <- Map.fromList <$> readEnv ".env"
-            standupDemoHydraNetwork (T.pack $ theEnv Map.! "HYDRA_SCRIPTS_TX_ID") demoKeys
-            logMessage $ WithSeverity Informational "Hydra Network Running for peers Alice, Bob, and Carol"
-            pure ()
-          serve $ \case
-            BackendRoute_Api :/ () -> do
-              runWebSocketsSnap $ \pendingConnection -> do
-                conn <- acceptRequest pendingConnection
-                forkPingThread conn 30
-                forever $ do
-                  d <- receiveData conn
-                  case d of
-                    Just req -> do
-                      r <- mkTaggedResponse req handleDemoApi
-                      case r of
-                        Left err -> error err
-                        Right rsp ->
-                          sendDataMessage conn $ Text (Aeson.encode rsp) Nothing
+                      _ -> pure ()
 
-                    _ -> pure ()
-
-                pure ()
-            _ -> pure ()
+                  pure ()
+              _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
   }
 
-handleDemoApi :: DemoApi a -> IO a
-handleDemoApi = \case
-  DemoApi_GetWholeUTXO -> queryUTXOs
+handleDemoApi :: IORef BackendState
+              -> DemoApi a
+              -> IO a
+handleDemoApi hydraProcessHandlesRef = \case
+  DemoApi_GetActorUTXO addr -> queryAddressUTXOs addr
+  DemoApi_MkTx fromName utxos lovelace toName -> do
+    print (fromName, utxos, toName)
+    let lovelaceUtxos = mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    actors <- readIORef hydraProcessHandlesRef
+    jsonStr <- buildSignedHydraTx
+               (_signingKey . _cardanoKeys . _keys . (\(_,_,hn) -> hn) $ actors ! fromName)
+               ((\(_,addr,_) -> addr) $ actors ! fromName)
+               ((\(_,addr,_) -> addr) $ actors ! toName)
+               lovelaceUtxos
+               lovelace
+    let jsonTx :: Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . ByteString.Char8.pack $ jsonStr
+    pure . fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
+  DemoApi_Start demo -> do
+    liftIO (mapM (terminateProcess . (\(hndl,_,_) -> hndl)) =<< readIORef hydraProcessHandlesRef)
+    nodeInfos <- runLoggingT (runHydraDemo demo) (print . renderWithSeverity id)
+    liftIO . writeIORef hydraProcessHandlesRef $ nodeInfos
+    actorList :: RunningNodes <- forM nodeInfos $ \(_, addr, nInfo) -> do
+            pure ( addr
+                 , [iii|ws://localhost:#{_apiPort nInfo}|]
+                 )
+    pure actorList
+
 
 -- Suprised this doesn't exist :D
 instance (ToJSON a, FromJSON a) => WebSocketsData (Maybe a) where

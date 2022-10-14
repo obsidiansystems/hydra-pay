@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Paths where
+
 import System.Which (staticWhich)
 
 hydraToolsPath :: FilePath

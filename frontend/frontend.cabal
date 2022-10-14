@@ -15,6 +15,13 @@ library
                , obelisk-generated-static
                , text
                , reflex-gadt-api
+               , string-interpolate
+               , containers
+               , aeson
+               , bytestring
+               , witherable
+               , transformers
+               , time
   default-extensions:
     RecursiveDo
     RankNTypes
