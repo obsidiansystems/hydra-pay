@@ -52,6 +52,9 @@ library
 
   exposed-modules:
     Backend
+  other-modules:
+    Hydra.Devnet
+    Paths
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
 
 executable backend
