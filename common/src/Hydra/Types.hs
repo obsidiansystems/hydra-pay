@@ -12,7 +12,7 @@ import Data.Text (Text)
 import Numeric.Natural (Natural)
 
 -- | Cardano address
-type Address = String
+type Address = T.Text
 
 type Lovelace = Int
 

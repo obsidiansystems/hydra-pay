@@ -14,6 +14,7 @@ module Hydra.Devnet
   , queryAddressUTXOs
   , buildSignedHydraTx
   , generateKeys
+  , generateKeysIn
   , cardanoNodePath
   , hydraNodePath
   , prepareDevnet
@@ -88,9 +89,12 @@ generateKeys = do
   basePath <- liftIO getTempPath'
   HydraKeyInfo <$> generateCardanoKeys basePath <*> generateHydraKeys basePath
 
+generateKeysIn :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => FilePath ->  m HydraKeyInfo
+generateKeysIn fp =
+  HydraKeyInfo <$> generateCardanoKeys fp <*> generateHydraKeys fp
 
-type SigningKey = String
-type VerificationKey = String
+type SigningKey = FilePath
+type VerificationKey = FilePath
 
 data KeyPair = KeyPair
   { _signingKey :: SigningKey
@@ -195,7 +199,7 @@ queryAddressUTXOs addr = liftIO $ do
         (proc cardanoCliPath [ "query"
                              , "utxo"
                              , "--address"
-                             , addr
+                             , T.unpack addr
                              , "--testnet-magic"
                              , "42"
                              , "--out-file"
@@ -259,7 +263,7 @@ getFirstTxIn addr =
     cp = (proc cardanoCliPath [ "query"
                               , "utxo"
                               , "--address"
-                              , addr
+                              , T.unpack addr
                               , "--testnet-magic"
                               , "42"
                               , "--out-file"
@@ -269,7 +273,7 @@ getFirstTxIn addr =
 
 getCardanoAddress :: VerificationKey -> IO Address
 getCardanoAddress keyPath =
-  readCreateProcess cp ""
+  T.pack <$> readCreateProcess cp ""
   where
     cp = (proc cardanoCliPath [ "address"
                               , "build"
@@ -281,7 +285,7 @@ getCardanoAddress keyPath =
 
 
 getFaucetAddress :: IO Address
-getFaucetAddress = readCreateProcess cp ""
+getFaucetAddress = T.pack <$> readCreateProcess cp ""
   where
     cp = (proc cardanoCliPath [ "address"
                               , "build"
@@ -321,7 +325,7 @@ buildSeedTxForAddress addr amount isFuel = do
                               , "--tx-in"
                               , hash
                               , "--tx-out"
-                              , addr <> "+" <> show amount
+                              , T.unpack addr <> "+" <> show amount
                               ]
                               <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] isFuel
                               <>
@@ -333,7 +337,7 @@ buildSeedTxForAddress addr amount isFuel = do
                             { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
   faucet <- getFaucetAddress
   hash <- getFirstTxIn faucet
-  _ <- readCreateProcess (cp faucet (T.unpack hash)) ""
+  _ <- readCreateProcess (cp (T.unpack faucet) (T.unpack hash)) ""
   pure filename
 
 

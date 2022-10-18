@@ -52,6 +52,7 @@ import Data.IORef (readIORef, writeIORef, IORef, newIORef)
 import Hydra.Types (Address)
 import Data.Text (Text)
 import qualified Data.ByteString.Lazy.Char8 as ByteString.Char8
+import HydraPay
 
 standupDemoHydraNetwork :: (MonadIO m)
   => HydraScriptTxId
@@ -83,93 +84,6 @@ standupDemoHydraNetwork hstxid actors = do
       , _nodeSocket = "devnet/node.socket"
       }
 
--- | Takes the node participant and the list of peers
-mkHydraNodeCP :: HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
-mkHydraNodeCP sharedInfo node peers =
-  (proc hydraNodePath $ sharedArgs sharedInfo <> nodeArgs node <> concatMap peerArgs peers)
-  { std_out = Inherit
-  }
-
-data HydraSharedInfo = HydraSharedInfo
-  { _hydraScriptsTxId :: String
-  , _ledgerGenesis :: FilePath
-  , _ledgerProtocolParameters :: FilePath
-  , _networkId :: String
-  , _nodeSocket :: FilePath
-  }
-
-data HydraNodeInfo = HydraNodeInfo
-  { _nodeId :: Int
-  , _port :: Int
-  , _apiPort :: Int
-  , _monitoringPort :: Int
-  , _keys :: HydraKeyInfo
-  }
-
-sharedArgs :: HydraSharedInfo -> [String]
-sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams networkId nodeSocket) =
-  [ "--ledger-genesis"
-  , ledgerGenesis
-  , "--ledger-protocol-parameters"
-  , protocolParams
-  , "--network-id"
-  , networkId
-  , "--node-socket"
-  , nodeSocket
-  , "--hydra-scripts-tx-id"
-  , hydraScriptsTxId
-  ]
-
-nodeArgs :: HydraNodeInfo -> [String]
-nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
-           (HydraKeyInfo
-            (KeyPair cskPath _cvkPath)
-            (KeyPair hskPath _hvkPath))) =
-  [ "--node-id"
-  , show nodeId
-  , "--port"
-  , show port
-  , "--api-port"
-  , show apiPort
-  , "--monitoring-port"
-  , show monitoringPort
-  , "--hydra-signing-key"
-  , hskPath
-  , "--cardano-signing-key"
-  , cskPath
-  ]
-
-peerArgs :: HydraNodeInfo -> [String]
-peerArgs ni =
-  [ "--peer"
-  , [i|127.0.0.1:#{_port ni}|]
-  , "--hydra-verification-key"
-  , _verificationKey . _hydraKeys . _keys $ ni
-  , "--cardano-verification-key"
-  , _verificationKey . _cardanoKeys . _keys $ ni
-  ]
-
-cardanoNodeCreateProcess :: CreateProcess
-cardanoNodeCreateProcess =
-  (proc cardanoNodePath
-   [ "run"
-   , "--config"
-   , "devnet/cardano-node.json"
-   , "--topology"
-   , "devnet/topology.json"
-   , "--database-path"
-   , "devnet/db"
-   , "--socket-path"
-   , "devnet/node.socket"
-   , "--shelley-operational-certificate"
-   , "devnet/opcert.cert"
-   , "--shelley-kes-key"
-   , "devnet/kes.skey"
-   , "--shelley-vrf-key"
-   , "devnet/vrf.skey"
-   ]) { std_out = CreatePipe
-      }
-
 runHydraDemo :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m)
   => HydraDemo
   -> m (Map Text ( ProcessHandle
@@ -197,7 +111,7 @@ type BackendState = Map Text ( ProcessHandle
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
-  { _backend_run = \serve -> do
+  { _backend_run = \serve -> withHydraPool $ \pool -> do
       hydraProcessHandlesRef :: IORef BackendState <- liftIO (newIORef mempty)
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
@@ -208,6 +122,11 @@ backend = Backend
               |]
             liftIO $ threadDelay $ seconds 3
             liftIO . serve $ \case
+              BackendRoute_HydraPay :/ hpr -> case hpr of
+                HydraPayRoute_Head :/ () -> do
+                  liftIO $ withLogging $ createHead pool $ HeadCreate []
+                  pure ()
+
               BackendRoute_Api :/ () -> do
                  runWebSocketsSnap $ \pendingConnection -> do
                   conn <- acceptRequest pendingConnection

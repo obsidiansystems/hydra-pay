@@ -17,3 +17,4 @@ static.out
 /devnet/
 /.env
 /credentials/
+/db/

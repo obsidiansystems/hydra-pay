@@ -22,12 +22,25 @@ import Data.Functor.Identity
 import Obelisk.Route
 import Obelisk.Route.TH
 
+import Control.Monad.Error
+
 data BackendRoute :: * -> * where
   -- | Used to handle unparseable routes.
   BackendRoute_Missing :: BackendRoute ()
   BackendRoute_Api :: BackendRoute ()
+  BackendRoute_HydraPay :: BackendRoute (R HydraPayRoute)
   -- You can define any routes that will be handled specially by the backend here.
   -- i.e. These do not serve the frontend, but do something different, such as serving static files.
+
+data HydraPayRoute :: * -> * where
+  HydraPayRoute_Head :: HydraPayRoute ()
+
+hydraPayRouteEncoder ::( MonadError Text check
+                       , MonadError Text parse
+                       )
+                     => Encoder check parse (R HydraPayRoute) PageName
+hydraPayRouteEncoder = pathComponentEncoder $ \case
+  HydraPayRoute_Head -> PathSegment "head" $ unitEncoder mempty
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()
@@ -40,6 +53,7 @@ fullRouteEncoder = mkFullRouteEncoder
   (\case
       BackendRoute_Missing -> PathSegment "missing" $ unitEncoder mempty
       BackendRoute_Api -> PathSegment "api" $ unitEncoder mempty
+      BackendRoute_HydraPay -> PathSegment "hydra" hydraPayRouteEncoder
   )
   (\case
       FrontendRoute_Main -> PathEnd $ unitEncoder mempty)
@@ -47,4 +61,5 @@ fullRouteEncoder = mkFullRouteEncoder
 concat <$> mapM deriveRouteComponent
   [ ''BackendRoute
   , ''FrontendRoute
+  , ''HydraPayRoute
   ]
