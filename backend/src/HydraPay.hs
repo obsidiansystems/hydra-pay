@@ -307,7 +307,7 @@ dbProxyToHydraKeyInfo pa = keyInfo
 -- addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g
 
 -- HeadCreate "test" ["addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr", "addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g"]
-
+-- "{\"headCreate_name\":\"test\",\"headCreate_participants\":[\"addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr\",\"addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g\"],\"headCreate_startNetwork\":true}"
 -- "{\"headCreate_name\":\"test\",\"headCreate_participants\":[\"addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr\",\"addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g\"]}"
 
 
@@ -382,6 +382,7 @@ createHead state (HeadCreate name participants start) = do
         Nothing -> do
           let head = Head name (Set.fromList participants) Pending
           liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
+          when start $ void $ startNetwork state head
           pure $ Right head
 
 -- | Lookup head via name
