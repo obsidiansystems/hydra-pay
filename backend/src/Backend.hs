@@ -113,6 +113,16 @@ type BackendState = Map Text ( ProcessHandle
                              , HydraNodeInfo
                              )
 
+getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
+getDevnetHydraSharedInfo = do
+  scripts <- publishReferenceScripts
+  pure $ HydraSharedInfo
+      { _hydraScriptsTxId = T.unpack scripts,
+        _ledgerGenesis = "devnet/genesis-shelley.json",
+        _ledgerProtocolParameters = "devnet/protocol-parameters.json",
+        _networkId = show devnetMagic,
+        _nodeSocket = "devnet/node.socket"
+      }
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do -- withHydraPool $ \pool -> do
@@ -127,7 +137,7 @@ backend = Backend
               Cardano node is running
               |]
             liftIO $ threadDelay $ seconds 3
-            state <- getHydraPayState
+            state <- getHydraPayState =<< getDevnetHydraSharedInfo
             logMessage $ WithSeverity Informational [i|
               Serving
               |]

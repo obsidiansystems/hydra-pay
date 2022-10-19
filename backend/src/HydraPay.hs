@@ -252,34 +252,34 @@ that request should be routed automatically
 for now creating a head is analogous to running one, but we should be able to run a head by just
 -}
 
-createHead' :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m (Either HydraPayError (HeadStatus, HydraHeadNetwork))
-createHead' pool (HeadCreate name participants _) = do
-  -- Create proxy addresses for all the addresses that don't already have one
-  liftIO $ withResource pool $ \conn -> do
-    for_ participants $ \addr -> do
-      exists <- proxyAddressExists conn addr
-      when (not exists) $ withLogging $ addProxyAddress addr conn
-    -- We need the script id
-    -- We need to insert the head into the db then start the Head
-    runBeamPostgres conn $ do
-      -- Create the head
-      runInsert $ insert (hydraDb_heads hydraDb) $
-        insertValues [ DbHead name initialStatus ]
+-- createHead' :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m (Either HydraPayError (HeadStatus, HydraHeadNetwork))
+-- createHead' pool (HeadCreate name participants _) = do
+--   -- Create proxy addresses for all the addresses that don't already have one
+--   liftIO $ withResource pool $ \conn -> do
+--     for_ participants $ \addr -> do
+--       exists <- proxyAddressExists conn addr
+--       when (not exists) $ withLogging $ addProxyAddress addr conn
+--     -- We need the script id
+--     -- We need to insert the head into the db then start the Head
+--     runBeamPostgres conn $ do
+--       -- Create the head
+--       runInsert $ insert (hydraDb_heads hydraDb) $
+--         insertValues [ DbHead name initialStatus ]
 
-      -- Populate the participant list
-      runInsert $ insert (hydraDb_headParticipants hydraDb) $
-        insertExpressions $ fmap (\addr -> HeadParticipant (val_ $ HeadID name) (val_ $ ProxyAddressID addr)) participants
+--       -- Populate the participant list
+--       runInsert $ insert (hydraDb_headParticipants hydraDb) $
+--         insertExpressions $ fmap (\addr -> HeadParticipant (val_ $ HeadID name) (val_ $ ProxyAddressID addr)) participants
 
-    mKeyinfos <- fmap sequenceA $ for participants (\a -> fmap (a,) <$> getProxyAddressKeyInfo conn a)
-    case mKeyinfos of
-      Nothing -> pure $ Left HeadCreationFailed
-      Just keyinfos -> do
-        scripts <- withLogging $ publishReferenceScripts
-        network <- startHydraNetwork scripts $ Map.fromList keyinfos
-        -- TODO(skylar): This is always true here, but should it be? aka how to represent network failure in startup
-        pure $ Right (HeadStatus name True Pending, network)
-  where
-    initialStatus = "Pending"
+--     mKeyinfos <- fmap sequenceA $ for participants (\a -> fmap (a,) <$> getProxyAddressKeyInfo conn a)
+--     case mKeyinfos of
+--       Nothing -> pure $ Left HeadCreationFailed
+--       Just keyinfos -> do
+--         scripts <- withLogging $ publishReferenceScripts
+--         network <- startHydraNetwork scripts $ Map.fromList keyinfos
+--         -- TODO(skylar): This is always true here, but should it be? aka how to represent network failure in startup
+--         pure $ Right (HeadStatus name True Pending, network)
+--   where
+--     initialStatus = "Pending"
 
 -- TODO(skylar): How to bundle this with the rest of the types
 type HydraHeadNetwork = (Map Address (ProcessHandle, HydraNodeInfo))
@@ -315,7 +315,7 @@ type HeadName = T.Text
 
 -- | State we need to run/manage Heads
 data State = State
-  { _state_scripts :: HydraScriptTxId
+  { _state_hydraInfo :: HydraSharedInfo
   , _state_proxyAddresses :: MVar (Map Address (Address, HydraKeyInfo))
   -- ^ This is really temporary it has the mapping from cardano address to proxy + keys
   , _state_heads :: MVar (Map HeadName Head)
@@ -358,14 +358,15 @@ data Network = Network
   { _network_nodes :: Map Address Node
   }
 
-getHydraPayState :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m State
-getHydraPayState = do
-  scripts <- publishReferenceScripts
+getHydraPayState :: (MonadIO m)
+  => HydraSharedInfo
+  -> m State
+getHydraPayState hydraSharedInfo = do
   addrs <- liftIO $ newMVar mempty
   heads <- liftIO $ newMVar mempty
   networks <- liftIO $ newMVar mempty
   path <- liftIO $ getKeyPath
-  pure $ State scripts addrs heads networks path
+  pure $ State hydraSharedInfo addrs heads networks path
 
 -- TODO(skylar): MonadThrow here?
 -- NOTE(skylar): I don't think creating a head should be idempotent that would be weird
@@ -422,7 +423,7 @@ startNetwork state (Head name participants _) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      network <- fmap (Network . fmap (uncurry Node)) $ startHydraNetwork (_state_scripts state) proxyMap
+      network <- fmap (Network . fmap (uncurry Node)) $ startHydraNetwork (_state_hydraInfo state) proxyMap
 
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
@@ -440,14 +441,15 @@ getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)
 getNetwork state name =
   liftIO $ withMVar (_state_networks state) (pure . Map.lookup name)
 
+
 -- TODO(skylar): Make this take state and then make this return a Network
 -- TODO(skylar): Port management
 -- TODO(skylar): Where should the HydraScriptTxId come from?
 startHydraNetwork :: (MonadIO m)
-  => HydraScriptTxId
+  => HydraSharedInfo
   -> Map Address HydraKeyInfo
   -> m (Map Address (ProcessHandle, HydraNodeInfo))
-startHydraNetwork hstxid actors = do
+startHydraNetwork sharedInfo actors = do
   -- TODO(skylar): These logs should be Head specific
   liftIO $ createDirectoryIfMissing True "demo-logs"
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name node -> do
@@ -466,13 +468,6 @@ startHydraNetwork hstxid actors = do
       , HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n) keys
       )
     nodes = Map.fromList . fmap node $ zip [1 ..] (Map.toList actors)
-    sharedInfo = HydraSharedInfo
-      { _hydraScriptsTxId = T.unpack hstxid
-      , _ledgerGenesis = "devnet/genesis-shelley.json"
-      , _ledgerProtocolParameters = "devnet/protocol-parameters.json"
-      , _networkId = show devnetMagic
-      , _nodeSocket = "devnet/node.socket"
-      }
 
 data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
