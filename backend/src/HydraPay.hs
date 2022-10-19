@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 
 
@@ -38,6 +39,7 @@ import System.Process
 import GHC.Generics
 import qualified Data.Text as T
 import Hydra.Types
+import Data.Int
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Aeson
@@ -60,6 +62,8 @@ import Gargoyle.PostgreSQL (defaultPostgres)
 import Gargoyle.PostgreSQL.Connect
 
 import Data.Foldable
+import Data.Traversable
+
 import Control.Monad
 import Hydra.Devnet
 
@@ -69,10 +73,25 @@ data ProxyAddressesT f = ProxyAddress
   { proxyAddress_ownerAddress :: Columnar f T.Text
   , proxyAddress_address :: Columnar f T.Text
 
-  , proxyAddress_cardanoPublickKey :: Columnar f T.Text
-  , proxyAddress_cardanoPrivateKey :: Columnar f T.Text
-  , proxyAddress_hydraPublicKey :: Columnar f T.Text
-  , proxyAddress_hydraPrivateKey :: Columnar f T.Text
+  , proxyAddress_cardanoVerificationKey :: Columnar f T.Text
+  , proxyAddress_cardanoSigningKey :: Columnar f T.Text
+  , proxyAddress_hydraVerificationKey :: Columnar f T.Text
+  , proxyAddress_hydraSigningKey :: Columnar f T.Text
+  }
+  deriving (Generic, Beamable)
+
+data HeadsT f = Head
+  { head_name :: Columnar f T.Text
+  , head_state :: Columnar f T.Text
+  }
+  deriving (Generic, Beamable)
+
+-- NOTE TODO(skylar): So beam doesn't have many to many or uniqueness constraints
+-- we would have to use beam-migrate or beam-automigrate to include these things as
+-- they are properites of the database.
+data HeadParticipantsT f = HeadParticipant
+  { headParticipant_head :: PrimaryKey HeadsT f
+  , headParticipant_proxy :: PrimaryKey ProxyAddressesT f
   }
   deriving (Generic, Beamable)
 
@@ -80,6 +99,8 @@ type ProxyAddress = ProxyAddressesT Identity
 
 data HydraDB f = HydraDB
   { hydraDb_proxyAddresses :: f (TableEntity ProxyAddressesT)
+  , hydraDb_heads :: f (TableEntity HeadsT)
+  , hydraDb_headParticipants :: f (TableEntity HeadParticipantsT)
   }
   deriving (Generic, Database be)
 
@@ -87,6 +108,16 @@ instance Table ProxyAddressesT where
   data PrimaryKey ProxyAddressesT f = ProxyAddressID (Columnar f T.Text)
     deriving (Generic, Beamable)
   primaryKey = ProxyAddressID . proxyAddress_ownerAddress
+
+instance Table HeadsT where
+  data PrimaryKey HeadsT f = HeadID (Columnar f T.Text)
+    deriving (Generic, Beamable)
+  primaryKey = HeadID . head_name
+
+instance Table HeadParticipantsT where
+  data PrimaryKey HeadParticipantsT f = HeadParticipantID (PrimaryKey HeadsT f) (PrimaryKey ProxyAddressesT f)
+    deriving (Generic, Beamable)
+  primaryKey = HeadParticipantID <$> headParticipant_head <*> headParticipant_proxy
 
 hydraDb :: DatabaseSettings Postgres HydraDB
 hydraDb = defaultDbSettings
@@ -96,9 +127,6 @@ hydraDbAnnotated = BA.defaultAnnotatedDbSettings hydraDb
 
 hsSchema :: BA.Schema
 hsSchema = BA.fromAnnotatedDbSettings hydraDbAnnotated (Proxy @'[])
-
--- withDb :: String -> (Connection -> IO a) -> IO a
--- withDb dbPath a = withGargoyle defaultPostgres dbPath $ \dbUri -> a =<< connectPostgreSQL dbUri
 
 hydraShowMigration :: Connection -> IO ()
 hydraShowMigration conn =
@@ -149,32 +177,97 @@ getKeyPath = do
 
 -- TODO(skylar): Haddocks for this
 data HeadCreate = HeadCreate
-  { headCreate_participants :: [Address]
+  { headCreate_name :: T.Text -- TODO(skylar): This needs to be a type for size reasons most likely
+  , headCreate_participants :: [Address]
   }
   deriving (Generic)
 
 instance ToJSON HeadCreate
 instance FromJSON HeadCreate
 
-
 -- TODO(skylar): Ya we def want a monad
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
-createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m HeadId
-createHead pool (HeadCreate participants) = do
+-- This is the API json type that we need to send back out
+data HeadStatus = HeadStatus
+  { headStatus_name :: T.Text
+  , headStatus_running :: Bool
+  , headStatus_status :: T.Text
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HeadStatus
+instance FromJSON HeadStatus
+
+-- TODO(skylar): How friendly can we make the errors?
+data HydraPayError
+  = InvalidPayload
+  | HeadCreationFailed
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HydraPayError
+instance FromJSON HydraPayError
+
+createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m (Either HydraPayError (HeadStatus, HydraHeadNetwork))
+createHead pool (HeadCreate name participants) = do
   -- Create proxy addresses for all the addresses that don't already have one
   liftIO $ withResource pool $ \conn -> do
     for_ participants $ \addr -> do
       exists <- proxyAddressExists conn addr
       when (not exists) $ withLogging $ addProxyAddress addr conn
-  -- Create the node structure to be able to run the thing
-  pure 1
+    -- We need the script id
+    -- We need to insert the head into the db then start the Head
+    runBeamPostgres conn $ do
+      -- Create the head
+      runInsert $ insert (hydraDb_heads hydraDb) $
+        insertValues [ Head name initialStatus ]
 
-standupDemoHydraNetwork' :: (MonadIO m)
+      -- Populate the participant list
+      runInsert $ insert (hydraDb_headParticipants hydraDb) $
+        insertExpressions $ fmap (\addr -> HeadParticipant (val_ $ HeadID name) (val_ $ ProxyAddressID addr)) participants
+
+    mKeyinfos <- fmap sequenceA $ for participants (\a -> fmap (a,) <$> getProxyAddressKeyInfo conn a)
+    case mKeyinfos of
+      Nothing -> pure $ Left HeadCreationFailed
+      Just keyinfos -> do
+        scripts <- withLogging $ publishReferenceScripts
+        network <- startHydraNetwork scripts $ Map.fromList keyinfos
+        -- TODO(skylar): This is always true here, but should it be? aka how to represent network failure in startup
+        pure $ Right (HeadStatus name True initialStatus, network)
+  where
+    initialStatus = "Pending"
+
+-- TODO(skylar): How to bundle this with the rest of the types
+type HydraHeadNetwork = (Map Address (ProcessHandle, HydraNodeInfo))
+
+getProxyAddressKeyInfo :: MonadIO m => Connection -> Address -> m (Maybe HydraKeyInfo)
+getProxyAddressKeyInfo conn addr = liftIO $ do
+  mpa <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
+    pa <- all_ (hydraDb_proxyAddresses hydraDb)
+    guard_ $ proxyAddress_ownerAddress pa ==. val_ addr
+    pure pa
+  pure $ dbProxyToHydraKeyInfo <$> mpa
+
+dbProxyToHydraKeyInfo :: ProxyAddress -> HydraKeyInfo
+dbProxyToHydraKeyInfo pa = HydraKeyInfo
+  (KeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
+  (KeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
+
+-- addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr
+-- addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g
+
+-- HeadCreate "test" ["addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr", "addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g"]
+
+-- "{\"headCreate_name\":\"test\",\"headCreate_participants\":[\"addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr\",\"addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g\"]}"
+
+-- TODO(skylar): Port management
+-- TODO(skylar): Where should the HydraScriptTxId come from?
+startHydraNetwork :: (MonadIO m)
   => HydraScriptTxId
   -> Map Address HydraKeyInfo
-  -> m (Map T.Text (ProcessHandle, HydraNodeInfo))
-standupDemoHydraNetwork' hstxid actors = do
+  -> m (Map Address (ProcessHandle, HydraNodeInfo))
+startHydraNetwork hstxid actors = do
+  -- TODO(skylar): These logs should be Head specific
   liftIO $ createDirectoryIfMissing True "demo-logs"
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name node -> do
     logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode

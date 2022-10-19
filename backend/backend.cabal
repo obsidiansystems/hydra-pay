@@ -22,6 +22,8 @@ library
                , containers
                , text
                , witherable
+               , snap-core
+               , io-streams
                , websockets-snap
                , websockets
                , some

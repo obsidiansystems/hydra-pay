@@ -20,6 +20,8 @@ import Control.Monad
 import Obelisk.Backend
 import Obelisk.Route
 
+import Snap.Core
+
 import System.Directory
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -31,18 +33,20 @@ import Data.String.Interpolate ( i, iii )
 import qualified Data.Text as T
 import Data.Text.Prettyprint.Doc
 
+import qualified System.IO.Streams as Streams
+
 import Control.Concurrent
 import System.Process
 
 import Data.Aeson as Aeson
     ( decode, encode, ToJSON, FromJSON, (.:), withObject, Value )
 
-
 import Network.WebSockets
 import Network.WebSockets.Snap
 
 import Reflex.Dom.GadtApi.WebSocket
 
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Merge.Lazy as Map
 import qualified Hydra.Types as HT
 import Data.Maybe (fromJust, fromMaybe)
@@ -112,6 +116,8 @@ type BackendState = Map Text ( ProcessHandle
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> withHydraPool $ \pool -> do
+      -- NOTE(skylar): Running heads is a map from head name to network handle
+      runningHeads :: MVar (Map T.Text HydraHeadNetwork) <- newMVar mempty
       hydraProcessHandlesRef :: IORef BackendState <- liftIO (newIORef mempty)
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
@@ -124,8 +130,18 @@ backend = Backend
             liftIO . serve $ \case
               BackendRoute_HydraPay :/ hpr -> case hpr of
                 HydraPayRoute_Head :/ () -> do
-                  liftIO $ withLogging $ createHead pool $ HeadCreate []
-                  pure ()
+                  Aeson.decode . LBS.fromChunks <$> runRequestBody Streams.toList >>= \case
+                    Nothing -> do
+                      modifyResponse $ setResponseStatus 400 "Bad Request"
+                      writeLBS $ Aeson.encode InvalidPayload
+
+                    Just hc@(HeadCreate name participants) -> do
+                      result <- liftIO $ withLogging $ createHead pool hc
+                      case result of
+                        Right (headStatus, network) -> do
+                          liftIO $ modifyMVar_ runningHeads (pure . Map.insert name network)
+                          writeLBS $ Aeson.encode headStatus
+                        Left err -> writeLBS $ Aeson.encode err
 
               BackendRoute_Api :/ () -> do
                  runWebSocketsSnap $ \pendingConnection -> do
