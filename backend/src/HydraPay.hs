@@ -32,6 +32,9 @@ HeadId exists on-chain
 Creating a head means sending the participant list
 
 The backend needs to prepare translated addresses for each participant
+
+State Management:
+
 -}
 import Prelude hiding ((.))
 import Control.Category ((.))
@@ -41,6 +44,8 @@ import qualified Data.Text as T
 import Hydra.Types
 import Data.Int
 import Data.Map (Map)
+import qualified Data.Set as Set
+import Data.Set (Set)
 import qualified Data.Map as Map
 import Data.Aeson
 import Data.Proxy
@@ -51,6 +56,8 @@ import Database.Beam.Postgres
 import qualified Database.Beam.AutoMigrate as BA
 import Data.String.Interpolate ( i, iii )
 import System.IO (IOMode(WriteMode), openFile)
+
+import Control.Concurrent
 
 import Data.Text.Prettyprint.Doc
 import Control.Monad.Log
@@ -80,7 +87,7 @@ data ProxyAddressesT f = ProxyAddress
   }
   deriving (Generic, Beamable)
 
-data HeadsT f = Head
+data HeadsT f = DbHead
   { head_name :: Columnar f T.Text
   , head_state :: Columnar f T.Text
   }
@@ -178,7 +185,9 @@ getKeyPath = do
 -- TODO(skylar): Haddocks for this
 data HeadCreate = HeadCreate
   { headCreate_name :: T.Text -- TODO(skylar): This needs to be a type for size reasons most likely
+  -- TODO(skylar): If we make participants a set, the JSON gets harder to write but we should probably make the types as nice as we can internally for those magic strong guarnatees
   , headCreate_participants :: [Address]
+  , headCreate_startNetwork :: Bool
   }
   deriving (Generic)
 
@@ -191,8 +200,9 @@ withLogging = flip runLoggingT (print . renderWithSeverity id)
 -- This is the API json type that we need to send back out
 data HeadStatus = HeadStatus
   { headStatus_name :: T.Text
+  -- TODO(skylar): The running should become like a "Network State" likely
   , headStatus_running :: Bool
-  , headStatus_status :: T.Text
+  , headStatus_status :: Status
   }
   deriving (Eq, Show, Generic)
 
@@ -203,13 +213,47 @@ instance FromJSON HeadStatus
 data HydraPayError
   = InvalidPayload
   | HeadCreationFailed
+  | NotEnoughParticipants
+  | HeadExists HeadName
+  | HeadDoesn'tExist
   deriving (Eq, Show, Generic)
 
 instance ToJSON HydraPayError
 instance FromJSON HydraPayError
 
-createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m (Either HydraPayError (HeadStatus, HydraHeadNetwork))
-createHead pool (HeadCreate name participants) = do
+{-
+What does it mean to get the head status?
+
+Check if the network is running
+Fetch status as last seen from the database
+Scan the logs to actually have the network state
+
+-}
+
+{-
+What does it mean to create a head?
+Really just to list the participants and record that as a head that may exist
+the Head could also be called created when it is actually initialized on L1
+so we should have the different parts of getting to the init state
+
+So creation in HydraPay terms is simply the intent to actually have one of these heads
+To get to init a couple of things need to happen:
+
+- Funds need to be sent to the proxy addresses: this constitutes an endpoint for getting the transaction
+that will do this?
+
+- Then we have to ensure everybody has Fuel outputs so that is likely another endpoint thing or maybe
+they can be combined
+
+- After that somebody just has to send in "Init" which is one of the valid operations you can do to your node
+that request should be routed automatically
+
+- Starting and stopping heads should be more or less automatic, we shouldn't worry about that for now
+for now creating a head is analogous to running one, but we should be able to run a head by just
+-}
+
+createHead' :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Pool Connection -> HeadCreate -> m (Either HydraPayError (HeadStatus, HydraHeadNetwork))
+createHead' pool (HeadCreate name participants _) = do
   -- Create proxy addresses for all the addresses that don't already have one
   liftIO $ withResource pool $ \conn -> do
     for_ participants $ \addr -> do
@@ -220,7 +264,7 @@ createHead pool (HeadCreate name participants) = do
     runBeamPostgres conn $ do
       -- Create the head
       runInsert $ insert (hydraDb_heads hydraDb) $
-        insertValues [ Head name initialStatus ]
+        insertValues [ DbHead name initialStatus ]
 
       -- Populate the participant list
       runInsert $ insert (hydraDb_headParticipants hydraDb) $
@@ -233,7 +277,7 @@ createHead pool (HeadCreate name participants) = do
         scripts <- withLogging $ publishReferenceScripts
         network <- startHydraNetwork scripts $ Map.fromList keyinfos
         -- TODO(skylar): This is always true here, but should it be? aka how to represent network failure in startup
-        pure $ Right (HeadStatus name True initialStatus, network)
+        pure $ Right (HeadStatus name True Pending, network)
   where
     initialStatus = "Pending"
 
@@ -248,10 +292,16 @@ getProxyAddressKeyInfo conn addr = liftIO $ do
     pure pa
   pure $ dbProxyToHydraKeyInfo <$> mpa
 
+-- TODO(skylar): Should this include the ProxyAddress and the Address and should we
+-- differentiate them at type level?
 dbProxyToHydraKeyInfo :: ProxyAddress -> HydraKeyInfo
-dbProxyToHydraKeyInfo pa = HydraKeyInfo
-  (KeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
-  (KeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
+dbProxyToHydraKeyInfo pa = keyInfo
+  -- (proxyAddress_proxyAddress, pa keyInfo)
+  where
+    keyInfo =
+      HydraKeyInfo
+      (KeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
+      (KeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
 
 -- addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr
 -- addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g
@@ -260,6 +310,136 @@ dbProxyToHydraKeyInfo pa = HydraKeyInfo
 
 -- "{\"headCreate_name\":\"test\",\"headCreate_participants\":[\"addr_test1vy4nmtfc4jfftgqg369hs2ku6kvcncgzhkemq6mh0u3zgpslf59wr\",\"addr_test1v8m0dvk84c7hg6rzul6h9f4998vtaqqrupw778vrw3e4ezqck7n2g\"]}"
 
+
+type HeadName = T.Text
+
+-- | State we need to run/manage Heads
+data State = State
+  { _state_scripts :: HydraScriptTxId
+  , _state_proxyAddresses :: MVar (Map Address (Address, HydraKeyInfo))
+  -- ^ This is really temporary it has the mapping from cardano address to proxy + keys
+  , _state_heads :: MVar (Map HeadName Head)
+  -- ^ This is really temporary until we stuff it all in a database
+  , _state_networks :: MVar (Map HeadName Network)
+  -- , _state_connectionPool :: Pool Connection -- We could ignore htis for now
+  , _state_keyPath :: FilePath
+  }
+
+-- | A Hydra Head in Hydra Pay
+data Head = Head
+  { _head_name :: HeadName
+  -- ^ Unique name of the Head
+  , _head_participants :: Set Address
+      --- Map Address (Address, HydraKeyInfo)
+  , _head_status :: Status
+  -- ^ The participants list with proxy addresses and not owner addresses
+  }
+
+data Status
+  = Pending
+  | Init
+  | Commiting
+  | Open
+  | Closed
+  | Fanout
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Status
+instance FromJSON Status
+
+-- | A Hydra Node running as part of a network
+data Node = Node
+  { _node_handle :: ProcessHandle
+  , _node_info :: HydraNodeInfo
+  }
+
+-- | The network of nodes that hold up a head
+data Network = Network
+  { _network_nodes :: Map Address Node
+  }
+
+getHydraPayState :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m State
+getHydraPayState = do
+  scripts <- publishReferenceScripts
+  addrs <- liftIO $ newMVar mempty
+  heads <- liftIO $ newMVar mempty
+  networks <- liftIO $ newMVar mempty
+  path <- liftIO $ getKeyPath
+  pure $ State scripts addrs heads networks path
+
+-- TODO(skylar): MonadThrow here?
+-- NOTE(skylar): I don't think creating a head should be idempotent that would be weird
+createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
+createHead state (HeadCreate name participants start) = do
+  -- TODO(skylar): This check can be done better by converting to a NonEmpty list and checking failure
+  -- rather than just checking the length
+  case null participants of
+    True -> pure $ Left NotEnoughParticipants
+    False -> do
+      mHead <- lookupHead state name
+      case mHead of
+        Just _ -> pure $ Left $ HeadExists name
+        Nothing -> do
+          let head = Head name (Set.fromList participants) Pending
+          liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
+          pure $ Right head
+
+-- | Lookup head via name
+lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)
+lookupHead state name = do
+  liftIO $ withMVar (_state_heads state) (pure . Map.lookup name)
+
+-- NOTE(skylar): Idempotent
+-- | Generate a proxy address with keys,
+addOrGetKeyInfo :: MonadIO m => State -> Address -> m (Address, HydraKeyInfo)
+addOrGetKeyInfo state addr = do
+  liftIO $ modifyMVar (_state_proxyAddresses state) $ \old -> do
+    case Map.lookup addr old of
+      Just info -> pure (old, info)
+      Nothing -> do
+        keyInfo <- withLogging $ generateKeysIn path
+        proxyAddress <- liftIO $ getCardanoAddress $ _verificationKey . _cardanoKeys $ keyInfo
+        let info = (proxyAddress, keyInfo)
+        pure $ (Map.insert addr info old, info)
+  where
+    path = _state_keyPath state
+
+getHeadStatus :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
+getHeadStatus state name = liftIO $ do
+  mHead <- lookupHead state name
+  case mHead of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just (Head name _ status) -> do
+      running <- isJust <$> getNetwork state name
+      pure $ Right $ HeadStatus name running status
+
+-- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
+startNetwork :: MonadIO m => State -> Head -> m Network
+startNetwork state (Head name participants _) = do
+  mNetwork <- getNetwork state name
+  case mNetwork of
+    Just network -> pure network
+    Nothing -> do
+      proxyMap <- participantsToProxyMap state participants
+      network <- fmap (Network . fmap (uncurry Node)) $ startHydraNetwork (_state_scripts state) proxyMap
+
+      -- Add the network to the running networks mvar
+      liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
+
+      pure network
+
+-- TODO(skylar): Naming and should this take a Head or the Set Address?/
+-- | This takes the set participants in a Head and gets their proxy equivalents as actual addresses
+-- participating in the network are not the addresses registered in the head, but their proxies
+participantsToProxyMap :: MonadIO m => State -> Set Address -> m (Map Address HydraKeyInfo)
+participantsToProxyMap state participants = liftIO $ fmap Map.fromList $ for (Set.toList participants) $ addOrGetKeyInfo state
+
+-- | Lookup the network associated with a head name
+getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)
+getNetwork state name =
+  liftIO $ withMVar (_state_networks state) (pure . Map.lookup name)
+
+-- TODO(skylar): Make this take state and then make this return a Network
 -- TODO(skylar): Port management
 -- TODO(skylar): Where should the HydraScriptTxId come from?
 startHydraNetwork :: (MonadIO m)

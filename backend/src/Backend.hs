@@ -115,9 +115,9 @@ type BackendState = Map Text ( ProcessHandle
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
-  { _backend_run = \serve -> withHydraPool $ \pool -> do
+  { _backend_run = \serve -> do -- withHydraPool $ \pool -> do
       -- NOTE(skylar): Running heads is a map from head name to network handle
-      runningHeads :: MVar (Map T.Text HydraHeadNetwork) <- newMVar mempty
+      -- runningHeads :: MVar (Map T.Text HydraHeadNetwork) <- newMVar mempty
       hydraProcessHandlesRef :: IORef BackendState <- liftIO (newIORef mempty)
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
@@ -127,20 +127,28 @@ backend = Backend
               Cardano node is running
               |]
             liftIO $ threadDelay $ seconds 3
+            state <- getHydraPayState
+            logMessage $ WithSeverity Informational [i|
+              Serving
+              |]
             liftIO . serve $ \case
               BackendRoute_HydraPay :/ hpr -> case hpr of
+                HydraPayRoute_HeadStatus :/ name -> do
+                  status <- getHeadStatus state name
+                  writeLBS $ Aeson.encode status
+
                 HydraPayRoute_Head :/ () -> do
                   Aeson.decode . LBS.fromChunks <$> runRequestBody Streams.toList >>= \case
                     Nothing -> do
                       modifyResponse $ setResponseStatus 400 "Bad Request"
                       writeLBS $ Aeson.encode InvalidPayload
 
-                    Just hc@(HeadCreate name participants) -> do
-                      result <- liftIO $ withLogging $ createHead pool hc
+                    Just hc -> do
+                      result <- liftIO $ withLogging $ createHead state hc
                       case result of
-                        Right (headStatus, network) -> do
-                          liftIO $ modifyMVar_ runningHeads (pure . Map.insert name network)
-                          writeLBS $ Aeson.encode headStatus
+                        Right head -> do
+                          status <- getHeadStatus state (_head_name head)
+                          writeLBS $ Aeson.encode status
                         Left err -> writeLBS $ Aeson.encode err
 
               BackendRoute_Api :/ () -> do

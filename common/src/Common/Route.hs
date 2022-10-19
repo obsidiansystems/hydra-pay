@@ -34,13 +34,15 @@ data BackendRoute :: * -> * where
 
 data HydraPayRoute :: * -> * where
   HydraPayRoute_Head :: HydraPayRoute ()
+  HydraPayRoute_HeadStatus :: HydraPayRoute Text
 
 hydraPayRouteEncoder ::( MonadError Text check
                        , MonadError Text parse
                        )
                      => Encoder check parse (R HydraPayRoute) PageName
 hydraPayRouteEncoder = pathComponentEncoder $ \case
-  HydraPayRoute_Head -> PathSegment "head" $ unitEncoder mempty
+  HydraPayRoute_Head -> PathSegment "heads" $ unitEncoder mempty
+  HydraPayRoute_HeadStatus -> PathSegment "head" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()
