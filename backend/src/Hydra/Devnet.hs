@@ -20,6 +20,10 @@ module Hydra.Devnet
   , prepareDevnet
   , devnetMagic
   , minTxLovelace
+
+  -- TODO(skylar) Temporary
+  , getTempPath
+  , cardanoCliPath
   )
 
 where
@@ -34,7 +38,6 @@ import Control.Monad.IO.Class
 import Data.Aeson
 
 import Control.Concurrent
-
 import Data.Map (Map)
 
 import Data.Bool

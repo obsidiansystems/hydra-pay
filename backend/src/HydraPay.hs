@@ -368,6 +368,38 @@ getHydraPayState hydraSharedInfo = do
   path <- liftIO $ getKeyPath
   pure $ State hydraSharedInfo addrs heads networks path
 
+-- TODO(skylar): Do we actually want a wrapper type here, or is this silly
+newtype AddFundsTx = AddFundsTx
+  { getAmount :: Lovelace
+  }
+
+buildAddFundsTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO T.Text
+buildAddFundsTx signingKey fromAddr toAddr txInAmounts amount = do
+  let fullAmount = sum txInAmounts
+  txBodyPath <- snd <$> getTempPath
+  T.pack <$> readCreateProcess (proc cardanoCliPath
+                       ([ "transaction"
+                        , "build-raw"
+                        , "--babbage-era"
+                        ]
+                        <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
+                        <>
+                        [ "--tx-out"
+                        , [i|#{toAddr}+#{amount}|]
+                        , "--tx-out"
+                        , [i|#{fromAddr}+#{fullAmount - amount}|]
+                        , "--fee"
+                        , "0"
+                        , "--out-file"
+                        , "/dev/stdout"
+                        ]))
+    ""
+
+
+getAddFundsTx :: MonadIO m => State -> AddFundsTx -> m T.Text
+getAddFundsTx state (AddFundsTx lovelace) = do
+  pure ""
+
 -- TODO(skylar): MonadThrow here?
 -- NOTE(skylar): I don't think creating a head should be idempotent that would be weird
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)

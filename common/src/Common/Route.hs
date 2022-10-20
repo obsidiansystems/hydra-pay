@@ -35,6 +35,8 @@ data BackendRoute :: * -> * where
 data HydraPayRoute :: * -> * where
   HydraPayRoute_Head :: HydraPayRoute ()
   HydraPayRoute_HeadStatus :: HydraPayRoute Text
+  -- | This route will give you a transaction that you can use to add funds to the proxy of a address
+  HydraPayRoute_AddFundsTx :: HydraPayRoute Text
 
 hydraPayRouteEncoder ::( MonadError Text check
                        , MonadError Text parse
@@ -43,6 +45,7 @@ hydraPayRouteEncoder ::( MonadError Text check
 hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Head -> PathSegment "heads" $ unitEncoder mempty
   HydraPayRoute_HeadStatus -> PathSegment "head" singlePathSegmentEncoder
+  HydraPayRoute_AddFundsTx -> PathSegment "add-funds" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()
