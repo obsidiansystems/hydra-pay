@@ -10,6 +10,7 @@ module Hydra.Devnet
   , KeyPair(..)
   , getCardanoAddress
   , seedAddressFromFaucetAndWait
+  , getReferenceScripts
   , publishReferenceScripts
   , queryAddressUTXOs
   , buildSignedHydraTx
@@ -18,12 +19,16 @@ module Hydra.Devnet
   , cardanoNodePath
   , hydraNodePath
   , prepareDevnet
+  , seedTestAddresses
+  , getTestAddressKeys
   , devnetMagic
   , minTxLovelace
 
   -- TODO(skylar) Temporary
   , getTempPath
   , cardanoCliPath
+  , submitTx
+  , waitForTxIn
   )
 
 where
@@ -43,6 +48,7 @@ import Data.Map (Map)
 import Data.Bool
 import Data.Text.Prettyprint.Doc
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 import qualified Data.Map as Map
 import Data.String.Interpolate (i)
 import Paths
@@ -55,6 +61,7 @@ import qualified Data.UUID as UUID
 import Data.UUID (UUID)
 import Data.Maybe (fromMaybe)
 
+import Data.Traversable
 
 devnetMagic :: Int
 devnetMagic = 42
@@ -63,6 +70,41 @@ prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
   when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+
+
+-- prepareDevnetWithSeededAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Int -> m ()
+-- prepareDevnetWithSeededAddresses amount = do
+
+seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Int -> m ()
+seedTestAddresses amount = do
+  exists <- liftIO $ doesFileExist path
+  when (not exists) $ do
+    seededAddresses <- for [1 .. amount] $ \n -> do
+      keypair <- generateCardanoKeys ("addr_" <> show n)
+      addr <- liftIO $ getCardanoAddress $ _verificationKey keypair
+      seedAddressFromFaucetAndWait addr (ada 1000) False
+      pure addr
+    liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
+
+  where
+    path = "devnet/addresses"
+
+getTestAddressKeys :: Address -> IO (Maybe KeyPair)
+getTestAddressKeys addr = do
+  contents <- flip zip [1..] . T.lines <$> T.readFile path
+  pure $ fmap mkKeypair . lookup addr $ contents
+  where
+    mkKeypair n = KeyPair (root <> "sk") (root <> "vk")
+      where
+        root = "addr_" <> show n <> ".cardano."
+
+    -- TODO(skylar): Unify this with seedTestAddresses
+    path = "devnet/addresses"
+
+  -- seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Address -> Lovelace -> Bool -> m TxIn
+
+ada :: Int -> Lovelace
+ada n = n * 1000000
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
@@ -144,6 +186,18 @@ generateHydraKeys path = do
   logMessage $ WithSeverity Informational $ pretty $ T.pack output
   pure $ KeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
 
+-- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
+getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
+getReferenceScripts = do
+  exists <- liftIO $ doesFileExist scriptPath
+  case exists of
+    True -> liftIO $ T.readFile scriptPath
+    False -> do
+      scripts <- publishReferenceScripts
+      liftIO $ T.writeFile scriptPath scripts
+      pure scripts
+  where
+    scriptPath = "devnet/scripts"
 
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
 publishReferenceScripts = do
@@ -285,7 +339,6 @@ getCardanoAddress keyPath =
                               , "42"
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
-
 getFaucetAddress :: IO Address
 getFaucetAddress = T.pack <$> readCreateProcess cp ""
   where
@@ -308,10 +361,9 @@ seedAddressFromFaucet :: Address -> Lovelace -> Bool -> IO TxIn
 seedAddressFromFaucet addr amount isFuel = do
   draftTx <- buildSeedTxForAddress addr amount isFuel
   signedTx <- signSeedTx' draftTx
-  txin <- txInput 0 <$> seedTxIdFromSignedTx signedTx
+  txin <- txInput 0 <$> txIdFromSignedTx signedTx
   submitTx signedTx
   pure txin
-
 
 buildSeedTxForAddress :: Address -> Lovelace -> Bool -> IO DraftTx
 buildSeedTxForAddress addr amount isFuel = do
@@ -342,7 +394,6 @@ buildSeedTxForAddress addr amount isFuel = do
   _ <- readCreateProcess (cp (T.unpack faucet) (T.unpack hash)) ""
   pure filename
 
-
 signSeedTx' :: DraftTx -> IO SignedTx
 signSeedTx' draftFile = do
   outFile <- getTempPath'
@@ -361,8 +412,8 @@ signSeedTx' draftFile = do
   _ <- readCreateProcess cp ""
   pure outFile
 
-seedTxIdFromSignedTx :: SignedTx -> IO TxId
-seedTxIdFromSignedTx filename =
+txIdFromSignedTx :: SignedTx -> IO TxId
+txIdFromSignedTx filename =
   T.strip . T.pack <$> readCreateProcess cp ""
   where
     cp = (proc cardanoCliPath [ "transaction"
@@ -371,10 +422,11 @@ seedTxIdFromSignedTx filename =
                               , filename
                               ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
-submitTx :: SignedTx -> IO ()
+submitTx :: SignedTx -> IO TxId
 submitTx signedFile = do
+  txid <- txInput 0 <$> txIdFromSignedTx signedFile
   _ <- readCreateProcess cp ""
-  pure ()
+  pure txid
   where
     cp = (proc cardanoCliPath [ "transaction"
                               , "submit"

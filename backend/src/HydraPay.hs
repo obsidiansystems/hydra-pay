@@ -40,14 +40,16 @@ import Prelude hiding ((.))
 import Control.Category ((.))
 import System.Process
 import GHC.Generics
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.Text as T
-import Hydra.Types
 import Data.Int
+import Data.Bool
+import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map as Map
-import Data.Aeson
+import Data.Aeson as Aeson
 import Data.Proxy
 import Data.Pool
 import Data.Maybe
@@ -56,6 +58,8 @@ import Database.Beam.Postgres
 import qualified Database.Beam.AutoMigrate as BA
 import Data.String.Interpolate ( i, iii )
 import System.IO (IOMode(WriteMode), openFile)
+import Network.WebSockets.Client
+import qualified Network.WebSockets.Connection as WS
 
 import Control.Concurrent
 
@@ -72,7 +76,12 @@ import Data.Foldable
 import Data.Traversable
 
 import Control.Monad
+
+import Hydra.Types
 import Hydra.Devnet
+import Hydra.ClientInput
+
+import qualified Hydra.Types as HT
 
 type HeadId = Int
 
@@ -194,6 +203,24 @@ data HeadCreate = HeadCreate
 instance ToJSON HeadCreate
 instance FromJSON HeadCreate
 
+data HeadInit = HeadInit
+  { headInit_name :: T.Text
+  , headInit_participant :: Address
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HeadInit
+instance FromJSON HeadInit
+
+data HeadCommit = HeadCommit
+  { headCommit_name :: T.Text
+  , headCommit_participant :: T.Text
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HeadCommit
+instance FromJSON HeadCommit
+
 -- TODO(skylar): Ya we def want a monad
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
@@ -216,6 +243,10 @@ data HydraPayError
   | NotEnoughParticipants
   | HeadExists HeadName
   | HeadDoesn'tExist
+  | NetworkIsn'tRunning
+  | FailedToBuildFundsTx
+  | NotAParticipant
+  | InsufficientFunds
   deriving (Eq, Show, Generic)
 
 instance ToJSON HydraPayError
@@ -336,12 +367,12 @@ data Head = Head
   }
 
 data Status
-  = Pending
-  | Init
-  | Commiting
-  | Open
-  | Closed
-  | Fanout
+  = Status_Pending
+  | Status_Init
+  | Status_Commiting
+  | Status_Open
+  | Status_Closed
+  | Status_Fanout
   deriving (Eq, Show, Generic)
 
 instance ToJSON Status
@@ -356,6 +387,7 @@ data Node = Node
 -- | The network of nodes that hold up a head
 data Network = Network
   { _network_nodes :: Map Address Node
+  , _network_monitor_thread :: ThreadId
   }
 
 getHydraPayState :: (MonadIO m)
@@ -373,32 +405,146 @@ newtype AddFundsTx = AddFundsTx
   { getAmount :: Lovelace
   }
 
-buildAddFundsTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO T.Text
-buildAddFundsTx signingKey fromAddr toAddr txInAmounts amount = do
-  let fullAmount = sum txInAmounts
-  txBodyPath <- snd <$> getTempPath
-  T.pack <$> readCreateProcess (proc cardanoCliPath
-                       ([ "transaction"
-                        , "build-raw"
+{-
+justLovelace :: WholeUTXO -> WholeUTXO
+justLovelace = Map.filter isJustLovelace
+  where
+    isJustLovelace :: TxInInfo -> Bool
+    isJustLovelace (TxInInfo _ _ v) = Map.size v == 1 && Map.member "lovelace" v
+-}
+
+-- TODO(skylar): Where do we get this from?
+data Tx = Tx
+  { txType :: T.Text
+  , txDescription :: T.Text
+  , txCborHex :: T.Text
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Tx where
+  toJSON (Tx t d c) =
+    object [ "type" .= t
+           , "description" .= d
+           , "cborHex" .= c
+           ]
+
+instance FromJSON Tx where
+  parseJSON = withObject "Tx" $ \v -> Tx
+    <$> v .: "type"
+    <*> v .: "description"
+    <*> v .: "cborHex"
+
+{-
+So what has to happen here?
+For devnet how can we do this easier?
+
+We just want to init and commit, and track the state!
+
+We ask for a way to add funds, so we ask for the way as a cbor TX
+now we need to sign and submit it, this would usually happen through a wallet
+so we just want a convenience function to do just that, get the cbor and then sign
+This _does_ require some client to do the thing....
+
+For now we will just make a function that will auto submit anything
+-}
+
+data TxType =
+  Funds | Fuel
+  deriving (Eq, Show)
+
+isFuelType :: TxType -> Bool
+isFuelType Fuel = True
+isFuelType _ = False
+
+buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
+buildAddTx txType state fromAddr amount = do
+  -- TODO(skylar): This has to use the node in the settings and thus should take state
+  utxos <- queryAddressUTXOs fromAddr
+  let
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+  (toAddr, _) <- addOrGetKeyInfo state fromAddr
+
+  let
+    fullAmount = sum txInAmounts
+    txInCount = Map.size txInAmounts
+  txBodyPath <- liftIO $ snd <$> getTempPath
+  _ <- liftIO $ readCreateProcess (proc cardanoCliPath
+                       (filter (/= "") $ [ "transaction"
+                        , "build"
                         , "--babbage-era"
+                        , "--cardano-mode"
                         ]
                         <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
                         <>
                         [ "--tx-out"
                         , [i|#{toAddr}+#{amount}|]
-                        , "--tx-out"
-                        , [i|#{fromAddr}+#{fullAmount - amount}|]
-                        , "--fee"
-                        , "0"
+                        ]
+                        <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] (isFuelType txType)
+                        <>
+                        [ "--change-address"
+                        , T.unpack fromAddr
+                        , "--testnet-magic"
+                        , "42"
                         , "--out-file"
-                        , "/dev/stdout"
-                        ]))
+                        , txBodyPath
+                        ])) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
     ""
+  txResult <- liftIO $ readFile txBodyPath
+  liftIO $ putStrLn txResult
+  case Aeson.decode $ LBS.pack txResult of
+    Just tx -> pure $ Right tx
+    Nothing -> pure $ Left FailedToBuildFundsTx
 
+initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
+initHead state (HeadInit name addr) = do
+  mNetwork <- getNetwork state name
+  case mNetwork of
+    Nothing -> pure $ Left NetworkIsn'tRunning
+    Just network -> do
+      (proxyAddr, _) <- addOrGetKeyInfo state addr
+      case Map.lookup proxyAddr $ _network_nodes network of
+        Nothing -> pure $ Left NotAParticipant
+        Just node -> do
+          let port = _apiPort $ _node_info node
+          liftIO $ do
+            runClient "localhost" port "/" $ \conn -> do
+              -- TODO(skylar): Use ClientInput!!!
+              WS.sendTextData conn ("{\"tag\":\"Init\",\"contestationPeriod\":60}" :: T.Text)
+          pure $ Right ()
 
-getAddFundsTx :: MonadIO m => State -> AddFundsTx -> m T.Text
-getAddFundsTx state (AddFundsTx lovelace) = do
-  pure ""
+commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
+commitToHead state (HeadCommit name addr) = do
+  mNetwork <- getNetwork state name
+  case mNetwork of
+    Nothing -> pure $ Left NetworkIsn'tRunning
+    Just network -> do
+      (proxyAddr, _) <- addOrGetKeyInfo state addr
+      case Map.lookup proxyAddr $ _network_nodes network of
+        Nothing -> pure $ Left NotAParticipant
+        Just node -> do
+          proxyFunds <- filterOutFuel <$> queryAddressUTXOs proxyAddr
+          let port = _apiPort $ _node_info node
+          liftIO $ do
+            runClient "localhost" port "/" $ \conn -> do
+              WS.sendTextData conn $ Aeson.encode $ Commit proxyFunds
+          pure $ Right ()
+
+  {-
+  mNetwork <- getNetwork state name
+  case mNetwork of
+    Nothing -> pure $ Left NetworkIsn'tRunning
+    Just network -> do
+      (proxyAddr, _) <- addOrGetKeyInfo state addr
+      case Map.lookup proxyAddr $ _network_nodes network of
+        Nothing -> pure $ Left NotAParticipant
+        Just node -> do
+          let port = _apiPort $ _node_info node
+          liftIO $ do
+            runClient "localhost" port "/" $ \conn -> do
+              -- TODO(skylar): Use actual types please
+              WS.sendTextData conn ("{\"tag\":\"Init\",\"contestationPeriod\":60}" :: T.Text)
+          pure $ Right ()
+  pure $ Left FailedToBuildFundsTx-}
 
 -- TODO(skylar): MonadThrow here?
 -- NOTE(skylar): I don't think creating a head should be idempotent that would be weird
@@ -413,7 +559,7 @@ createHead state (HeadCreate name participants start) = do
       case mHead of
         Just _ -> pure $ Left $ HeadExists name
         Nothing -> do
-          let head = Head name (Set.fromList participants) Pending
+          let head = Head name (Set.fromList participants) Status_Pending
           liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
           when start $ void $ startNetwork state head
           pure $ Right head
@@ -447,6 +593,18 @@ getHeadStatus state name = liftIO $ do
       running <- isJust <$> getNetwork state name
       pure $ Right $ HeadStatus name running status
 
+-- spawnMonitorThread :: MonadIO m => HeadMVar Name -> HeadName -> m ThreadId
+-- spawnMonitorThread state name = do
+--  network <- getNetwork state name
+{-
+  liftIO $ forkIO $ do
+    runClient "localhost" port "/" $ \conn -> do
+      msg :: T.Text <- WS.receiveData conn
+
+      pure ()
+-}
+      -- putStrLn $ T.unpack testMsg
+
 -- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
 startNetwork :: MonadIO m => State -> Head -> m Network
 startNetwork state (Head name participants _) = do
@@ -455,11 +613,34 @@ startNetwork state (Head name participants _) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      network <- fmap (Network . fmap (uncurry Node)) $ startHydraNetwork (_state_hydraInfo state) proxyMap
+      nodes <- (fmap . fmap) (uncurry Node) $ startHydraNetwork (_state_hydraInfo state) proxyMap
 
+      let
+        -- TODO(skylar): This crashes
+        firstNodePort = _apiPort . _node_info . snd $ Map.elemAt 0 nodes
+      -- network <- fmap (Network . fmap (uncurry Node)) $
+      liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . _node_info) . Map.elems $ nodes
+
+      monitor <- liftIO $ forkIO $ do
+        threadDelay 3000000
+        runClient "localhost" firstNodePort "/" $ \conn -> forever $ do
+          msg :: T.Text <- WS.receiveData conn
+          putStrLn $ "Got message: " <> T.unpack msg
+          let
+            handleMsg m
+              | T.isInfixOf "ReadyToCommit" m = Just Status_Init
+              | T.isInfixOf "Commit" m = Just Status_Commiting
+              | T.isInfixOf "HeadIsOpen" m = Just Status_Open
+              | otherwise = Nothing
+
+          case handleMsg msg of
+            Just status -> do
+              liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
+            Nothing -> pure ()
+
+      let network = Network nodes monitor
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
-
       pure network
 
 -- TODO(skylar): Naming and should this take a Head or the Set Address?/
@@ -486,7 +667,7 @@ startHydraNetwork sharedInfo actors = do
   liftIO $ createDirectoryIfMissing True "demo-logs"
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name node -> do
     logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode
-    errHndl <- openFile [iii|demo-logs/phydra-node-#{name}.error.log|] WriteMode
+    errHndl <- openFile [iii|demo-logs/hydra-node-#{name}.error.log|] WriteMode
     let cp = (mkHydraNodeCP sharedInfo node (filter ((/= _nodeId node) . _nodeId) (Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
@@ -512,7 +693,9 @@ data HydraSharedInfo = HydraSharedInfo
 data HydraNodeInfo = HydraNodeInfo
   { _nodeId :: Int
   , _port :: Int
+  -- ^ The port this node is running on
   , _apiPort :: Int
+  -- ^ The port that this node is serving its pub/sub websockets api on
   , _monitoringPort :: Int
   , _keys :: HydraKeyInfo
   }

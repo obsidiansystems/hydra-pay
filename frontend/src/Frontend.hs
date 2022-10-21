@@ -63,11 +63,22 @@ frontend = Frontend
       elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
   , _frontend_body = do
+      -- testThing
+            -- (WebSocketConfig @t @ClientInput) action never True []
+
       rec
-        (_, requests) <- runRequesterT app responses
-        responses <- performWebSocketRequests "ws://localhost:8000/api" requests
+       (_, requests) <- runRequesterT app responses
+       responses <- performWebSocketRequests "ws://localhost:8000/api" requests
       pure ()
   }
+
+testThing :: forall t m. (Prerender t m, Monad m) => m ()
+testThing =
+  prerender_ blank $ do
+    let wsCfg = (WebSocketConfig @t @T.Text) never never True []
+    ws :: RawWebSocket t (Maybe T.Text) <- jsonWebSocket "ws://localhost:5001" (def :: WebSocketConfig t [T.Text])
+    pure ()
+
 requestingJs
   :: ( MonadFix m
      , Prerender t m
@@ -82,12 +93,6 @@ requestingJs r = fmap (switch . current) $ prerender (pure never) $ requesting r
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right b) = Just b
 eitherToMaybe _ = Nothing
-
-filterOutFuel :: WholeUTXO -> WholeUTXO
-filterOutFuel = Map.filter (not . isFuel)
-
-isFuel :: TxInInfo -> Bool
-isFuel txinfo = datumhash txinfo == Just fuelMarkerDatumHash
 
 -- | Tracks the state of the head based on Hydra Node responses
 data HeadState

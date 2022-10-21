@@ -56,6 +56,8 @@ import Data.IORef (readIORef, writeIORef, IORef, newIORef)
 import Hydra.Types (Address)
 import Data.Text (Text)
 import qualified Data.ByteString.Lazy.Char8 as ByteString.Char8
+
+import HydraPay.Client
 import HydraPay
 
 standupDemoHydraNetwork :: (MonadIO m)
@@ -115,7 +117,7 @@ type BackendState = Map Text ( ProcessHandle
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
-  scripts <- publishReferenceScripts
+  scripts <- getReferenceScripts
   pure $ HydraSharedInfo
       { _hydraScriptsTxId = T.unpack scripts,
         _ledgerGenesis = "devnet/genesis-shelley.json",
@@ -123,11 +125,11 @@ getDevnetHydraSharedInfo = do
         _networkId = show devnetMagic,
         _nodeSocket = "devnet/node.socket"
       }
+
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do -- withHydraPool $ \pool -> do
       -- NOTE(skylar): Running heads is a map from head name to network handle
-      -- runningHeads :: MVar (Map T.Text HydraHeadNetwork) <- newMVar mempty
       hydraProcessHandlesRef :: IORef BackendState <- liftIO (newIORef mempty)
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
@@ -137,12 +139,52 @@ backend = Backend
               Cardano node is running
               |]
             liftIO $ threadDelay $ seconds 3
+            seedTestAddresses 10
             state <- getHydraPayState =<< getDevnetHydraSharedInfo
             logMessage $ WithSeverity Informational [i|
               Serving
               |]
             liftIO . serve $ \case
               BackendRoute_HydraPay :/ hpr -> case hpr of
+                HydraPayRoute_Init :/ () -> do
+                  Aeson.decode . LBS.fromChunks <$> runRequestBody Streams.toList >>= \case
+                    Nothing -> do
+                      modifyResponse $ setResponseStatus 400 "Bad Request"
+                      writeLBS $ Aeson.encode InvalidPayload
+
+                    Just hi -> do
+                      result <- liftIO $ withLogging $ initHead state hi
+                      case result of
+                        Right () -> pure ()
+                        Left err -> writeLBS $ Aeson.encode err
+
+                HydraPayRoute_Commit :/ () -> do
+                  Aeson.decode . LBS.fromChunks <$> runRequestBody Streams.toList >>= \case
+                    Nothing -> do
+                      modifyResponse $ setResponseStatus 400 "Bad Request"
+                      writeLBS $ Aeson.encode InvalidPayload
+
+                    Just hc -> do
+                      result <- liftIO $ withLogging $ commitToHead state hc
+                      case result of
+                        Right head -> pure ()
+                        Left err -> writeLBS $ Aeson.encode err
+
+                HydraPayRoute_AddFuelTx :/ addr -> do
+                  -- TODO(skylar): This need to take an amount
+                  result <- buildAddTx Fuel state addr 100000000
+                  case result of
+                    Left err -> writeLBS $ Aeson.encode err
+                    Right tx -> writeLBS $ Aeson.encode tx
+
+                HydraPayRoute_AddFundsTx :/ addr -> do
+                  -- TODO(skylar): This also needs to take an amount
+
+                  result <- buildAddTx Funds state addr 100000000
+                  case result of
+                    Left err -> writeLBS $ Aeson.encode err
+                    Right tx -> writeLBS $ Aeson.encode tx
+
                 HydraPayRoute_HeadStatus :/ name -> do
                   status <- getHeadStatus state name
                   writeLBS $ Aeson.encode status

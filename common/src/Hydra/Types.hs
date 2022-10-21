@@ -9,6 +9,7 @@ import Data.Map (Map)
 import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Data.Text (Text)
+import qualified Data.Map as Map
 import Numeric.Natural (Natural)
 
 -- | Cardano address
@@ -18,6 +19,12 @@ type Lovelace = Int
 
 type TxIn = T.Text
 type WholeUTXO = Map TxIn TxInInfo
+
+filterOutFuel :: WholeUTXO -> WholeUTXO
+filterOutFuel = Map.filter (not . isFuel)
+
+isFuel :: TxInInfo -> Bool
+isFuel txinfo = datumhash txinfo == Just fuelMarkerDatumHash
 
 data TxInInfo = TxInInfo
   { address :: Address

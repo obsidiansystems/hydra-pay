@@ -41,6 +41,9 @@ library
                , beam-automigrate
                , bytestring
                , uuid
+               , http-client
+               , http-conduit
+               , temporary
 
   default-extensions:
     OverloadedStrings
@@ -56,6 +59,7 @@ library
     Backend
     HydraPay
     HydraPay.Network
+    HydraPay.Client
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
 
 executable backend
