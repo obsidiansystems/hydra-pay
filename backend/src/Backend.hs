@@ -171,15 +171,12 @@ backend = Backend
                         Left err -> writeLBS $ Aeson.encode err
 
                 HydraPayRoute_AddFuelTx :/ addr -> do
-                  -- TODO(skylar): This need to take an amount
                   result <- buildAddTx Fuel state addr 100000000
                   case result of
                     Left err -> writeLBS $ Aeson.encode err
                     Right tx -> writeLBS $ Aeson.encode tx
 
                 HydraPayRoute_AddFundsTx :/ addr -> do
-                  -- TODO(skylar): This also needs to take an amount
-
                   result <- buildAddTx Funds state addr 100000000
                   case result of
                     Left err -> writeLBS $ Aeson.encode err

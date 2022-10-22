@@ -1,4 +1,4 @@
--- | This is where testing stuff goes for now
+-- | This module contains integration testing and convenience functions for interacting with the hydra-pay service
 
 module HydraPay.Client where
 
@@ -19,7 +19,6 @@ import qualified Data.Aeson as Aeson
 
 getAndSubmitTx :: Address -> TxType -> IO ()
 getAndSubmitTx addr tt = do
-
   let
     endpoint = case tt of
       Fuel -> "add-fuel"
@@ -42,7 +41,6 @@ signAndSubmitTx addr tx = do
       Just (KeyPair sk _) -> do
         withTempFile "." "tx.signed" $ \signedFile signedHandle -> do
           hClose signedHandle
-          -- TODO(skylar): Generalize sign
           let cp = (proc cardanoCliPath [ "transaction"
                                         , "sign"
                                         , "--tx-body-file"

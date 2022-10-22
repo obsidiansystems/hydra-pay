@@ -435,7 +435,6 @@ openScreen name actorNames actorAddress webSocketMessage = do
           requestingJs $
             DemoApi_MkTx name
               <$> current currentSet
-              -- NOTE/TODO(skylar): This is just to default to the minimum
               <*> current (fromMaybe 1000000 <$> lovelaceDyn)
               <*> current recipientDyn
               <@ doSend

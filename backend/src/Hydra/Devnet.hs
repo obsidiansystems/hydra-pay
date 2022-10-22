@@ -24,7 +24,6 @@ module Hydra.Devnet
   , devnetMagic
   , minTxLovelace
 
-  -- TODO(skylar) Temporary
   , getTempPath
   , cardanoCliPath
   , submitTx
@@ -71,9 +70,8 @@ prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./demo/prepare-devnet.sh") ""
   when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
 
-
--- prepareDevnetWithSeededAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Int -> m ()
--- prepareDevnetWithSeededAddresses amount = do
+addressesPath :: FilePath
+addressesPath = "devnet/addresses"
 
 seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Int -> m ()
 seedTestAddresses amount = do
@@ -85,9 +83,8 @@ seedTestAddresses amount = do
       seedAddressFromFaucetAndWait addr (ada 1000) False
       pure addr
     liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
-
   where
-    path = "devnet/addresses"
+    path = addressesPath
 
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
@@ -97,11 +94,7 @@ getTestAddressKeys addr = do
     mkKeypair n = KeyPair (root <> "sk") (root <> "vk")
       where
         root = "addr_" <> show n <> ".cardano."
-
-    -- TODO(skylar): Unify this with seedTestAddresses
-    path = "devnet/addresses"
-
-  -- seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Address -> Lovelace -> Bool -> m TxIn
+    path = addressesPath
 
 ada :: Int -> Lovelace
 ada n = n * 1000000
@@ -245,7 +238,6 @@ txInExists txin = do
 txInput :: Int -> TxId -> TxIn
 txInput index txid = txid <> "#" <> (T.pack . show) index
 
--- TODO: use this in checks?
 minTxLovelace :: Int
 minTxLovelace = 857690
 
@@ -275,7 +267,6 @@ getTempPath = do
   uid <- UUIDV4.nextRandom
   pure . (uid,) . ("tmp/" <>) . UUID.toString $ uid
 
--- TODO(skylar): Check lovelace vs the full amount!
 buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO String
 buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
   let fullAmount = sum txInAmounts
