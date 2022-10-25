@@ -168,7 +168,7 @@ proxyAddressExists conn addr = do
 addProxyAddress :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Address -> Connection -> m ()
 addProxyAddress addr conn = do
   path <- liftIO getKeyPath
-  keyInfo <- generateKeysIn path
+  keyInfo <- generateKeysIn $ T.unpack addr
 
   let
     cvk = _verificationKey . _cardanoKeys $ keyInfo
@@ -338,7 +338,7 @@ data Node = Node
 -- | The network of nodes that hold up a head
 data Network = Network
   { _network_nodes :: Map Address Node
-  , _network_monitor_thread :: ThreadId
+  , _network_monitor_threads :: Map Address ThreadId
   }
 
 getHydraPayState :: (MonadIO m)
@@ -431,7 +431,9 @@ initHead state (HeadInit name addr) = do
           liftIO $ do
             runClient "localhost" port "/" $ \conn -> do
               WS.sendTextData conn ("{\"tag\":\"Init\",\"contestationPeriod\":60}" :: T.Text)
-          pure $ Right ()
+              -- msg :: T.Text <- WS.receiveData conn
+              -- putStrLn $ "Init response message: " <> T.unpack msg
+            pure $ Right ()
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr) = do
@@ -460,6 +462,7 @@ createHead state (HeadCreate name participants start) = do
         Just _ -> pure $ Left $ HeadExists name
         Nothing -> do
           let head = Head name (Set.fromList participants) Status_Pending
+          liftIO $ for participants $ putStrLn . T.unpack
           liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
           when start $ void $ startNetwork state head
           pure $ Right head
@@ -477,7 +480,7 @@ addOrGetKeyInfo state addr = do
     case Map.lookup addr old of
       Just info -> pure (old, info)
       Nothing -> do
-        keyInfo <- withLogging $ generateKeysIn path
+        keyInfo <- withLogging $ generateKeysIn $ T.unpack addr <> "-proxy"
         proxyAddress <- liftIO $ getCardanoAddress $ _verificationKey . _cardanoKeys $ keyInfo
         let info = (proxyAddress, keyInfo)
         pure $ (Map.insert addr info old, info)
@@ -503,28 +506,34 @@ startNetwork state (Head name participants _) = do
       proxyMap <- participantsToProxyMap state participants
       nodes <- (fmap . fmap) (uncurry Node) $ startHydraNetwork (_state_hydraInfo state) proxyMap
 
-      let
-        firstNodePort = _apiPort . _node_info . snd $ Map.elemAt 0 nodes
+      -- let
+      --  firstNodePort = _apiPort . _node_info . snd $ Map.elemAt 0 nodes
       liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . _node_info) . Map.elems $ nodes
 
-      monitor <- liftIO $ forkIO $ do
-        threadDelay 3000000
-        runClient "localhost" firstNodePort "/" $ \conn -> forever $ do
-          msg :: T.Text <- WS.receiveData conn
-          putStrLn $ "Got message: " <> T.unpack msg
-          let
-            handleMsg m
-              | T.isInfixOf "ReadyToCommit" m = Just Status_Init
-              | T.isInfixOf "Commit" m = Just Status_Commiting
-              | T.isInfixOf "HeadIsOpen" m = Just Status_Open
-              | otherwise = Nothing
+      monitors <- fmap Map.fromList $ for (Map.toList nodes) $ \(addr, info) -> do
+        let port =  _apiPort . _node_info $ info
+        monitor <- liftIO $ forkIO $ do
+          threadDelay 3000000
+          runClient "localhost" port "/" $ \conn -> forever $ do
+            msg :: T.Text <- WS.receiveData conn
+            putStrLn $ "Monitor:" <> show port <> ": " <> T.unpack msg
+            let
+              handleMsg m
+                | T.isInfixOf "ReadyToCommit" m = Just Status_Init
+                | T.isInfixOf "Committed" m = Nothing
+                | T.isInfixOf "CommandFailed" m = Nothing
+                | T.isInfixOf "Commit" m = Just Status_Commiting
+                | T.isInfixOf "HeadIsOpen" m = Just Status_Open
+                | otherwise = Nothing
 
-          case handleMsg msg of
-            Just status -> do
-              liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
-            Nothing -> pure ()
+            case handleMsg msg of
+              Just status -> do
+                liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
+              Nothing -> pure ()
 
-      let network = Network nodes monitor
+        pure (addr, monitor)
+
+      let network = Network nodes monitors
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
       pure network
@@ -532,7 +541,8 @@ startNetwork state (Head name participants _) = do
 -- | This takes the set participants in a Head and gets their proxy equivalents as actual addresses
 -- participating in the network are not the addresses registered in the head, but their proxies
 participantsToProxyMap :: MonadIO m => State -> Set Address -> m (Map Address HydraKeyInfo)
-participantsToProxyMap state participants = liftIO $ fmap Map.fromList $ for (Set.toList participants) $ addOrGetKeyInfo state
+participantsToProxyMap state participants =
+  liftIO $ fmap Map.fromList $ for (Set.toList participants) $ addOrGetKeyInfo state
 
 -- | Lookup the network associated with a head name
 getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)

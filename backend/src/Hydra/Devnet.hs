@@ -24,6 +24,7 @@ module Hydra.Devnet
   , devnetMagic
   , minTxLovelace
 
+  , addressesPath
   , getTempPath
   , cardanoCliPath
   , submitTx
@@ -80,7 +81,7 @@ seedTestAddresses amount = do
     seededAddresses <- for [1 .. amount] $ \n -> do
       keypair <- generateCardanoKeys ("addr_" <> show n)
       addr <- liftIO $ getCardanoAddress $ _verificationKey keypair
-      seedAddressFromFaucetAndWait addr (ada 1000) False
+      seedAddressFromFaucetAndWait addr (ada 10000) False
       pure addr
     liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
   where

@@ -63,12 +63,7 @@ frontend = Frontend
       elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
   , _frontend_body = do
-      -- testThing
-            -- (WebSocketConfig @t @ClientInput) action never True []
 
-      rec
-       (_, requests) <- runRequesterT app responses
-       responses <- performWebSocketRequests "ws://localhost:8000/api" requests
       pure ()
   }
 

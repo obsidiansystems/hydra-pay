@@ -139,6 +139,7 @@ backend = Backend
               Cardano node is running
               |]
             liftIO $ threadDelay $ seconds 3
+
             seedTestAddresses 10
             state <- getHydraPayState =<< getDevnetHydraSharedInfo
             logMessage $ WithSeverity Informational [i|
@@ -171,7 +172,7 @@ backend = Backend
                         Left err -> writeLBS $ Aeson.encode err
 
                 HydraPayRoute_AddFuelTx :/ addr -> do
-                  result <- buildAddTx Fuel state addr 100000000
+                  result <- buildAddTx Fuel state addr 1000000000
                   case result of
                     Left err -> writeLBS $ Aeson.encode err
                     Right tx -> writeLBS $ Aeson.encode tx
