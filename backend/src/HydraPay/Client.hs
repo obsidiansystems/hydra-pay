@@ -3,7 +3,6 @@
 module HydraPay.Client where
 
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
 import qualified Data.ByteString.Lazy as LBS
 
 import Hydra.Devnet
@@ -22,14 +21,15 @@ import Data.Foldable
 import Data.Traversable
 
 import qualified Data.Aeson as Aeson
+import CardanoNodeInfo
 
-testHeadOneParticipant :: T.Text -> IO ()
-testHeadOneParticipant name = do
+testHeadOneParticipant :: CardanoNodeInfo -> T.Text -> IO ()
+testHeadOneParticipant cninfo name = do
   postCreateHead name [1]
   threadDelay 1000000
-  getAndSubmitTx 1 Funds
+  getAndSubmitTx cninfo 1 Funds
   threadDelay 1000000
-  getAndSubmitTx 1 Fuel
+  getAndSubmitTx cninfo 1 Fuel
   threadDelay 1000000
   postInitHead name 1
   threadDelay 1000000
@@ -37,13 +37,13 @@ testHeadOneParticipant name = do
   threadDelay 1000000
   getStatus name
 
-testHeadParticipants :: T.Text -> [Int] -> IO ()
-testHeadParticipants name partcipants@(initializer:_) = do
+testHeadParticipants :: CardanoNodeInfo -> T.Text -> [Int] -> IO ()
+testHeadParticipants cninfo name partcipants@(initializer:_) = do
   postCreateHead name partcipants
   threadDelay 1000000
   for_  partcipants $ \i -> do
-    getAndSubmitTx i Funds
-    getAndSubmitTx i Fuel
+    getAndSubmitTx cninfo i Funds
+    getAndSubmitTx cninfo i Fuel
     threadDelay 500000
   threadDelay 1000000
   postInitHead name initializer
@@ -53,12 +53,12 @@ testHeadParticipants name partcipants@(initializer:_) = do
     threadDelay 1000000
   getStatus name
 
-testHeadParticipantsNoDelays :: T.Text -> [Int] -> IO ()
-testHeadParticipantsNoDelays name partcipants@(initializer:_) = do
+testHeadParticipantsNoDelays :: CardanoNodeInfo -> T.Text -> [Int] -> IO ()
+testHeadParticipantsNoDelays cninfo name partcipants@(initializer:_) = do
   postCreateHead name partcipants
   for_  partcipants $ \i -> do
-    getAndSubmitTx i Funds
-    getAndSubmitTx i Fuel
+    getAndSubmitTx cninfo i Funds
+    getAndSubmitTx cninfo i Fuel
   postInitHead name initializer
   for_  partcipants $ \i -> do
     postCommitHead name i
@@ -114,8 +114,8 @@ getStatus name = do
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
 
-getAndSubmitTx :: Int -> TxType -> IO ()
-getAndSubmitTx i tt = do
+getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> IO ()
+getAndSubmitTx cninfo i tt = do
   Just [addr] <- getDevnetAddresses [i]
   let
     endpoint = case tt of
@@ -125,11 +125,11 @@ getAndSubmitTx i tt = do
   req <- parseRequest $ "http://localhost:8000/hydra/" <> endpoint <> "/" <> T.unpack addr
   resp <- getResponseBody <$> httpJSON req
   LBS.putStrLn $ "Received Tx: " <> Aeson.encode resp
-  signAndSubmitTx addr resp
+  signAndSubmitTx cninfo addr resp
   pure ()
 
-signAndSubmitTx :: Address -> Tx -> IO ()
-signAndSubmitTx addr tx = do
+signAndSubmitTx :: CardanoNodeInfo -> Address -> Tx -> IO ()
+signAndSubmitTx cninfo addr tx = do
   withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
     LBS.hPut draftHandle $ Aeson.encode tx
     hClose draftHandle
@@ -149,6 +149,7 @@ signAndSubmitTx addr tx = do
                                         , "--out-file"
                                         , signedFile
                                         ])
-                { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninfo)]
+                }
           _ <- readCreateProcess cp ""
-          submitTx signedFile >>= withLogging . waitForTxIn
+          submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo

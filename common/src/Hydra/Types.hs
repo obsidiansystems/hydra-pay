@@ -7,7 +7,6 @@ import Data.Aeson
 
 import Data.Map (Map)
 import qualified Data.Text as T
-import Data.Time (UTCTime)
 import Data.Text (Text)
 import qualified Data.Map as Map
 import Numeric.Natural (Natural)

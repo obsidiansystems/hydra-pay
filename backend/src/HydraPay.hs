@@ -42,7 +42,6 @@ import System.Process
 import GHC.Generics
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.Text as T
-import Data.Int
 import Data.Bool
 import Data.List (intercalate)
 import Data.Map (Map)
@@ -67,12 +66,8 @@ import Data.Text.Prettyprint.Doc
 import Control.Monad.Log
 import System.Directory
 
-import Database.PostgreSQL.Simple as Pg
-import Gargoyle
-import Gargoyle.PostgreSQL (defaultPostgres)
 import Gargoyle.PostgreSQL.Connect
 
-import Data.Foldable
 import Data.Traversable
 
 import Control.Monad
@@ -82,6 +77,7 @@ import Hydra.Devnet
 import Hydra.ClientInput
 
 import qualified Hydra.Types as HT
+import CardanoNodeInfo
 
 type HeadId = Int
 
@@ -165,8 +161,8 @@ proxyAddressExists conn addr = do
     guard_ $ proxyAddress_ownerAddress pa ==. val_ addr
     pure pa
 
-addProxyAddress :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Address -> Connection -> m ()
-addProxyAddress addr conn = do
+addProxyAddress :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> Address -> Connection -> m ()
+addProxyAddress cninf addr conn = do
   path <- liftIO getKeyPath
   keyInfo <- generateKeysIn $ T.unpack addr
 
@@ -176,14 +172,14 @@ addProxyAddress addr conn = do
     hvk = _verificationKey . _hydraKeys $ keyInfo
     hsk = _signingKey . _hydraKeys $ keyInfo
 
-  cardanoAddress <- liftIO $ getCardanoAddress $ _verificationKey . _cardanoKeys $ keyInfo
+  cardanoAddress <- liftIO $ getCardanoAddress cninf $ _verificationKey . _cardanoKeys $ keyInfo
 
   liftIO $ runBeamPostgres conn $ runInsert $ insert (hydraDb_proxyAddresses hydraDb) $
     insertValues [ProxyAddress addr cardanoAddress (T.pack cvk) (T.pack csk) (T.pack hvk) (T.pack hsk)]
   pure ()
 
 -- | The location where we store cardano and hydra keys
-getKeyPath :: IO (FilePath)
+getKeyPath :: IO FilePath
 getKeyPath = do
   createDirectoryIfMissing True path
   pure path
@@ -218,6 +214,7 @@ data HeadCommit = HeadCommit
 instance ToJSON HeadCommit
 instance FromJSON HeadCommit
 
+withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
 -- This is the API json type that we need to send back out
@@ -381,7 +378,7 @@ isFuelType _ = False
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
 buildAddTx txType state fromAddr amount = do
-  utxos <- queryAddressUTXOs fromAddr
+  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) fromAddr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
@@ -405,11 +402,13 @@ buildAddTx txType state fromAddr amount = do
                         <>
                         [ "--change-address"
                         , T.unpack fromAddr
-                        , "--testnet-magic"
-                        , "42"
-                        , "--out-file"
+                        ]
+                        <> cardanoNodeArgs (_cardanoNodeInfo . _state_hydraInfo $ state)
+                        <>
+                        [ "--out-file"
                         , txBodyPath
-                        ])) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                        ])) { env = Just [( "CARDANO_NODE_SOCKET_PATH"
+                                          , _nodeSocket . _cardanoNodeInfo . _state_hydraInfo $ state)] }
     ""
   txResult <- liftIO $ readFile txBodyPath
   liftIO $ putStrLn txResult
@@ -445,7 +444,7 @@ commitToHead state (HeadCommit name addr) = do
       case Map.lookup proxyAddr $ _network_nodes network of
         Nothing -> pure $ Left NotAParticipant
         Just node -> do
-          proxyFunds <- filterOutFuel <$> queryAddressUTXOs proxyAddr
+          proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
           let port = _apiPort $ _node_info node
           liftIO $ do
             runClient "localhost" port "/" $ \conn -> do
@@ -481,7 +480,9 @@ addOrGetKeyInfo state addr = do
       Just info -> pure (old, info)
       Nothing -> do
         keyInfo <- withLogging $ generateKeysIn $ T.unpack addr <> "-proxy"
-        proxyAddress <- liftIO $ getCardanoAddress $ _verificationKey . _cardanoKeys $ keyInfo
+        proxyAddress <- liftIO
+                        $ getCardanoAddress (_cardanoNodeInfo . _state_hydraInfo $ state)
+                        $ _verificationKey . _cardanoKeys $ keyInfo
         let info = (proxyAddress, keyInfo)
         pure $ (Map.insert addr info old, info)
   where
@@ -504,7 +505,8 @@ startNetwork state (Head name participants _) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      nodes <- (fmap . fmap) (uncurry Node) $ startHydraNetwork (_state_hydraInfo state) proxyMap
+      nodes <- fmap (uncurry Node)
+        <$> startHydraNetwork (_state_hydraInfo state) proxyMap
 
       -- let
       --  firstNodePort = _apiPort . _node_info . snd $ Map.elemAt 0 nodes
@@ -576,8 +578,7 @@ data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
   , _ledgerGenesis :: FilePath
   , _ledgerProtocolParameters :: FilePath
-  , _networkId :: String
-  , _nodeSocket :: FilePath
+  , _cardanoNodeInfo :: CardanoNodeInfo
   }
 
 data HydraNodeInfo = HydraNodeInfo
@@ -597,19 +598,23 @@ mkHydraNodeCP sharedInfo node peers =
   { std_out = Inherit
   }
 
+cardanoNodeArgs :: CardanoNodeInfo -> [String]
+cardanoNodeArgs cninf =
+  ["--network-id"
+  , show . _testNetMagic . _nodeType $ cninf
+  , "--node-socket"
+  , _nodeSocket cninf
+  ]
+
 sharedArgs :: HydraSharedInfo -> [String]
-sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams networkId nodeSocket) =
+sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams cardanoNodeInfo) =
   [ "--ledger-genesis"
   , ledgerGenesis
   , "--ledger-protocol-parameters"
   , protocolParams
-  , "--network-id"
-  , networkId
-  , "--node-socket"
-  , nodeSocket
   , "--hydra-scripts-tx-id"
   , hydraScriptsTxId
-  ]
+  ] <> cardanoNodeArgs cardanoNodeInfo
 
 nodeArgs :: HydraNodeInfo -> [String]
 nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort

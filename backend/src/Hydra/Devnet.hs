@@ -62,6 +62,7 @@ import Data.UUID (UUID)
 import Data.Maybe (fromMaybe)
 
 import Data.Traversable
+import CardanoNodeInfo
 
 devnetMagic :: Int
 devnetMagic = 42
@@ -74,14 +75,14 @@ prepareDevnet = do
 addressesPath :: FilePath
 addressesPath = "devnet/addresses"
 
-seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Int -> m ()
-seedTestAddresses amount = do
+seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
+seedTestAddresses cninf faucetKeys amount = do
   exists <- liftIO $ doesFileExist path
-  when (not exists) $ do
+  unless exists $ do
     seededAddresses <- for [1 .. amount] $ \n -> do
       keypair <- generateCardanoKeys ("addr_" <> show n)
-      addr <- liftIO $ getCardanoAddress $ _verificationKey keypair
-      seedAddressFromFaucetAndWait addr (ada 10000) False
+      addr <- liftIO $ getCardanoAddress cninf $ _verificationKey keypair
+      void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
       pure addr
     liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
   where
@@ -181,20 +182,19 @@ generateHydraKeys path = do
   pure $ KeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
 
 -- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
-getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
-getReferenceScripts = do
+getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => FilePath -> SigningKey -> m HydraScriptTxId
+getReferenceScripts scriptPath sk = do
   exists <- liftIO $ doesFileExist scriptPath
   case exists of
     True -> liftIO $ T.readFile scriptPath
     False -> do
-      scripts <- publishReferenceScripts
+      scripts <- publishReferenceScripts sk
       liftIO $ T.writeFile scriptPath scripts
       pure scripts
-  where
-    scriptPath = "devnet/scripts"
 
-publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraScriptTxId
-publishReferenceScripts = do
+-- TODO: Make this generic over node and signing key?
+publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m HydraScriptTxId
+publishReferenceScripts sk = do
   logMessage $ WithSeverity Informational "Publishing reference scripts ('νInitial' & 'νCommit')..."
   fmap (T.strip . T.pack) $ liftIO $ readCreateProcess cp ""
   where
@@ -204,57 +204,63 @@ publishReferenceScripts = do
                               , "--node-socket"
                               , "devnet/node.socket"
                               , "--cardano-signing-key"
-                              , "devnet/credentials/faucet.sk"
+                              , sk
                               ]
 
 
-waitForTxIn :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => TxIn -> m ()
-waitForTxIn txin = do
+waitForTxIn :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> TxIn -> m ()
+waitForTxIn cninf txin = do
   logMessage $ WithSeverity Informational $ "Waiting for utxo " <> pretty txin <> ".."
   liftIO waitFn
   where
     waitFn = do
-      exists <- txInExists txin
+      exists <- txInExists cninf txin
       threadDelay 10000
       unless exists waitFn
 
-txInExists :: TxIn -> IO Bool
-txInExists txin = do
+
+cardanoNodeArgs :: CardanoNodeInfo -> [String]
+cardanoNodeArgs cninf = ["--testnet-magic", show . _testNetMagic . _nodeType $ cninf]
+
+txInExists :: CardanoNodeInfo -> TxIn -> IO Bool
+txInExists cninf txin = do
   result <- fmap (T.strip . T.pack) $ readCreateProcess cp "" >>= readProcess jqPath (pure $ ".\"" <> asStr <> "\"")
   pure $ case result of
     "null" -> False
     _ -> True
   where
     asStr = T.unpack txin
-    cp = (proc cardanoCliPath [ "query"
-                              , "utxo"
-                              , "--tx-in"
-                              , asStr
-                              , "--out-file"
-                              , "/dev/stdout"
-                              , "--testnet-magic"
-                              , "42"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
-
+    cp =
+      ( proc cardanoCliPath $
+          [ "query",
+            "utxo",
+            "--tx-in",
+            asStr,
+            "--out-file",
+            "/dev/stdout"
+          ]
+            <> cardanoNodeArgs cninf
+      )
+        { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
+        }
 txInput :: Int -> TxId -> TxIn
 txInput index txid = txid <> "#" <> (T.pack . show) index
 
 minTxLovelace :: Int
 minTxLovelace = 857690
 
-queryAddressUTXOs :: MonadIO m => Address -> m WholeUTXO
-queryAddressUTXOs addr = liftIO $ do
+queryAddressUTXOs :: MonadIO m => CardanoNodeInfo -> Address -> m WholeUTXO
+queryAddressUTXOs cninf addr = liftIO $ do
   let queryProc =
-        (proc cardanoCliPath [ "query"
+        (proc cardanoCliPath $ [ "query"
                              , "utxo"
                              , "--address"
                              , T.unpack addr
-                             , "--testnet-magic"
-                             , "42"
                              , "--out-file"
                              , "/dev/stdout"
-                             ])
-        { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                             ]
+            <> cardanoNodeArgs cninf)
+        { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
   str <- readCreateProcess queryProc ""
   pure $ fromMaybe mempty $ decode $ BS.pack str
 
@@ -301,73 +307,62 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
       , "/dev/stdout"
       ])
     ""
---    { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
 
 -- | Convenience for getting faucet Output for seeding
-getFirstTxIn :: Address -> IO TxIn
-getFirstTxIn addr =
+getFirstTxIn :: CardanoNodeInfo -> Address -> IO TxIn
+getFirstTxIn cninf addr =
   readCreateProcess cp "" >>= readProcess jqPath ["-r", "keys[0]"] >>= \a -> pure $ T.strip $ T.pack a
   where
-    cp = (proc cardanoCliPath [ "query"
+    cp = (proc cardanoCliPath $
+                              [ "query"
                               , "utxo"
                               , "--address"
                               , T.unpack addr
-                              , "--testnet-magic"
-                              , "42"
                               , "--out-file"
                               , "/dev/stdout"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                              ]
+                              <> cardanoNodeArgs cninf
+        ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
 
-getCardanoAddress :: VerificationKey -> IO Address
-getCardanoAddress keyPath =
+getCardanoAddress :: CardanoNodeInfo -> VerificationKey -> IO Address
+getCardanoAddress cninf keyPath =
   T.pack <$> readCreateProcess cp ""
   where
-    cp = (proc cardanoCliPath [ "address"
+    cp = (proc cardanoCliPath $ [ "address"
                               , "build"
                               , "--payment-verification-key-file"
                               , keyPath
-                              , "--testnet-magic"
-                              , "42"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+                              ]
+               <> cardanoNodeArgs cninf
+         ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
-getFaucetAddress :: IO Address
-getFaucetAddress = T.pack <$> readCreateProcess cp ""
-  where
-    cp = (proc cardanoCliPath [ "address"
-                              , "build"
-                              , "--payment-verification-key-file"
-                              , "devnet/credentials/faucet.vk"
-                              , "--testnet-magic"
-                              , "42"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
-
-seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => Address -> Lovelace -> Bool -> m TxIn
-seedAddressFromFaucetAndWait addr amount isFuel = do
-  txin <- liftIO $ seedAddressFromFaucet addr amount isFuel
-  waitForTxIn txin
+seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m TxIn
+seedAddressFromFaucetAndWait cninf faucetKeys addr amount isFuel = do
+  txin <- liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount isFuel
+  waitForTxIn cninf txin
   pure txin
 
 -- | Send an amount in lovelace to the named actor
-seedAddressFromFaucet :: Address -> Lovelace -> Bool -> IO TxIn
-seedAddressFromFaucet addr amount isFuel = do
-  draftTx <- buildSeedTxForAddress addr amount isFuel
-  signedTx <- signSeedTx' draftTx
-  txin <- txInput 0 <$> txIdFromSignedTx signedTx
-  submitTx signedTx
+seedAddressFromFaucet :: CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> IO TxIn
+seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount isFuel = do
+  draftTx <- buildSeedTxForAddress cninf faucetvk addr amount isFuel
+  signedTx <- signTx cninf faucetsk draftTx
+  txin <- txInput 0 <$> txIdFromSignedTx cninf signedTx
+  void $ submitTx cninf signedTx
   pure txin
 
-buildSeedTxForAddress :: Address -> Lovelace -> Bool -> IO DraftTx
-buildSeedTxForAddress addr amount isFuel = do
+buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
+buildSeedTxForAddress cninf faucetvk addr amount isFuel = do
   filename <- getTempPath'
   -- when (amount < minTxLovelace) $ error $ "Minmum required UTxO: Lovelace " <> show minTxLovelace
-  let cp faucet hash = (proc cardanoCliPath $ filter (/= "")
+  let cp faucetAddr hash = (proc cardanoCliPath $ filter (/= "")
                               [ "transaction"
                               , "build"
                               , "--babbage-era"
                               , "--cardano-mode"
                               , "--change-address"
-                              , faucet
+                              , faucetAddr
                               , "--tx-in"
                               , hash
                               , "--tx-out"
@@ -377,53 +372,66 @@ buildSeedTxForAddress addr amount isFuel = do
                               <>
                               [ "--out-file"
                               , filename
-                              , "--testnet-magic"
-                              , "42"
-                              ])
-                            { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
-  faucet <- getFaucetAddress
-  hash <- getFirstTxIn faucet
-  _ <- readCreateProcess (cp (T.unpack faucet) (T.unpack hash)) ""
+                              ]
+                              <> cardanoNodeArgs cninf)
+                            { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] }
+  faucetAddr <- getCardanoAddress cninf faucetvk
+  hash <- getFirstTxIn cninf faucetAddr
+  _ <- readCreateProcess (cp (T.unpack faucetAddr) (T.unpack hash)) ""
   pure filename
 
-signSeedTx' :: DraftTx -> IO SignedTx
-signSeedTx' draftFile = do
+-- | Sign a transaction and a path containing it.
+signTx :: CardanoNodeInfo -> SigningKey -> DraftTx -> IO SignedTx
+signTx cninf sk draftFile = do
   outFile <- getTempPath'
-  let cp = (proc cardanoCliPath [ "transaction"
-                                , "sign"
-                                , "--tx-body-file"
-                                , draftFile
-                                , "--signing-key-file"
-                                , "devnet/credentials/faucet.sk"
-                                , "--out-file"
-                                , outFile
-                                , "--testnet-magic"
-                                , "42"
-                                ])
-           { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+  let cp =
+        ( proc cardanoCliPath $
+            [ "transaction",
+              "sign",
+              "--tx-body-file",
+              draftFile,
+              "--signing-key-file",
+              sk,
+              "--out-file",
+              outFile
+            ]
+              <> cardanoNodeArgs cninf
+        )
+          { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
+          }
   _ <- readCreateProcess cp ""
   pure outFile
 
-txIdFromSignedTx :: SignedTx -> IO TxId
-txIdFromSignedTx filename =
+txIdFromSignedTx :: CardanoNodeInfo -> SignedTx -> IO TxId
+txIdFromSignedTx cninf filename =
   T.strip . T.pack <$> readCreateProcess cp ""
   where
-    cp = (proc cardanoCliPath [ "transaction"
-                              , "txid"
-                              , "--tx-file"
-                              , filename
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+    cp =
+      ( proc cardanoCliPath $
+          [ "transaction",
+            "txid",
+            "--tx-file",
+            filename
+          ]
+            <> cardanoNodeArgs cninf
+      )
+        { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
+        }
 
-submitTx :: SignedTx -> IO TxId
-submitTx signedFile = do
-  txid <- txInput 0 <$> txIdFromSignedTx signedFile
+submitTx :: CardanoNodeInfo -> SignedTx -> IO TxId
+submitTx cninf signedFile = do
+  txid <- txInput 0 <$> txIdFromSignedTx cninf signedFile
   _ <- readCreateProcess cp ""
   pure txid
   where
-    cp = (proc cardanoCliPath [ "transaction"
-                              , "submit"
-                              , "--tx-file"
-                              , signedFile
-                              , "--testnet-magic"
-                              , "42"
-                              ]) { env = Just [("CARDANO_NODE_SOCKET_PATH", "devnet/node.socket")] }
+    cp =
+      ( proc cardanoCliPath $
+          [ "transaction",
+            "submit",
+            "--tx-file",
+            signedFile
+          ]
+            <> cardanoNodeArgs cninf
+      )
+        { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
+        }

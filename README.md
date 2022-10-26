@@ -17,10 +17,6 @@ This will cover:
   * Fanout
 * A real-world example application
 
-## Hydra Heads Demo
-This repository currently contains an extended, graphical re-implementation of the original [Hydra Heads demo](https://github.com/input-output-hk/hydra-poc/tree/master/demo) done with [Obelisk](https://github.com/obsidiansystems/obelisk).
-It allows starting and closing a head with an arbitrary number of nodes, each with some initial amount of Ada to perform transactions within the head.
-
 ## 👷🏾‍♂️ Running Hydra Pay
 
 Hydra Pay is currently under construction, detailed steps about running and deploying Hydra Pay as well as endpoint and configuration documentation is on its way!

@@ -5,11 +5,8 @@ module Hydra.ServerOutput where
 import GHC.Generics
 import Data.Aeson
 
-import Data.Map (Map)
-import qualified Data.Text as T
 import Data.Time (UTCTime)
 import Data.Text (Text)
-import Numeric.Natural (Natural)
 import Hydra.Types
 import Hydra.ClientInput
 
