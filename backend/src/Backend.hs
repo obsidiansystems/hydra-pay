@@ -13,7 +13,6 @@ where
 import Prelude hiding (filter)
 
 import Hydra.Devnet
-import HydraPay.Client
 
 import Common.Route
 import Obelisk.Backend
@@ -34,14 +33,13 @@ import Control.Concurrent
 import System.Process
 
 import Data.Aeson as Aeson
-    ( decode, encode )
-
-
+    ( decode, encode, FromJSON, ToJSON )
 
 import qualified Data.ByteString.Lazy as LBS
 
 import HydraPay
 import CardanoNodeInfo
+import Control.Monad ((<=<))
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
@@ -61,6 +59,28 @@ devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = KeyPair { _signingKey = "devnet/credentials/faucet.sk"
                            , _verificationKey = "devnet/credentials/faucet.vk"
                            }
+
+
+-- TODO: See if it's okay to change Either a (Maybe b) to Just Either a b.
+-- What does writing toJSON () to response do?
+handleJsonRequestBody :: (MonadSnap m, ToJSON a,
+                          FromJSON t, ToJSON b) =>
+  (t -> LoggingT (WithSeverity (Doc ann)) IO (Either a (Maybe b))) ->
+  m ()
+handleJsonRequestBody f = do
+  runRequestBody Streams.toList
+    >>= ( \case
+            Nothing -> do
+              modifyResponse $ setResponseStatus 400 "Bad Request"
+              writeLBS $ Aeson.encode InvalidPayload
+            Just x -> do
+              result <- liftIO $ withLogging $ f x
+              case result of
+                Right a -> mapM_ (writeLBS . Aeson.encode) a
+                Left err -> writeLBS $ Aeson.encode err
+        )
+      . Aeson.decode
+      . LBS.fromChunks
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
@@ -82,29 +102,9 @@ backend = Backend
             liftIO . serve $ \case
               BackendRoute_HydraPay :/ hpr -> case hpr of
                 HydraPayRoute_Init :/ () -> do
-                  runRequestBody Streams.toList >>= (\case
-                    Nothing -> do
-                      modifyResponse $ setResponseStatus 400 "Bad Request"
-                      writeLBS $ Aeson.encode InvalidPayload
-
-                    Just hi -> do
-                      result <- liftIO $ withLogging $ initHead state hi
-                      case result of
-                        Right () -> pure ()
-                        Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
-
+                  handleJsonRequestBody (fmap ((Nothing :: Maybe ())<$) . initHead state)
                 HydraPayRoute_Commit :/ () -> do
-                  runRequestBody Streams.toList >>= (\case
-                    Nothing -> do
-                      modifyResponse $ setResponseStatus 400 "Bad Request"
-                      writeLBS $ Aeson.encode InvalidPayload
-
-                    Just hc -> do
-                      result <- liftIO $ withLogging $ commitToHead state hc
-                      case result of
-                        Right _head -> pure ()
-                        Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
-
+                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . commitToHead state)
                 HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
                   result <- buildAddTx Fuel state addr amount
                   case result of
@@ -134,18 +134,10 @@ backend = Backend
                         Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
                 HydraPayRoute_Head :/ () -> do
-                  runRequestBody Streams.toList >>= (\case
-                    Nothing -> do
-                      modifyResponse $ setResponseStatus 400 "Bad Request"
-                      writeLBS $ Aeson.encode InvalidPayload
-
-                    Just hc -> do
-                      result <- liftIO $ withLogging $ createHead state hc
-                      case result of
-                        Right head' -> do
-                          status <- getHeadStatus state (_head_name head')
-                          writeLBS $ Aeson.encode status
-                        Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
+                  handleJsonRequestBody $
+                    fmap (Just <$>)
+                    . mapM (getHeadStatus state . _head_name)
+                    <=< createHead state
 
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
