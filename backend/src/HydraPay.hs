@@ -329,12 +329,12 @@ instance FromJSON Status
 data Node = Node
   { _node_handle :: ProcessHandle
   , _node_info :: HydraNodeInfo
+  , _node_monitor_threads :: ThreadId
   }
 
 -- | The network of nodes that hold up a head
-data Network = Network
+newtype Network = Network
   { _network_nodes :: Map Address Node
-  , _network_monitor_threads :: Map Address ThreadId
   }
 
 getHydraPayState :: (MonadIO m)
@@ -536,13 +536,12 @@ startNetwork state (Head name participants _) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      nodes <- fmap (uncurry Node)
-        <$> startHydraNetwork (_state_hydraInfo state) proxyMap
+      nodes <- startHydraNetwork (_state_hydraInfo state) proxyMap
 
-      liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . _node_info) . Map.elems $ nodes
+      liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . snd) . Map.elems $ nodes
 
-      monitors <- fmap Map.fromList $ for (Map.toList nodes) $ \(addr, info) -> do
-        let port =  _apiPort . _node_info $ info
+      network <- fmap Network . forM nodes $ \(processHndl, nodeInfo) -> do
+        let port =  _apiPort $ nodeInfo
         monitor <- liftIO $ forkIO $ do
           threadDelay 3000000
           runClient "localhost" port "/" $ \conn -> forever $ do
@@ -562,9 +561,8 @@ startNetwork state (Head name participants _) = do
                 liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
               Nothing -> pure ()
 
-        pure (addr, monitor)
+        pure $ Node processHndl nodeInfo monitor
 
-      let network = Network nodes monitors
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
       pure network
