@@ -44,6 +44,7 @@ library
                , http-client
                , http-conduit
                , temporary
+               , stm
 
   default-extensions:
     OverloadedStrings

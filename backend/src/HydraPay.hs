@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE RankNTypes #-}
 
 module HydraPay where
 
@@ -77,6 +78,10 @@ import Hydra.ClientInput
 
 import qualified Hydra.Types as HT
 import CardanoNodeInfo
+import Hydra.ServerOutput
+import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
+import Control.Monad.STM (atomically)
+import Control.Concurrent.STM.TChan (writeTChan)
 
 type HeadId = Int
 
@@ -316,7 +321,7 @@ data Head = Head
 data Status
   = Status_Pending
   | Status_Init
-  | Status_Commiting
+  | Status_Committing
   | Status_Open
   | Status_Closed
   | Status_Fanout
@@ -329,7 +334,9 @@ instance FromJSON Status
 data Node = Node
   { _node_handle :: ProcessHandle
   , _node_info :: HydraNodeInfo
-  , _node_monitor_threads :: ThreadId
+  , _node_monitor_thread :: ThreadId
+  , _node_send_msg :: ClientInput -> IO ()
+  , _node_get_listen_chan :: IO (TChan (ServerOutput Value))
   }
 
 -- | The network of nodes that hold up a head
@@ -427,12 +434,9 @@ initHead state (HeadInit name addr) = do
         Nothing -> pure $ Left NotAParticipant
         Just node -> do
           let port = _apiPort $ _node_info node
-          liftIO $ do
-            runClient "localhost" port "/" $ \conn -> do
-              WS.sendTextData conn ("{\"tag\":\"Init\",\"contestationPeriod\":60}" :: T.Text)
-              -- msg :: T.Text <- WS.receiveData conn
-              -- putStrLn $ "Init response message: " <> T.unpack msg
-            pure $ Right ()
+          liftIO $ _node_send_msg node $ Init 60
+          -- TODO: Response to Init message?
+          pure $ Right ()
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -477,9 +481,7 @@ commitToHead state (HeadCommit name addr) = do
         Just node -> do
           proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
           let port = _apiPort $ _node_info node
-          liftIO $ do
-            runClient "localhost" port "/" $ \conn -> do
-              WS.sendTextData conn $ Aeson.encode $ Commit proxyFunds
+          liftIO $ _node_send_msg node $ Commit proxyFunds
           pure $ Right ()
 
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
@@ -542,26 +544,41 @@ startNetwork state (Head name participants _) = do
 
       network <- fmap Network . forM nodes $ \(processHndl, nodeInfo) -> do
         let port =  _apiPort $ nodeInfo
+        bRcvChan <- liftIO newBroadcastTChanIO
+        sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ do
           threadDelay 3000000
+          -- TODO: Rewrite so only one connection is used
           runClient "localhost" port "/" $ \conn -> forever $ do
-            msg :: T.Text <- WS.receiveData conn
-            putStrLn $ "Monitor:" <> show port <> ": " <> T.unpack msg
-            let
-              handleMsg m
-                | T.isInfixOf "ReadyToCommit" m = Just Status_Init
-                | T.isInfixOf "Committed" m = Nothing
-                | T.isInfixOf "CommandFailed" m = Nothing
-                | T.isInfixOf "Commit" m = Just Status_Commiting
-                | T.isInfixOf "HeadIsOpen" m = Just Status_Open
-                | otherwise = Nothing
-
-            case handleMsg msg of
-              Just status -> do
-                liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
-              Nothing -> pure ()
-
-        pure $ Node processHndl nodeInfo monitor
+              msgLBS :: LBS.ByteString <- WS.receiveData conn
+              let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
+                                  <> LBS.unpack msgLBS)
+                        $ decode' msgLBS
+              putStrLn $ "Monitor:" <> show port <> ": " <> show msg
+              let handleMsg = \case
+                    ReadyToCommit {} -> Just Status_Init
+                    Committed {} -> Just Status_Committing
+                    HeadIsOpen {} -> Just Status_Open
+                    HeadIsClosed _ _ -> Nothing
+                    ReadyToFanout {} -> Nothing
+                    HeadIsAborted {} -> Nothing
+                    HeadIsFinalized {} -> Nothing
+                    _ -> Nothing
+              case handleMsg msg of
+                Just status -> do
+                  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
+                Nothing -> pure ()
+              atomically $ writeTChan bRcvChan msg
+          runClient "localhost" port "/" $ \conn -> forever $ do
+            toSnd :: ClientInput <- liftIO $ readChan sndChan
+            WS.sendTextData conn $ Aeson.encode toSnd
+        pure $ Node
+          { _node_handle = processHndl
+          , _node_info = nodeInfo
+          , _node_monitor_thread = monitor
+          , _node_send_msg = writeChan sndChan
+          , _node_get_listen_chan = atomically $ dupTChan bRcvChan
+          }
 
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
