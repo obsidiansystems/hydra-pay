@@ -558,8 +558,11 @@ startNetwork state (Head name participants _) = do
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ do
           threadDelay 3000000
-          -- TODO: Rewrite so only one connection is used
           runClient "localhost" port "/" $ \conn -> forever $ do
+            void $ forkIO $ forever $ do
+              toSnd :: ClientInput <- liftIO $ readChan sndChan
+              WS.sendTextData conn $ Aeson.encode toSnd
+            do
               msgLBS :: LBS.ByteString <- WS.receiveData conn
               let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
                                   <> LBS.unpack msgLBS)
@@ -579,9 +582,6 @@ startNetwork state (Head name participants _) = do
                   liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
                 Nothing -> pure ()
               atomically $ writeTChan bRcvChan msg
-          runClient "localhost" port "/" $ \conn -> forever $ do
-            toSnd :: ClientInput <- liftIO $ readChan sndChan
-            WS.sendTextData conn $ Aeson.encode toSnd
         pure $ Node
           { _node_handle = processHndl
           , _node_info = nodeInfo
