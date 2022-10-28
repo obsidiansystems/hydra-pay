@@ -423,20 +423,38 @@ buildAddTx txType state fromAddr amount = do
     Just tx -> pure $ Right tx
     Nothing -> pure $ Left FailedToBuildFundsTx
 
-initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
-initHead state (HeadInit name addr) = do
-  mNetwork <- getNetwork state name
-  case mNetwork of
-    Nothing -> pure $ Left NetworkIsn'tRunning
-    Just network -> do
+-- TODO: HydraPayError is too flat
+-- TODO: Add a reader data type for State
+withNetwork ::
+  MonadIO m =>
+  State ->
+  HeadName ->
+  (Network -> m (Either HydraPayError b)) ->
+  m (Either HydraPayError b)
+withNetwork state name f = maybe (pure $ Left NetworkIsn'tRunning) f =<< getNetwork state name
+
+
+withNode ::
+  MonadIO m =>
+  State ->
+  HeadName ->
+  Address ->
+  (Node -> Address -> m (Either HydraPayError b)) ->
+  m (Either HydraPayError b)
+withNode state name addr f = do
+  withNetwork state name $ \network -> do
       (proxyAddr, _) <- addOrGetKeyInfo state addr
       case Map.lookup proxyAddr $ _network_nodes network of
         Nothing -> pure $ Left NotAParticipant
-        Just node -> do
-          let port = _apiPort $ _node_info node
-          liftIO $ _node_send_msg node $ Init 60
-          -- TODO: Response to Init message?
-          pure $ Right ()
+        Just node -> f node proxyAddr
+    
+
+initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
+initHead state (HeadInit name addr) = do
+  withNode state name addr $ \node _ -> do
+    liftIO $ _node_send_msg node $ Init 60
+    -- TODO: Response to Init message?
+    pure $ Right ()
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -471,18 +489,10 @@ withdraw state (WithdrawRequest addr lovelace) = do
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr) = do
-  mNetwork <- getNetwork state name
-  case mNetwork of
-    Nothing -> pure $ Left NetworkIsn'tRunning
-    Just network -> do
-      (proxyAddr, _) <- addOrGetKeyInfo state addr
-      case Map.lookup proxyAddr $ _network_nodes network of
-        Nothing -> pure $ Left NotAParticipant
-        Just node -> do
-          proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
-          let port = _apiPort $ _node_info node
-          liftIO $ _node_send_msg node $ Commit proxyFunds
-          pure $ Right ()
+  withNode state name addr $ \node proxyAddr -> do
+    proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
+    liftIO $ _node_send_msg node $ Commit proxyFunds
+    pure $ Right ()
 
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
 createHead state (HeadCreate name participants start) = do
