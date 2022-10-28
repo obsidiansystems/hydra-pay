@@ -5,6 +5,9 @@ module HydraPay.Client where
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as LBS
 
+import Control.Monad
+
+import Data.List (intercalate)
 import Hydra.Devnet
 import Hydra.Types
 import HydraPay
@@ -23,13 +26,19 @@ import Data.Traversable
 import qualified Data.Aeson as Aeson
 import CardanoNodeInfo
 
+testSendAndWithdraw :: CardanoNodeInfo -> Int -> IO ()
+testSendAndWithdraw cninfo amount = do
+  getAndSubmitTx cninfo 1 Funds 10000000
+  threadDelay 1000000
+  postWithdrawal 1 5000000
+
 testHeadOneParticipant :: CardanoNodeInfo -> T.Text -> IO ()
 testHeadOneParticipant cninfo name = do
   postCreateHead name [1]
   threadDelay 1000000
-  getAndSubmitTx cninfo 1 Funds
+  getAndSubmitTx cninfo 1 Funds 1000000000
   threadDelay 1000000
-  getAndSubmitTx cninfo 1 Fuel
+  getAndSubmitTx cninfo 1 Fuel 1000000000
   threadDelay 1000000
   postInitHead name 1
   threadDelay 1000000
@@ -42,8 +51,8 @@ testHeadParticipants cninfo name partcipants@(initializer:_) = do
   postCreateHead name partcipants
   threadDelay 1000000
   for_  partcipants $ \i -> do
-    getAndSubmitTx cninfo i Funds
-    getAndSubmitTx cninfo i Fuel
+    getAndSubmitTx cninfo i Funds 1000000000
+    getAndSubmitTx cninfo i Fuel 1000000000
     threadDelay 500000
   threadDelay 1000000
   postInitHead name initializer
@@ -53,21 +62,32 @@ testHeadParticipants cninfo name partcipants@(initializer:_) = do
     threadDelay 1000000
   getStatus name
 
-testHeadParticipantsNoDelays :: CardanoNodeInfo -> T.Text -> [Int] -> IO ()
-testHeadParticipantsNoDelays cninfo name partcipants@(initializer:_) = do
-  postCreateHead name partcipants
-  for_  partcipants $ \i -> do
-    getAndSubmitTx cninfo i Funds
-    getAndSubmitTx cninfo i Fuel
-  postInitHead name initializer
-  for_  partcipants $ \i -> do
-    postCommitHead name i
-  getStatus name
-
 getDevnetAddresses :: [Int] -> IO (Maybe [Address])
 getDevnetAddresses is = do
   addrs <- zip [1..] . T.lines . T.pack <$> readFile addressesPath
   pure $ for is (flip lookup addrs)
+
+headMay :: [a] -> Maybe a
+headMay (a:_) = Just a
+headMay _ = Nothing
+
+getDevnetAddress :: Int -> IO (Maybe Address)
+getDevnetAddress i = do
+  addrs <- getDevnetAddresses [i]
+  pure $ join $ headMay <$> addrs
+
+postWithdrawal :: Int -> Lovelace -> IO ()
+postWithdrawal i amount = do
+  Just addr <- getDevnetAddress i
+  initReq <- parseRequest $ "http://localhost:8000/hydra/withdraw"
+  let
+    payload = Aeson.encode $ WithdrawRequest addr amount
+    req = setRequestBodyLBS payload $ initReq
+      { method = "POST"
+      }
+  LBS.putStrLn $ "Request: " <> payload
+  x <- getResponseBody <$> httpLBS req
+  LBS.putStrLn . ("Response: " <>) $ x
 
 postCreateHead :: T.Text -> [Int] -> IO ()
 postCreateHead name indices = do
@@ -114,15 +134,19 @@ getStatus name = do
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
 
-getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> IO ()
-getAndSubmitTx cninfo i tt = do
+getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> Lovelace -> IO ()
+getAndSubmitTx cninfo i tt amount = do
   Just [addr] <- getDevnetAddresses [i]
   let
     endpoint = case tt of
       Fuel -> "add-fuel"
       Funds -> "add-funds"
 
-  req <- parseRequest $ "http://localhost:8000/hydra/" <> endpoint <> "/" <> T.unpack addr
+  req <- parseRequest $ intercalate "/" ["http://localhost:8000/hydra"
+                                        , endpoint
+                                        , T.unpack addr
+                                        , show amount
+                                        ]
   resp <- getResponseBody <$> httpJSON req
   LBS.putStrLn $ "Received Tx: " <> Aeson.encode resp
   signAndSubmitTx cninfo addr resp

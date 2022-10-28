@@ -7,3 +7,5 @@ data CardanoNodeInfo = CardanoNodeInfo
     _nodeSocket :: FilePath
   }
 
+devnetDefaultInfo :: CardanoNodeInfo
+devnetDefaultInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"

@@ -13,6 +13,7 @@ where
 import Prelude hiding (filter)
 
 import Hydra.Devnet
+import HydraPay.Client
 
 import Common.Route
 import Obelisk.Backend
@@ -104,14 +105,14 @@ backend = Backend
                         Right _head -> pure ()
                         Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
-                HydraPayRoute_AddFuelTx :/ addr -> do
-                  result <- buildAddTx Fuel state addr 1000000000
+                HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
+                  result <- buildAddTx Fuel state addr amount
                   case result of
                     Left err -> writeLBS $ Aeson.encode err
                     Right tx -> writeLBS $ Aeson.encode tx
 
-                HydraPayRoute_AddFundsTx :/ addr -> do
-                  result <- buildAddTx Funds state addr 100000000
+                HydraPayRoute_AddFundsTx :/ (addr, amount) -> do
+                  result <- buildAddTx Funds state addr amount
                   case result of
                     Left err -> writeLBS $ Aeson.encode err
                     Right tx -> writeLBS $ Aeson.encode tx
@@ -119,6 +120,18 @@ backend = Backend
                 HydraPayRoute_HeadStatus :/ name -> do
                   status <- getHeadStatus state name
                   writeLBS $ Aeson.encode status
+
+                HydraPayRoute_Withdraw :/ () -> do
+                  runRequestBody Streams.toList >>= (\case
+                    Nothing -> do
+                      modifyResponse $ setResponseStatus 400 "Bad Request"
+                      writeLBS $ Aeson.encode InvalidPayload
+
+                    Just wr -> do
+                      result <- liftIO $ withLogging $ withdraw state wr
+                      case result of
+                        Right txid -> writeLBS $ Aeson.encode txid
+                        Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
                 HydraPayRoute_Head :/ () -> do
                   runRequestBody Streams.toList >>= (\case

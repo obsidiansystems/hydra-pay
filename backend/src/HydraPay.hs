@@ -5,7 +5,6 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 
-
 module HydraPay where
 
 {-
@@ -402,8 +401,9 @@ buildAddTx txType state fromAddr amount = do
                         <>
                         [ "--change-address"
                         , T.unpack fromAddr
+                        , "--testnet-magic"
+                        , show . _testNetMagic . _nodeType $ _cardanoNodeInfo . _state_hydraInfo $ state
                         ]
-                        <> cardanoNodeArgs (_cardanoNodeInfo . _state_hydraInfo $ state)
                         <>
                         [ "--out-file"
                         , txBodyPath
@@ -433,6 +433,37 @@ initHead state (HeadInit name addr) = do
               -- msg :: T.Text <- WS.receiveData conn
               -- putStrLn $ "Init response message: " <> T.unpack msg
             pure $ Right ()
+
+data WithdrawRequest = WithdrawRequest
+  { withdraw_address :: Address
+  , withdraw_amount :: Lovelace
+  }
+  deriving(Eq, Show, Generic)
+
+instance ToJSON WithdrawRequest
+instance FromJSON WithdrawRequest
+
+-- | Withdraw funds (if available from proxy request)
+withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
+withdraw state (WithdrawRequest addr lovelace) = do
+  (proxyAddr, keyInfo) <- addOrGetKeyInfo state addr
+  utxos <- queryAddressUTXOs nodeInfo proxyAddr
+  let
+    notFuel = filterOutFuel utxos
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
+    total = sum txInAmounts
+
+  case total >= lovelace of
+    False -> do
+      pure $ Left InsufficientFunds
+
+    True -> liftIO $ do
+      (filepath, txid) <- buildSignedTx nodeInfo (_signingKey $ _cardanoKeys keyInfo) proxyAddr addr txInAmounts lovelace
+      submitTx nodeInfo $ filepath
+      pure $ Right txid
+
+  where
+    nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr) = do
@@ -508,8 +539,6 @@ startNetwork state (Head name participants _) = do
       nodes <- fmap (uncurry Node)
         <$> startHydraNetwork (_state_hydraInfo state) proxyMap
 
-      -- let
-      --  firstNodePort = _apiPort . _node_info . snd $ Map.elemAt 0 nodes
       liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . _node_info) . Map.elems $ nodes
 
       monitors <- fmap Map.fromList $ for (Map.toList nodes) $ \(addr, info) -> do

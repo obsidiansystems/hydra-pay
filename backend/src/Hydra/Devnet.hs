@@ -8,12 +8,13 @@ module Hydra.Devnet
   , HydraKeyInfo(..)
   , SigningKey
   , KeyPair(..)
+  , TxId
   , getCardanoAddress
   , seedAddressFromFaucetAndWait
   , getReferenceScripts
   , publishReferenceScripts
   , queryAddressUTXOs
-  , buildSignedHydraTx
+  , buildSignedTx
   , generateKeys
   , generateKeysIn
   , cardanoNodePath
@@ -274,28 +275,30 @@ getTempPath = do
   uid <- UUIDV4.nextRandom
   pure . (uid,) . ("tmp/" <>) . UUID.toString $ uid
 
-buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO String
-buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
+buildSignedTx :: CardanoNodeInfo -> SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO (FilePath, TxId)
+buildSignedTx nodeInfo signingKey fromAddr toAddr txInAmounts amount = do
   let fullAmount = sum txInAmounts
   txBodyPath <- snd <$> getTempPath
   void $ readCreateProcess (proc cardanoCliPath
                        ([ "transaction"
-                        , "build-raw"
+                        , "build"
                         , "--babbage-era"
+                        , "--cardano-mode"
                         ]
                         <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
                         <>
                         [ "--tx-out"
                         , [i|#{toAddr}+#{amount}|]
-                        , "--tx-out"
-                        , [i|#{fromAddr}+#{fullAmount - amount}|]
-                        , "--fee"
-                        , "0"
+                        , "--change-address"
+                        , T.unpack fromAddr
                         , "--out-file"
                         , txBodyPath
-                        ]))
+                        ]
+                        <> cardanoNodeArgs nodeInfo)) {env = Just [( "CARDANO_NODE_SOCKET_PATH"
+                                                                   , _nodeSocket $ nodeInfo)] }
     ""
-  readCreateProcess
+  txSignedPath <- snd <$> getTempPath
+  _ <- readCreateProcess
     (proc cardanoCliPath
       [ "transaction"
       , "sign"
@@ -304,9 +307,11 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
       , "--signing-key-file"
       , signingKey
       , "--out-file"
-      , "/dev/stdout"
+      , txSignedPath
       ])
     ""
+  txid <- txIdFromSignedTx nodeInfo txSignedPath
+  pure $ (txSignedPath,txid)
 
 -- | Convenience for getting faucet Output for seeding
 getFirstTxIn :: CardanoNodeInfo -> Address -> IO TxIn
@@ -413,7 +418,6 @@ txIdFromSignedTx cninf filename =
             "--tx-file",
             filename
           ]
-            <> cardanoNodeArgs cninf
       )
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
         }
@@ -431,7 +435,7 @@ submitTx cninf signedFile = do
             "--tx-file",
             signedFile
           ]
-            <> cardanoNodeArgs cninf
+          <> cardanoNodeArgs cninf
       )
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
         }

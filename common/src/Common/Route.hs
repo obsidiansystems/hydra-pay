@@ -1,4 +1,5 @@
 {-# LANGUAGE EmptyCase #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -10,10 +11,9 @@
 {-# LANGUAGE TypeFamilies #-}
 module Common.Route where
 
-{- -- You will probably want these imports for composing Encoders.
+-- You will probably want these imports for composing Encoders.
 import Prelude hiding (id, (.))
 import Control.Category
--}
 
 import Data.Text (Text)
 import Data.Functor.Identity
@@ -35,8 +35,9 @@ data HydraPayRoute :: * -> * where
   HydraPayRoute_Head :: HydraPayRoute ()
   HydraPayRoute_HeadStatus :: HydraPayRoute Text
   -- | This route will give you a transaction that you can use to add funds to the proxy of a address
-  HydraPayRoute_AddFundsTx :: HydraPayRoute Text
-  HydraPayRoute_AddFuelTx :: HydraPayRoute Text
+  HydraPayRoute_AddFundsTx :: HydraPayRoute (Text :. Int)
+  HydraPayRoute_AddFuelTx :: HydraPayRoute (Text :. Int)
+  HydraPayRoute_Withdraw :: HydraPayRoute ()
   HydraPayRoute_Init :: HydraPayRoute ()
   HydraPayRoute_Commit :: HydraPayRoute ()
 
@@ -47,10 +48,11 @@ hydraPayRouteEncoder ::( MonadError Text check
 hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Head -> PathSegment "heads" $ unitEncoder mempty
   HydraPayRoute_HeadStatus -> PathSegment "head" singlePathSegmentEncoder
-  HydraPayRoute_AddFundsTx -> PathSegment "add-funds" singlePathSegmentEncoder
-  HydraPayRoute_AddFuelTx -> PathSegment "add-fuel" singlePathSegmentEncoder
+  HydraPayRoute_AddFundsTx -> PathSegment "add-funds" $ pathParamEncoder id $ singlePathSegmentEncoder . unsafeTshowEncoder
+  HydraPayRoute_AddFuelTx -> PathSegment "add-fuel" $ pathParamEncoder id $ singlePathSegmentEncoder . unsafeTshowEncoder
   HydraPayRoute_Init -> PathSegment "init" $ unitEncoder mempty
   HydraPayRoute_Commit -> PathSegment "commit" $ unitEncoder mempty
+  HydraPayRoute_Withdraw -> PathSegment "withdraw" $ unitEncoder mempty
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()
