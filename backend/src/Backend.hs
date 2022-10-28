@@ -43,7 +43,7 @@ import Control.Monad ((<=<))
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
-  scripts <- getReferenceScripts (_verificationKey devnetFaucetKeys) "devnet/scripts"
+  scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
   pure $ HydraSharedInfo
     { _hydraScriptsTxId = T.unpack scripts,
         _ledgerGenesis = "devnet/genesis-shelley.json",
