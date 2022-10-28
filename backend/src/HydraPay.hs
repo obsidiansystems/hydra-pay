@@ -506,13 +506,8 @@ closeHead state headName = do
             case output of
               HeadIsClosed _ _ -> pure ()
               _ -> waitForCloseHandler
-
         waitForCloseHandler
       statusResult <- getHeadStatus state headName
-
-      liftIO $ case headStatus_status <$> statusResult of
-        Right Status_Closed -> putStrLn "Yay"
-        _ -> putStrLn "What is going on"
       pure $ statusResult
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
