@@ -17,7 +17,6 @@ import Hydra.Devnet
 import Common.Route
 import Obelisk.Backend
 import Obelisk.Route
-
 import Snap.Core
 
 import Control.Monad.Log
@@ -51,7 +50,6 @@ getDevnetHydraSharedInfo = do
         _cardanoNodeInfo = cardanoDevnetNodeInfo
       }
 
-
 cardanoDevnetNodeInfo :: CardanoNodeInfo
 cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
 
@@ -59,7 +57,6 @@ devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = KeyPair { _signingKey = "devnet/credentials/faucet.sk"
                            , _verificationKey = "devnet/credentials/faucet.vk"
                            }
-
 
 -- TODO: See if it's okay to change Either a (Maybe b) to Just Either a b.
 -- What does writing toJSON () to response do?
@@ -82,9 +79,10 @@ handleJsonRequestBody f = do
       . Aeson.decode
       . LBS.fromChunks
 
+
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
-  { _backend_run = \serve -> do -- withHydraPool $ \pool -> do
+  { _backend_run = \serve -> do
       -- NOTE(skylar): Running heads is a map from head name to network handle
       flip runLoggingT (print . renderWithSeverity id) $ do
         prepareDevnet
@@ -119,6 +117,10 @@ backend = Backend
 
                 HydraPayRoute_HeadStatus :/ name -> do
                   status <- getHeadStatus state name
+                  writeLBS $ Aeson.encode status
+
+                HydraPayRoute_Close :/ name -> do
+                  status <- closeHead state name
                   writeLBS $ Aeson.encode status
 
                 HydraPayRoute_Withdraw :/ () -> do

@@ -81,7 +81,7 @@ import CardanoNodeInfo
 import Hydra.ServerOutput
 import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
 import Control.Monad.STM (atomically)
-import Control.Concurrent.STM.TChan (writeTChan)
+import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 
 type HeadId = Int
 
@@ -487,6 +487,34 @@ withdraw state (WithdrawRequest addr lovelace) = do
   where
     nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 
+closeHead :: MonadIO m => State -> T.Text -> m (Either HydraPayError HeadStatus)
+closeHead state headName = do
+  mNetwork <- getNetwork state headName
+  case mNetwork of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just network -> do
+      let firstNode = head $ Map.elems $ _network_nodes network
+          sendMsg = _node_send_msg firstNode
+          getChan = _node_get_listen_chan firstNode
+
+      liftIO $ do
+        channel <- getChan
+        sendMsg $ Close
+        let
+          waitForCloseHandler = do
+            output <- atomically $ readTChan channel
+            case output of
+              HeadIsClosed _ _ -> pure ()
+              _ -> waitForCloseHandler
+
+        waitForCloseHandler
+      statusResult <- getHeadStatus state headName
+
+      liftIO $ case headStatus_status <$> statusResult of
+        Right Status_Closed -> putStrLn "Yay"
+        _ -> putStrLn "What is going on"
+      pure $ statusResult
+
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr) = do
   withNode state name addr $ \node proxyAddr -> do
@@ -572,7 +600,7 @@ startNetwork state (Head name participants _) = do
                     ReadyToCommit {} -> Just Status_Init
                     Committed {} -> Just Status_Committing
                     HeadIsOpen {} -> Just Status_Open
-                    HeadIsClosed _ _ -> Nothing
+                    HeadIsClosed _ _ -> Just Status_Closed
                     ReadyToFanout {} -> Nothing
                     HeadIsAborted {} -> Nothing
                     HeadIsFinalized {} -> Nothing

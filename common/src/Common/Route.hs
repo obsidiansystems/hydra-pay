@@ -9,6 +9,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+
 module Common.Route where
 
 -- You will probably want these imports for composing Encoders.
@@ -40,6 +41,7 @@ data HydraPayRoute :: * -> * where
   HydraPayRoute_Withdraw :: HydraPayRoute ()
   HydraPayRoute_Init :: HydraPayRoute ()
   HydraPayRoute_Commit :: HydraPayRoute ()
+  HydraPayRoute_Close :: HydraPayRoute Text
 
 hydraPayRouteEncoder ::( MonadError Text check
                        , MonadError Text parse
@@ -53,6 +55,7 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Init -> PathSegment "init" $ unitEncoder mempty
   HydraPayRoute_Commit -> PathSegment "commit" $ unitEncoder mempty
   HydraPayRoute_Withdraw -> PathSegment "withdraw" $ unitEncoder mempty
+  HydraPayRoute_Close -> PathSegment "close" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()

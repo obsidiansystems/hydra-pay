@@ -26,6 +26,11 @@ import Data.Traversable
 import qualified Data.Aeson as Aeson
 import CardanoNodeInfo
 
+testClose :: CardanoNodeInfo -> T.Text -> IO ()
+testClose cninfo name = do
+  testHeadParticipants cninfo name [1..3]
+  postCloseHead name
+
 testSendAndWithdraw :: CardanoNodeInfo -> Int -> IO ()
 testSendAndWithdraw cninfo amount = do
   getAndSubmitTx cninfo 1 Funds 10000000
@@ -99,6 +104,13 @@ postCreateHead name indices = do
       { method = "POST"
       }
   LBS.putStrLn $ "Request: " <> payload
+  x <- getResponseBody <$> httpLBS req
+  LBS.putStrLn . ("Response: " <>) $ x
+
+postCloseHead :: T.Text -> IO ()
+postCloseHead name = do
+  putStrLn "Closing head"
+  req <- parseRequest $ "http://localhost:8000/hydra/close/" <> T.unpack name
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
 
