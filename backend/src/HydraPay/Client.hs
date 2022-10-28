@@ -181,7 +181,7 @@ signAndSubmitTx cninfo addr tx = do
                                         , "--tx-body-file"
                                         , draftFile
                                         , "--signing-key-file"
-                                        , sk
+                                        , getSigningKeyFilePath sk
                                         , "--out-file"
                                         , signedFile
                                         ])

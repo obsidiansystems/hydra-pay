@@ -6,8 +6,10 @@
 module Hydra.Devnet
   ( HydraScriptTxId
   , HydraKeyInfo(..)
-  , SigningKey
+  , SigningKey(..)
+  , VerificationKey(..)
   , KeyPair(..)
+  , mkKeyPair
   , TxId
   , getCardanoAddress
   , seedAddressFromFaucetAndWait
@@ -94,7 +96,7 @@ getTestAddressKeys addr = do
   contents <- flip zip [1..] . T.lines <$> T.readFile path
   pure $ fmap mkKeypair . lookup addr $ contents
   where
-    mkKeypair n = KeyPair (root <> "sk") (root <> "vk")
+    mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
       where
         root = "addr_" <> show n <> ".cardano."
     path = addressesPath
@@ -133,21 +135,28 @@ generateKeysIn :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => FilePath -
 generateKeysIn fp =
   HydraKeyInfo <$> generateCardanoKeys fp <*> generateHydraKeys fp
 
-type SigningKey = FilePath
-type VerificationKey = FilePath
+newtype SigningKey = SigningKey
+  { getSigningKeyFilePath :: FilePath }
+  deriving (Eq, Show)
+
+newtype VerificationKey = VerificationKey
+  { getVerificationKeyFilePath :: FilePath }
+  deriving (Eq, Show)
 
 data KeyPair = KeyPair
   { _signingKey :: SigningKey
   , _verificationKey :: VerificationKey
   }
-  deriving (Show,Read)
+  deriving (Show)
 
+mkKeyPair :: FilePath -> FilePath -> KeyPair
+mkKeyPair spath vpath = KeyPair (SigningKey spath) (VerificationKey vpath)
 
 data HydraKeyInfo = HydraKeyInfo
   { _cardanoKeys :: KeyPair
   , _hydraKeys :: KeyPair
   }
-  deriving (Show,Read)
+  deriving (Show)
 
 -- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.cardano.{vk,sk}" keys being
@@ -165,7 +174,7 @@ generateCardanoKeys path = do
                          ])
     ""
   logMessage $ WithSeverity Informational $ pretty $ T.pack output
-  pure $ KeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
+  pure $ mkKeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
 
 -- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.hydra.{vk,sk}" keys being
@@ -180,7 +189,7 @@ generateHydraKeys path = do
                          ])
     ""
   logMessage $ WithSeverity Informational $ pretty $ T.pack output
-  pure $ KeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
+  pure $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
 
 -- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
 getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => FilePath -> SigningKey -> m HydraScriptTxId
@@ -205,7 +214,7 @@ publishReferenceScripts sk = do
                               , "--node-socket"
                               , "devnet/node.socket"
                               , "--cardano-signing-key"
-                              , sk
+                              , getSigningKeyFilePath sk
                               ]
 
 
@@ -305,7 +314,7 @@ buildSignedTx nodeInfo signingKey fromAddr toAddr txInAmounts amount = do
       , "--tx-body-file"
       , txBodyPath
       , "--signing-key-file"
-      , signingKey
+      , getSigningKeyFilePath signingKey
       , "--out-file"
       , txSignedPath
       ])
@@ -337,7 +346,7 @@ getCardanoAddress cninf keyPath =
     cp = (proc cardanoCliPath $ [ "address"
                               , "build"
                               , "--payment-verification-key-file"
-                              , keyPath
+                              , getVerificationKeyFilePath keyPath
                               ]
                <> cardanoNodeArgs cninf
          ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
@@ -396,7 +405,7 @@ signTx cninf sk draftFile = do
               "--tx-body-file",
               draftFile,
               "--signing-key-file",
-              sk,
+              getSigningKeyFilePath sk,
               "--out-file",
               outFile
             ]

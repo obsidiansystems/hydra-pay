@@ -171,10 +171,10 @@ addProxyAddress cninf addr conn = do
   keyInfo <- generateKeysIn $ T.unpack addr
 
   let
-    cvk = _verificationKey . _cardanoKeys $ keyInfo
-    csk = _signingKey . _cardanoKeys $ keyInfo
-    hvk = _verificationKey . _hydraKeys $ keyInfo
-    hsk = _signingKey . _hydraKeys $ keyInfo
+    cvk = getVerificationKeyFilePath $ _verificationKey . _cardanoKeys $ keyInfo
+    csk = getSigningKeyFilePath $ _signingKey . _cardanoKeys $ keyInfo
+    hvk = getVerificationKeyFilePath $ _verificationKey . _hydraKeys $ keyInfo
+    hsk = getSigningKeyFilePath $ _signingKey . _hydraKeys $ keyInfo
 
   cardanoAddress <- liftIO $ getCardanoAddress cninf $ _verificationKey . _cardanoKeys $ keyInfo
 
@@ -291,8 +291,8 @@ dbProxyToHydraKeyInfo pa = keyInfo
   where
     keyInfo =
       HydraKeyInfo
-      (KeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
-      (KeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
+      (mkKeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
+      (mkKeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
 
 type HeadName = T.Text
 
@@ -712,9 +712,9 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   , "--monitoring-port"
   , show monitoringPort
   , "--hydra-signing-key"
-  , hskPath
+  , getSigningKeyFilePath hskPath
   , "--cardano-signing-key"
-  , cskPath
+  , getSigningKeyFilePath cskPath
   ]
 
 peerArgs :: HydraNodeInfo -> [String]
@@ -722,9 +722,9 @@ peerArgs ni =
   [ "--peer"
   , [i|127.0.0.1:#{_port ni}|]
   , "--hydra-verification-key"
-  , _verificationKey . _hydraKeys . _keys $ ni
+  , getVerificationKeyFilePath $ _verificationKey . _hydraKeys . _keys $ ni
   , "--cardano-verification-key"
-  , _verificationKey . _cardanoKeys . _keys $ ni
+  , getVerificationKeyFilePath $ _verificationKey . _cardanoKeys . _keys $ ni
   ]
 
 cardanoNodeCreateProcess :: CreateProcess

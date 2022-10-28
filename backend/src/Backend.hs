@@ -13,6 +13,7 @@ where
 import Prelude hiding (filter)
 
 import Hydra.Devnet
+import HydraPay.Client
 
 import Common.Route
 import Obelisk.Backend
@@ -54,9 +55,7 @@ cardanoDevnetNodeInfo :: CardanoNodeInfo
 cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
 
 devnetFaucetKeys :: KeyPair
-devnetFaucetKeys = KeyPair { _signingKey = "devnet/credentials/faucet.sk"
-                           , _verificationKey = "devnet/credentials/faucet.vk"
-                           }
+devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
 
 -- TODO: See if it's okay to change Either a (Maybe b) to Just Either a b.
 -- What does writing toJSON () to response do?
