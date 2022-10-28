@@ -591,11 +591,14 @@ startNetwork state (Head name participants _) = do
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ do
           threadDelay 3000000
-          runClient "localhost" port "/" $ \conn -> forever $ do
+          putStrLn $ [i|Connecting to WS port #{port}|]
+          runClient "localhost" port "/" $ \conn -> do
+            putStrLn $ [i|Connected to node on port #{port}|]
             void $ forkIO $ forever $ do
               toSnd :: ClientInput <- liftIO $ readChan sndChan
+              putStrLn $ [i|Sending to WS port #{port}: #{show toSnd}|]
               WS.sendTextData conn $ Aeson.encode toSnd
-            do
+            forever $ do
               msgLBS :: LBS.ByteString <- WS.receiveData conn
               let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
                                   <> LBS.unpack msgLBS)
