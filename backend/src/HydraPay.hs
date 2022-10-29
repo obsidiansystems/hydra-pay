@@ -324,7 +324,7 @@ data Status
   | Status_Committing
   | Status_Open
   | Status_Closed
-  | Status_Fanout
+  | Status_Ended
   deriving (Eq, Show, Generic)
 
 instance ToJSON Status
