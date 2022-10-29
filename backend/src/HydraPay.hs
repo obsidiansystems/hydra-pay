@@ -592,7 +592,7 @@ startNetwork state (Head name participants _) = do
         monitor <- liftIO $ forkIO $ do
           threadDelay 3000000
           putStrLn $ [i|Connecting to WS port #{port}|]
-          runClient "localhost" port "/" $ \conn -> do
+          runClient "127.0.0.1" port "/" $ \conn -> do
             putStrLn $ [i|Connected to node on port #{port}|]
             void $ forkIO $ forever $ do
               toSnd :: ClientInput <- liftIO $ readChan sndChan
