@@ -5,6 +5,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 
 module HydraPay where
 
@@ -78,7 +79,7 @@ import Hydra.ClientInput
 
 import qualified Hydra.Types as HT
 import CardanoNodeInfo
-import Hydra.ServerOutput
+import Hydra.ServerOutput as ServerOutput
 import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
@@ -190,6 +191,9 @@ getKeyPath = do
   where
     path = "keys"
 
+-- TODO: All these action which are about a named head repeat this
+-- fact. Use structure to aid code reuse and help to see patterns.
+
 data HeadCreate = HeadCreate
   { headCreate_name :: T.Text
   , headCreate_participants :: [Address]
@@ -218,6 +222,15 @@ data HeadCommit = HeadCommit
 instance ToJSON HeadCommit
 instance FromJSON HeadCommit
 
+data HeadSubmitTx = HeadSubmitTx
+  { headSubmitTx_name :: T.Text
+  , headSubmitTx_cbor :: T.Text
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HeadSubmitTx
+instance FromJSON HeadSubmitTx
+
 withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
@@ -243,6 +256,7 @@ data HydraPayError
   | NotAParticipant
   | InsufficientFunds
   | FanoutNotPossible
+  | TxInvalid {utxo :: WholeUTXO, transaction :: Value, validationError :: ValidationError}
   deriving (Eq, Show, Generic)
 
 instance ToJSON HydraPayError
@@ -541,6 +555,25 @@ createHead state (HeadCreate name participants start) = do
           liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
           when start $ void $ startNetwork state head
           pure $ Right head
+
+data HydraTxError =
+  HydraTxNotSeen
+
+submitTxOnHead :: _ => State -> _ -> _ -> m (Either HydraPayError ())
+submitTxOnHead state addr (HeadSubmitTx name txText) = do
+  withNode state name addr $ \node _ -> do
+    c <- liftIO $ _node_get_listen_chan node
+    liftIO $ _node_send_msg node $ NewTx txText
+    -- TODO: Could we make sure we saw the transaction that we sent and not another one?
+    let awaitValidity = do
+          x <- liftIO . atomically $ readTChan c
+          case x of
+            TxValid tx -> pure (Right ())
+            ServerOutput.TxInvalid utxo tx validationError -> pure (Left (HydraPay.TxInvalid utxo tx validationError))
+            _ -> awaitValidity
+    awaitValidity
+
+
 
 -- | Lookup head via name
 lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)

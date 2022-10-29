@@ -42,6 +42,7 @@ data HydraPayRoute :: * -> * where
   HydraPayRoute_Init :: HydraPayRoute ()
   HydraPayRoute_Commit :: HydraPayRoute ()
   HydraPayRoute_Close :: HydraPayRoute Text
+  HydraPayRoute_SubmitTx :: HydraPayRoute Text
 
 hydraPayRouteEncoder ::( MonadError Text check
                        , MonadError Text parse
@@ -56,6 +57,7 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Commit -> PathSegment "commit" $ unitEncoder mempty
   HydraPayRoute_Withdraw -> PathSegment "withdraw" $ unitEncoder mempty
   HydraPayRoute_Close -> PathSegment "close" singlePathSegmentEncoder
+  HydraPayRoute_SubmitTx -> PathSegment "submit-tx" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Main :: FrontendRoute ()

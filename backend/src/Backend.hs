@@ -98,7 +98,7 @@ backend = Backend
             liftIO . serve $ \case
               BackendRoute_HydraPay :/ hpr -> case hpr of
                 HydraPayRoute_Init :/ () -> do
-                  handleJsonRequestBody (fmap ((Nothing :: Maybe ())<$) . initHead state)
+                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . initHead state)
                 HydraPayRoute_Commit :/ () -> do
                   handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . commitToHead state)
                 HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
@@ -132,6 +132,9 @@ backend = Backend
                       case result of
                         Right txid -> writeLBS $ Aeson.encode txid
                         Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
+
+                HydraPayRoute_SubmitTx :/ addr -> do
+                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . submitTxOnHead state addr)
 
                 HydraPayRoute_Head :/ () -> do
                   handleJsonRequestBody $
