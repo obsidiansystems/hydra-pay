@@ -46,10 +46,10 @@ getDevnetHydraSharedInfo = do
   scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
   pure $ HydraSharedInfo
     { _hydraScriptsTxId = T.unpack scripts,
-        _ledgerGenesis = "devnet/genesis-shelley.json",
-        _ledgerProtocolParameters = "devnet/protocol-parameters.json",
-        _cardanoNodeInfo = cardanoDevnetNodeInfo
-      }
+      _ledgerGenesis = "devnet/genesis-shelley.json",
+      _ledgerProtocolParameters = "devnet/protocol-parameters.json",
+      _cardanoNodeInfo = cardanoDevnetNodeInfo
+    }
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
 cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
