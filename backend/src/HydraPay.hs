@@ -49,6 +49,7 @@ import Data.Map (Map)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map as Map
+import Data.Aeson ((.:))
 import Data.Aeson as Aeson
 import Data.Proxy
 import Data.Pool
@@ -83,6 +84,8 @@ import Hydra.ServerOutput as ServerOutput
 import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
+import Control.Monad.Loops (untilJust)
+import Data.Aeson.Types (parseMaybe)
 
 type HeadId = Int
 
@@ -224,7 +227,8 @@ instance FromJSON HeadCommit
 
 data HeadSubmitTx = HeadSubmitTx
   { headSubmitTx_name :: T.Text
-  , headSubmitTx_cbor :: T.Text
+  , headSubmitTx_toAddr :: Address
+  , amount :: Lovelace
   }
   deriving (Eq, Show, Generic)
 
@@ -434,7 +438,6 @@ buildAddTx txType state fromAddr amount = do
                                           , _nodeSocket . _cardanoNodeInfo . _state_hydraInfo $ state)] }
     ""
   txResult <- liftIO $ readFile txBodyPath
-  liftIO $ putStrLn txResult
   case Aeson.decode $ LBS.pack txResult of
     Just tx -> pure $ Right tx
     Nothing -> pure $ Left FailedToBuildFundsTx
@@ -478,6 +481,7 @@ data WithdrawRequest = WithdrawRequest
 
 instance ToJSON WithdrawRequest
 instance FromJSON WithdrawRequest
+
 
 -- | Withdraw funds (if available from proxy request)
 withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
@@ -559,21 +563,52 @@ createHead state (HeadCreate name participants start) = do
 data HydraTxError =
   HydraTxNotSeen
 
-submitTxOnHead :: _ => State -> _ -> _ -> m (Either HydraPayError ())
-submitTxOnHead state addr (HeadSubmitTx name txText) = do
-  withNode state name addr $ \node _ -> do
+filterUtxos :: Address -> WholeUTXO -> WholeUTXO
+filterUtxos addr = Map.filter ((== addr) . HT.address)
+
+
+getNodeUtxos :: MonadIO m => Node -> Address -> m (Map TxIn TxInInfo)
+getNodeUtxos node proxyAddr = do
+  liftIO $ _node_send_msg node $ GetUTxO
+  c <- liftIO $ _node_get_listen_chan node
+  untilJust $ do
+    x <- liftIO . atomically $ readTChan c
+    case x of
+      GetUTxOResponse utxoz -> do
+        pure $ Just (filterUtxos proxyAddr utxoz)
+      _ -> pure Nothing
+
+
+submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError ())
+submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
+  withNode state name addr $ \node proxyAddr -> do
     c <- liftIO $ _node_get_listen_chan node
-    liftIO $ _node_send_msg node $ NewTx txText
+    senderUtxos :: Map TxIn TxInInfo <- getNodeUtxos node proxyAddr
+    let signingKey = _signingKey . _cardanoKeys . _keys . _node_info $ node
+    let lovelaceUtxos = Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
+    -- FIXME: fails on empty lovelaceUtxos
+    (toAddrProxy, _) <- addOrGetKeyInfo state toAddr
+    signedTxJsonStr <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
+    let jsonTx :: Aeson.Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . LBS.pack $ signedTxJsonStr
+    let txCborHexStr = fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
+    liftIO $ _node_send_msg node $ NewTx . T.pack $ txCborHexStr
     -- TODO: Could we make sure we saw the transaction that we sent and not another one?
-    let awaitValidity = do
-          x <- liftIO . atomically $ readTChan c
-          case x of
-            TxValid tx -> pure (Right ())
-            ServerOutput.TxInvalid utxo tx validationError -> pure (Left (HydraPay.TxInvalid utxo tx validationError))
-            _ -> awaitValidity
-    awaitValidity
+    untilJust $ do
+      x <- liftIO . atomically $ readTChan c
+      case x of
+        TxValid tx -> pure . Just $ Right ()
+        ServerOutput.TxInvalid utxo tx validationError -> pure . Just $ (Left (HydraPay.TxInvalid utxo tx validationError))
+        _ -> pure Nothing
 
 
+
+terminateHead :: (MonadIO m) => State -> HeadName -> m ()
+terminateHead state headName = do
+  liftIO $ modifyMVar_ (_state_networks state) $ \ns -> do
+    -- TODO: warn about nonexistence?
+    flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
+      mapM_ (terminateProcess . _node_handle) . _network_nodes $ n
+      pure (Map.delete headName ns)
 
 -- | Lookup head via name
 lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)

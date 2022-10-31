@@ -45,6 +45,7 @@ library
                , http-conduit
                , temporary
                , stm
+               , monad-loops
 
   default-extensions:
     OverloadedStrings

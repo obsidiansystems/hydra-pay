@@ -26,12 +26,12 @@ module Hydra.Devnet
   , getTestAddressKeys
   , devnetMagic
   , minTxLovelace
-
   , addressesPath
   , getTempPath
   , cardanoCliPath
   , submitTx
   , waitForTxIn
+  , buildSignedHydraTx
   )
 
 where
@@ -448,3 +448,38 @@ submitTx cninf signedFile = do
       )
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
         }
+
+-- TODO(skylar): Check lovelace vs the full amount!
+buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO String
+buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
+  let fullAmount = sum txInAmounts
+  txBodyPath <- snd <$> getTempPath
+  void $ readCreateProcess (proc cardanoCliPath
+                       ([ "transaction"
+                        , "build-raw"
+                        , "--babbage-era"
+                        ]
+                        <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
+                        <>
+                        [ "--tx-out"
+                        , [i|#{toAddr}+#{amount}|]
+                        , "--tx-out"
+                        , [i|#{fromAddr}+#{fullAmount - amount}|]
+                        , "--fee"
+                        , "0"
+                        , "--out-file"
+                        , txBodyPath
+                        ]))
+    ""
+  readCreateProcess
+    (proc cardanoCliPath
+      [ "transaction"
+      , "sign"
+      , "--tx-body-file"
+      , txBodyPath
+      , "--signing-key-file"
+      , getSigningKeyFilePath signingKey
+      , "--out-file"
+      , "/dev/stdout"
+      ])
+    ""
