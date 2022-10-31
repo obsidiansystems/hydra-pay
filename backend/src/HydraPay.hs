@@ -652,7 +652,8 @@ startNetwork state (Head name participants _) = do
       nodes <- startHydraNetwork (_state_hydraInfo state) proxyMap
 
       liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . snd) . Map.elems $ nodes
-
+      let numNodes = length nodes
+      readyCounterChan <- liftIO $ newChan
       network <- fmap Network . forM nodes $ \(processHndl, nodeInfo) -> do
         let port =  _apiPort $ nodeInfo
         bRcvChan <- liftIO newBroadcastTChanIO
@@ -667,11 +668,25 @@ startNetwork state (Head name participants _) = do
               putStrLn $ [i|Sending to WS port #{port}: #{show toSnd}|]
               WS.sendTextData conn $ Aeson.encode toSnd
             forever $ do
-              msgLBS :: LBS.ByteString <- WS.receiveData conn
-              let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
-                                  <> LBS.unpack msgLBS)
-                        $ decode' msgLBS
-              putStrLn $ "Monitor:" <> show port <> ": " <> show msg
+              let getParsedMsg = do
+                  msgLBS :: LBS.ByteString <- WS.receiveData conn
+                  let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
+                                      <> LBS.unpack msgLBS)
+                            $ decode' msgLBS
+                  putStrLn $ "Monitor:" <> show port <> ": " <> show msg
+                  pure msg
+              let countConnects n = do
+                    if (n == numNodes - 1)
+                      then writeChan readyCounterChan ()
+                      else do
+                        msg <- getParsedMsg
+                        -- TODO: Maybe best to actually check which peer
+                        -- rather than blindly count?
+                        case msg of
+                          PeerConnected _ -> countConnects (n + 1)
+                          _ -> countConnects n
+              countConnects 0
+              msg <- getParsedMsg
               let handleMsg = \case
                     ReadyToCommit {} -> Just Status_Init
                     Committed {} -> Just Status_Committing
@@ -700,6 +715,15 @@ startNetwork state (Head name participants _) = do
           , _node_send_msg = writeChan sndChan
           , _node_get_listen_chan = atomically $ dupTChan bRcvChan
           }
+      liftIO $ putStrLn [i|---- Waiting for #{numNodes} nodes to get ready |]
+      let countReadies n = do
+            if n == numNodes
+              then putStrLn [i|---- All nodes ready|]
+              else do
+                readChan readyCounterChan
+                putStrLn [i|---- #{n + 1} nodes ready of #{numNodes}|]
+                countReadies (n + 1)
+      liftIO $ countReadies 0
 
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
