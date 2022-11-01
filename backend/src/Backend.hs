@@ -13,7 +13,6 @@ where
 import Prelude hiding (filter)
 
 import Hydra.Devnet
-import HydraPay.Client
 
 import Common.Route
 import Obelisk.Backend
