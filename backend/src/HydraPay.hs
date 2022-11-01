@@ -210,6 +210,7 @@ instance FromJSON HeadCreate
 data HeadInit = HeadInit
   { headInit_name :: T.Text
   , headInit_participant :: Address
+  , headInit_contestation :: Int
   }
   deriving (Eq, Show, Generic)
 
@@ -493,9 +494,9 @@ withNode state name addr f = do
         Just node -> f node proxyAddr
 
 initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
-initHead state (HeadInit name addr) = do
+initHead state (HeadInit name addr con) = do
   withNode state name addr $ \node _ -> do
-    liftIO $ _node_send_msg node $ Init 60
+    liftIO $ _node_send_msg node $ Init $ fromIntegral con
     -- TODO: Response to Init message?
     pure $ Right ()
 

@@ -28,11 +28,12 @@ import CardanoNodeInfo
 
 testFanout :: CardanoNodeInfo -> T.Text -> IO ()
 testFanout cninfo name = do
-  testHeadParticipants cninfo name [1..3]
+  testHeadParticipants cninfo name [1..3] contestation
   postCloseHead name
-  threadDelay $ defaultContestation * 1000000
+  threadDelay $ contestation * 1000000
   waitForFanout 1000000
   where
+    contestation = 3
     waitForFanout falloff = do
       threadDelay falloff
       status <- fmap headStatus_status <$> getStatus name
@@ -43,7 +44,7 @@ testFanout cninfo name = do
 
 testClose :: CardanoNodeInfo -> T.Text -> IO ()
 testClose cninfo name = do
-  testHeadParticipants cninfo name [1..3]
+  testHeadParticipants cninfo name [1..3] 10
   postCloseHead name
 
 testSendAndWithdraw :: CardanoNodeInfo -> Int -> IO ()
@@ -69,8 +70,8 @@ testHeadOneParticipant cninfo name = do
   threadDelay 1000000
   getStatus_ name
 
-testHeadParticipants :: CardanoNodeInfo -> T.Text -> [Int] -> IO ()
-testHeadParticipants cninfo name partcipants@(initializer:_) = do
+testHeadParticipants :: CardanoNodeInfo -> T.Text -> [Int] -> Int -> IO ()
+testHeadParticipants cninfo name partcipants@(initializer:_) con = do
   postCreateHead name partcipants
   threadDelay 1000000
   for_  partcipants $ \i -> do
@@ -78,7 +79,7 @@ testHeadParticipants cninfo name partcipants@(initializer:_) = do
     getAndSubmitTx cninfo i Fuel 1000000000
     threadDelay 500000
   threadDelay 1000000
-  postInitHead name initializer
+  postInitHeadCustomContestation con name initializer
   threadDelay 1000000
   for_  partcipants $ \i -> do
     postCommitHead name i
@@ -133,11 +134,14 @@ postCloseHead name = do
   LBS.putStrLn . ("Response: " <>) $ x
 
 postInitHead :: T.Text -> Int -> IO ()
-postInitHead name i  = do
+postInitHead = postInitHeadCustomContestation defaultContestation
+
+postInitHeadCustomContestation :: Int -> T.Text -> Int -> IO ()
+postInitHeadCustomContestation contestation name i = do
   Just [addr] <- getDevnetAddresses [i]
   initReq <- parseRequest $ "http://localhost:8000/hydra/init"
   let
-    payload = Aeson.encode $ HeadInit name addr
+    payload = Aeson.encode $ HeadInit name addr contestation
     req = setRequestBodyLBS payload $ initReq
       { method = "POST"
       }
