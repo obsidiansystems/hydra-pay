@@ -242,6 +242,7 @@ data HydraPayError
   | FailedToBuildFundsTx
   | NotAParticipant
   | InsufficientFunds
+  | FanoutNotPossible
   deriving (Eq, Show, Generic)
 
 instance ToJSON HydraPayError
@@ -324,7 +325,8 @@ data Status
   | Status_Committing
   | Status_Open
   | Status_Closed
-  | Status_Ended
+  | Status_Fanout
+  | Status_Finalized
   deriving (Eq, Show, Generic)
 
 instance ToJSON Status
@@ -433,7 +435,6 @@ withNetwork ::
   m (Either HydraPayError b)
 withNetwork state name f = maybe (pure $ Left NetworkIsn'tRunning) f =<< getNetwork state name
 
-
 withNode ::
   MonadIO m =>
   State ->
@@ -447,7 +448,6 @@ withNode state name addr f = do
       case Map.lookup proxyAddr $ _network_nodes network of
         Nothing -> pure $ Left NotAParticipant
         Just node -> f node proxyAddr
-    
 
 initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
 initHead state (HeadInit name addr) = do
@@ -487,24 +487,34 @@ withdraw state (WithdrawRequest addr lovelace) = do
   where
     nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 
+fanoutHead :: MonadIO m => State -> T.Text -> m (Either HydraPayError HeadStatus)
+fanoutHead = sendToHeadAndWaitFor Fanout $ \case
+  HeadIsFinalized {} -> True
+  _ -> False
+
 closeHead :: MonadIO m => State -> T.Text -> m (Either HydraPayError HeadStatus)
-closeHead state headName = do
+closeHead = sendToHeadAndWaitFor Close $ \case
+  HeadIsClosed {} -> True
+  _ -> False
+
+sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> T.Text -> m (Either HydraPayError HeadStatus)
+sendToHeadAndWaitFor ci fso state headName = do
   mNetwork <- getNetwork state headName
   case mNetwork of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just network -> do
+      -- TODO: Round robin to prevent exhausting gas of the first participant!
       let firstNode = head $ Map.elems $ _network_nodes network
           sendMsg = _node_send_msg firstNode
           getChan = _node_get_listen_chan firstNode
-
       liftIO $ do
         channel <- getChan
-        sendMsg $ Close
+        sendMsg ci
         let
           waitForCloseHandler = do
             output <- atomically $ readTChan channel
-            case output of
-              HeadIsClosed _ _ -> pure ()
+            case (fso output) of
+              True  -> pure ()
               _ -> waitForCloseHandler
         waitForCloseHandler
       statusResult <- getHeadStatus state headName
@@ -596,13 +606,20 @@ startNetwork state (Head name participants _) = do
                     Committed {} -> Just Status_Committing
                     HeadIsOpen {} -> Just Status_Open
                     HeadIsClosed _ _ -> Just Status_Closed
-                    ReadyToFanout {} -> Nothing
+                    ReadyToFanout {} -> Just Status_Fanout
                     HeadIsAborted {} -> Nothing
-                    HeadIsFinalized {} -> Nothing
+                    HeadIsFinalized {} -> Just Status_Finalized
                     _ -> Nothing
               case handleMsg msg of
                 Just status -> do
-                  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.adjust (\h -> h { _head_status = status }) name
+                  liftIO $ modifyMVar_ (_state_heads state) $ \current -> do
+                    case _head_status <$> Map.lookup name current of
+                      Just currentStatus -> do
+                        when (currentStatus /= status && status == Status_Fanout) $ void $ forkIO $ do
+                         _ <- fanoutHead state name
+                         pure ()
+                      _ -> pure ()
+                    pure . Map.adjust (\h -> h { _head_status = status }) name $ current
                 Nothing -> pure ()
               atomically $ writeTChan bRcvChan msg
         pure $ Node

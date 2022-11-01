@@ -26,6 +26,21 @@ import Data.Traversable
 import qualified Data.Aeson as Aeson
 import CardanoNodeInfo
 
+testFanout :: CardanoNodeInfo -> T.Text -> IO ()
+testFanout cninfo name = do
+  testHeadParticipants cninfo name [1..3]
+  postCloseHead name
+  threadDelay $ defaultContestation * 1000000
+  waitForFanout 1000000
+  where
+    waitForFanout falloff = do
+      threadDelay falloff
+      status <- fmap headStatus_status <$> getStatus name
+      case status of
+        Right Status_Finalized -> putStrLn "Finalization complete!"
+        Right _ -> waitForFanout $ 2 * falloff
+        Left err -> putStrLn $ "Failed: " <> err
+
 testClose :: CardanoNodeInfo -> T.Text -> IO ()
 testClose cninfo name = do
   testHeadParticipants cninfo name [1..3]
@@ -36,6 +51,9 @@ testSendAndWithdraw cninfo amount = do
   getAndSubmitTx cninfo 1 Funds 10000000
   threadDelay 1000000
   postWithdrawal 1 5000000
+
+defaultContestation :: Int
+defaultContestation = 60
 
 testHeadOneParticipant :: CardanoNodeInfo -> T.Text -> IO ()
 testHeadOneParticipant cninfo name = do
@@ -49,7 +67,7 @@ testHeadOneParticipant cninfo name = do
   threadDelay 1000000
   postCommitHead name 1
   threadDelay 1000000
-  getStatus name
+  getStatus_ name
 
 testHeadParticipants :: CardanoNodeInfo -> T.Text -> [Int] -> IO ()
 testHeadParticipants cninfo name partcipants@(initializer:_) = do
@@ -65,7 +83,7 @@ testHeadParticipants cninfo name partcipants@(initializer:_) = do
   for_  partcipants $ \i -> do
     postCommitHead name i
     threadDelay 1000000
-  getStatus name
+  getStatus_ name
 
 getDevnetAddresses :: [Int] -> IO (Maybe [Address])
 getDevnetAddresses is = do
@@ -84,7 +102,7 @@ getDevnetAddress i = do
 postWithdrawal :: Int -> Lovelace -> IO ()
 postWithdrawal i amount = do
   Just addr <- getDevnetAddress i
-  initReq <- parseRequest $ "http://localhost:8000/hydra/withdraw"
+  initReq <-  parseRequest $ "http://localhost:8000/hydra/withdraw"
   let
     payload = Aeson.encode $ WithdrawRequest addr amount
     req = setRequestBodyLBS payload $ initReq
@@ -115,7 +133,7 @@ postCloseHead name = do
   LBS.putStrLn . ("Response: " <>) $ x
 
 postInitHead :: T.Text -> Int -> IO ()
-postInitHead name i = do
+postInitHead name i  = do
   Just [addr] <- getDevnetAddresses [i]
   initReq <- parseRequest $ "http://localhost:8000/hydra/init"
   let
@@ -140,11 +158,22 @@ postCommitHead name i = do
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
 
-getStatus :: T.Text -> IO ()
+getStatus :: T.Text -> IO (Either String HeadStatus)
 getStatus name = do
   req <- parseRequest $ "http://localhost:8000/hydra/head/" <> T.unpack name
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
+  let
+    val :: Either String (Either HydraPayError HeadStatus) = Aeson.eitherDecode x
+    ret = join $ fmap (mapLeft show) val
+  pure ret
+
+mapLeft :: (a -> b) -> Either a c -> Either b c
+mapLeft f (Left a) = Left $ f a
+mapLeft f (Right b) = Right b
+
+getStatus_ :: T.Text -> IO ()
+getStatus_ = void . getStatus
 
 getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> Lovelace -> IO ()
 getAndSubmitTx cninfo i tt amount = do
