@@ -141,6 +141,10 @@ backend = Backend
                     . mapM (getHeadStatus state . _head_name)
                     <=< createHead state
 
+                HydraPayRoute_HeadBalance :/ addr -> do
+                  handleJsonRequestBody (fmap (Just <$>) . headBalance state addr)
+                HydraPayRoute_L1Balance :/ addr -> do
+                  writeLBS . Aeson.encode =<< l1Balance state addr
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder

@@ -402,6 +402,32 @@ isFuelType :: TxType -> Bool
 isFuelType Fuel = True
 isFuelType _ = False
 
+
+newtype HeadBalance = HeadBalance { _headBalance_name :: HeadName }
+  deriving(Eq, Show, Generic)
+
+instance ToJSON HeadBalance
+instance FromJSON HeadBalance
+
+headBalance :: (MonadIO m) => State -> Address -> HeadBalance -> m (Either HydraPayError Lovelace)
+headBalance state addr (HeadBalance name) = do
+  withNode state name addr $ \node proxyAddr -> do
+    utxos <- getNodeUtxos node proxyAddr
+    let
+      txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+      fullAmount = sum txInAmounts
+    pure (Right fullAmount)
+
+
+l1Balance :: (MonadIO m) => State -> Address -> m Lovelace
+l1Balance state addr = do
+  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
+  let
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    fullAmount = sum txInAmounts
+  pure fullAmount
+
+
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
 buildAddTx txType state fromAddr amount = do
   utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) fromAddr
