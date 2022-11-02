@@ -22,6 +22,7 @@ library
                , witherable
                , transformers
                , time
+               , lens
   default-extensions:
     RecursiveDo
     RankNTypes

@@ -24,6 +24,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 
 import Data.String.Interpolate ( i )
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 import Data.Text.Prettyprint.Doc
 
 import qualified System.IO.Streams as Streams
@@ -145,6 +146,10 @@ backend = Backend
                   handleJsonRequestBody (fmap (Just <$>) . headBalance state addr)
                 HydraPayRoute_L1Balance :/ addr -> do
                   writeLBS . Aeson.encode =<< l1Balance state addr
+              BackendRoute_DemoAddresses :/ () -> do
+                addrs <- liftIO $ T.lines <$> T.readFile "devnet/addresses"
+                writeLBS $ Aeson.encode addrs
+                pure ()
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder

@@ -29,6 +29,7 @@ data BackendRoute :: * -> * where
   BackendRoute_Missing :: BackendRoute ()
   BackendRoute_Api :: BackendRoute ()
   BackendRoute_HydraPay :: BackendRoute (R HydraPayRoute)
+  BackendRoute_DemoAddresses :: BackendRoute ()
   -- You can define any routes that will be handled specially by the backend here.
   -- i.e. These do not serve the frontend, but do something different, such as serving static files.
 
@@ -64,7 +65,9 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_L1Balance -> PathSegment "l1-balance" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
-  FrontendRoute_Main :: FrontendRoute ()
+  FrontendRoute_Setup :: FrontendRoute ()
+  FrontendRoute_OpenChannel :: FrontendRoute ()
+  FrontendRoute_PaymentChannel :: FrontendRoute ()
   -- This type is used to define frontend routes, i.e. ones for which the backend will serve the frontend.
 
 fullRouteEncoder
@@ -74,10 +77,14 @@ fullRouteEncoder = mkFullRouteEncoder
   (\case
       BackendRoute_Missing -> PathSegment "missing" $ unitEncoder mempty
       BackendRoute_Api -> PathSegment "api" $ unitEncoder mempty
+      BackendRoute_DemoAddresses -> PathSegment "demo-addresses" $ unitEncoder mempty
       BackendRoute_HydraPay -> PathSegment "hydra" hydraPayRouteEncoder
   )
   (\case
-      FrontendRoute_Main -> PathEnd $ unitEncoder mempty)
+      FrontendRoute_Setup -> PathEnd $ unitEncoder mempty
+      FrontendRoute_OpenChannel -> PathSegment "open" $ unitEncoder mempty
+      FrontendRoute_PaymentChannel -> PathSegment "channel" $ unitEncoder mempty
+  )
 
 concat <$> mapM deriveRouteComponent
   [ ''BackendRoute
