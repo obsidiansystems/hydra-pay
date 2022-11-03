@@ -198,7 +198,7 @@ getKeyPath = do
 -- fact. Use structure to aid code reuse and help to see patterns.
 
 data HeadCreate = HeadCreate
-  { headCreate_name :: T.Text
+  { headCreate_name :: HeadName
   , headCreate_participants :: [Address]
   , headCreate_startNetwork :: Bool
   }
@@ -208,7 +208,7 @@ instance ToJSON HeadCreate
 instance FromJSON HeadCreate
 
 data HeadInit = HeadInit
-  { headInit_name :: T.Text
+  { headInit_name :: HeadName
   , headInit_participant :: Address
   , headInit_contestation :: Int
   }
@@ -218,7 +218,7 @@ instance ToJSON HeadInit
 instance FromJSON HeadInit
 
 data HeadCommit = HeadCommit
-  { headCommit_name :: T.Text
+  { headCommit_name :: HeadName
   , headCommit_participant :: T.Text
   }
   deriving (Eq, Show, Generic)
@@ -227,7 +227,7 @@ instance ToJSON HeadCommit
 instance FromJSON HeadCommit
 
 data HeadSubmitTx = HeadSubmitTx
-  { headSubmitTx_name :: T.Text
+  { headSubmitTx_name :: HeadName
   , headSubmitTx_toAddr :: Address
   , amount :: Lovelace
   }
@@ -241,7 +241,7 @@ withLogging = flip runLoggingT (print . renderWithSeverity id)
 
 -- This is the API json type that we need to send back out
 data HeadStatus = HeadStatus
-  { headStatus_name :: T.Text
+  { headStatus_name :: HeadName
   , headStatus_running :: Bool
   , headStatus_status :: Status
   }
@@ -404,7 +404,7 @@ isFuelType Fuel = True
 isFuelType _ = False
 
 
-headBalance :: (MonadIO m) => State -> T.Text -> Address -> m (Either HydraPayError Lovelace)
+headBalance :: (MonadIO m) => State -> HeadName -> Address -> m (Either HydraPayError Lovelace)
 headBalance state name addr = do
   withNode state name addr $ \node proxyAddr -> do
     utxos <- getNodeUtxos node proxyAddr
@@ -526,17 +526,17 @@ withdraw state (WithdrawRequest addr lovelace) = do
   where
     nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 
-fanoutHead :: MonadIO m => State -> T.Text -> m (Either HydraPayError HeadStatus)
+fanoutHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 fanoutHead = sendToHeadAndWaitFor Fanout $ \case
   HeadIsFinalized {} -> True
   _ -> False
 
-closeHead :: MonadIO m => State -> T.Text -> m (Either HydraPayError HeadStatus)
+closeHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 closeHead = sendToHeadAndWaitFor Close $ \case
   HeadIsClosed {} -> True
   _ -> False
 
-sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> T.Text -> m (Either HydraPayError HeadStatus)
+sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError HeadStatus)
 sendToHeadAndWaitFor ci fso state headName = do
   mNetwork <- getNetwork state headName
   case mNetwork of
@@ -622,7 +622,6 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
         ServerOutput.TxInvalid utxo tx validationError ->
           pure . Just $ (Left (HydraPay.TxInvalid utxo tx validationError))
         _ -> pure Nothing
-
 
 
 
