@@ -84,7 +84,7 @@ import Hydra.ServerOutput as ServerOutput
 import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
-import Control.Monad.Loops (untilJust)
+import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
 
 type HeadId = Int
@@ -689,30 +689,30 @@ startNetwork state (Head name participants _) = do
           threadDelay 3000000
           putStrLn $ [i|Connecting to WS port #{port}|]
           runClient "127.0.0.1" port "/" $ \conn -> do
-            putStrLn $ [i|Connected to node on port #{port}|]
+            putStrLn [i|Connected to node on port #{port}|]
+            -- Fork off "message send" thread
             void $ forkIO $ forever $ do
               toSnd :: ClientInput <- liftIO $ readChan sndChan
               putStrLn $ [i|Sending to WS port #{port}: #{show toSnd}|]
               WS.sendTextData conn $ Aeson.encode toSnd
+            let getParsedMsg = do
+                msgLBS :: LBS.ByteString <- WS.receiveData conn
+                let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
+                                    <> LBS.unpack msgLBS)
+                          $ decode' msgLBS
+                putStrLn $ "Monitor:" <> show port <> ": " <> show msg
+                pure msg
+            -- Wait until we have seen all other nodes connect to this one
+            flip (iterateUntilM (== (numNodes - 1))) 0 $ \n -> do
+              msg <- getParsedMsg
+              -- TODO: Maybe best to actually check which peer rather
+              -- than blindly count?
+              pure $ case msg of
+                PeerConnected _ -> n + 1
+                _ -> n
+            writeChan readyCounterChan ()
+            -- Start accepting messages
             forever $ do
-              let getParsedMsg = do
-                  msgLBS :: LBS.ByteString <- WS.receiveData conn
-                  let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
-                                      <> LBS.unpack msgLBS)
-                            $ decode' msgLBS
-                  putStrLn $ "Monitor:" <> show port <> ": " <> show msg
-                  pure msg
-              let countConnects n = do
-                    if (n == numNodes - 1)
-                      then writeChan readyCounterChan ()
-                      else do
-                        msg <- getParsedMsg
-                        -- TODO: Maybe best to actually check which peer
-                        -- rather than blindly count?
-                        case msg of
-                          PeerConnected _ -> countConnects (n + 1)
-                          _ -> countConnects n
-              countConnects 0
               msg <- getParsedMsg
               let handleMsg = \case
                     ReadyToCommit {} -> Just Status_Init
