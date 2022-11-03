@@ -73,7 +73,13 @@ To create a Head you will give it a friendly name and list the addresses that wi
 
 Example payload:
 ``` json
-"{\"headCreate_name\":\"test\",\"headCreate_participants\":[\"addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp\"],\"headCreate_startNetwork\":true}"
+{
+  "headCreate_name": "test",
+  "headCreate_participants": [
+    "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
+  ],
+  "headCreate_startNetwork": true
+}
 ```
 
 ### Head Status
@@ -84,7 +90,11 @@ Get the status of the Head on-chain and the status of the network of hydra-nodes
 
 Example Response:
 ``` json
-{"headStatus_name":"test","headStatus_running":true,"headStatus_status":"Status_Open"}
+{
+  "headStatus_name": "test",
+  "headStatus_running": true,
+  "headStatus_status": "Status_Open"
+}
 ```
 
 ### Head Init
@@ -95,7 +105,10 @@ Post the inital state of your Head on chain, and start waiting for Commitments f
 
 Example Payload:
 ``` json
-{"headInit_name":"test","headInit_participant":"addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"}
+{
+  "headInit_name": "test",
+  "headInit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
+}
 ```
 
 ### Head Commit
@@ -106,7 +119,10 @@ Commit the funds at your Proxy Address to the named Head.
 
 Example Payload:
 ``` json
-{"headCommit_participant":"addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp","headCommit_name":"test"}
+{
+  "headCommit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
+  "headCommit_name": "test"
+}
 ```
 
 ### Add Funds
@@ -117,7 +133,11 @@ Get a CIP-30 compatible CBOR transaction that will fund your Proxy Address.
 
 Example Response:
 ``` json
-{"cborHex":"86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6","type":"TxBodyBabbage","description":""}
+{
+  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
+  "type": "TxBodyBabbage",
+  "description": ""
+}
 ```
 
 ### Add Fuel
@@ -128,8 +148,81 @@ Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Pr
 
 Example Response:
 ``` json
-{"cborHex":"86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6","type":"TxBodyBabbage","description":""}
+{
+  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
+  "type": "TxBodyBabbage",
+  "description": ""
+}
 ```
+
+### Send funds on Head
+
+`POST /hydra/submit-tx/:cardano-address`
+
+Send funds from your Proxy Address to another participant identified by their L1 Address.
+
+Example Payload:
+``` json
+{
+  "headSubmitTx_name": "test",
+  "headSubmitTx_toAddr": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
+  "amount": 1000000
+}
+```
+
+### Query head funds
+
+`GET /hydra/head-balance/:head-name/:cardano-address`
+
+Get the amount of Lovelace available on the head at your (Proxy) Address.
+
+Example Response:
+``` json
+10000000
+```
+
+### Close
+
+`POST /hydra/close/:head-name`
+
+Close the head.
+
+Example Response:
+``` json
+{
+  "headStatus_name": "test",
+  "headStatus_running": true,
+  "headStatus_status": "Status_Closed"
+}
+```
+
+
+### Withdraw
+
+`POST /hydra/withdraw/`
+
+Withdraw funds from your Proxy Address to your main address.
+
+Example Payload:
+
+``` json
+{
+  "withdraw_address": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
+  "withdraw_amount": "5000000"
+}
+```
+
+### Query L1 funds
+
+`GET /hydra/l1-balance/:cardano-address`
+
+Get the amount of Lovelace available on the head at your (Proxy) Address.
+
+Example Response:
+``` json
+10000000
+```
+
 
 ## 🦾 Proxy Addresses
 
