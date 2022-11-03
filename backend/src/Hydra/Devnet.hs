@@ -101,9 +101,6 @@ getTestAddressKeys addr = do
         root = "addr_" <> show n <> ".cardano."
     path = addressesPath
 
-ada :: Int -> Lovelace
-ada n = n * 1000000
-
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
 

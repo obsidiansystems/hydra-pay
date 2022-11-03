@@ -19,6 +19,12 @@ type Lovelace = Int
 type TxIn = T.Text
 type WholeUTXO = Map TxIn TxInInfo
 
+ada :: Num a => a -> a
+ada = (* 1000000)
+
+lovelaceToAda :: Int -> Float
+lovelaceToAda n = fromIntegral n / 1000000
+
 filterOutFuel :: WholeUTXO -> WholeUTXO
 filterOutFuel = Map.filter (not . isFuel)
 

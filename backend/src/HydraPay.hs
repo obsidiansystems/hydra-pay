@@ -617,9 +617,12 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
-        TxValid tx -> pure . Just $ Right ()
-        ServerOutput.TxInvalid utxo tx validationError -> pure . Just $ (Left (HydraPay.TxInvalid utxo tx validationError))
+        TxValid tx ->
+          pure . Just $ Right ()
+        ServerOutput.TxInvalid utxo tx validationError ->
+          pure . Just $ (Left (HydraPay.TxInvalid utxo tx validationError))
         _ -> pure Nothing
+
 
 
 

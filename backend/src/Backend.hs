@@ -12,6 +12,7 @@ where
 
 import Prelude hiding (filter)
 
+import Hydra.Types
 import Hydra.Devnet
 
 import Common.Route
@@ -38,6 +39,7 @@ import Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 
 import HydraPay
+import HydraPay.Client
 import CardanoNodeInfo
 import Control.Monad ((<=<))
 
@@ -133,7 +135,7 @@ backend = Backend
                         Right txid -> writeLBS $ Aeson.encode txid
                         Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
-                HydraPayRoute_SubmitTx :/ addr -> do
+                HydraPayRoute_SubmitTx :/ addr ->
                   handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . submitTxOnHead state addr)
 
                 HydraPayRoute_Head :/ () -> do
@@ -152,6 +154,27 @@ backend = Backend
                 addrs <- liftIO $ T.lines <$> T.readFile "devnet/addresses"
                 writeLBS $ Aeson.encode addrs
                 pure ()
+
+              BackendRoute_DemoFundInit :/ () -> do
+                liftIO $ do
+                  getAndSubmitTx devnetDefaultInfo 1 Funds (ada 1000)
+                  getAndSubmitTx devnetDefaultInfo 1 Fuel (ada 100)
+                  getAndSubmitTx devnetDefaultInfo 2 Funds (ada 1000)
+                  getAndSubmitTx devnetDefaultInfo 2 Fuel (ada 100)
+
+                  postCreateHead "demo" [1..2]
+
+                  threadDelay 1000000
+
+                  postInitHead "demo" 1
+
+                  threadDelay 3000000
+
+                  postCommitHead "demo" 1
+                  postCommitHead "demo" 2
+
+                  threadDelay 1000000
+                writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
