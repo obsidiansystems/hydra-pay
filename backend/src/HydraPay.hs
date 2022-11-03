@@ -404,14 +404,8 @@ isFuelType Fuel = True
 isFuelType _ = False
 
 
-newtype HeadBalance = HeadBalance { _headBalance_name :: HeadName }
-  deriving(Eq, Show, Generic)
-
-instance ToJSON HeadBalance
-instance FromJSON HeadBalance
-
-headBalance :: (MonadIO m) => State -> Address -> HeadBalance -> m (Either HydraPayError Lovelace)
-headBalance state addr (HeadBalance name) = do
+headBalance :: (MonadIO m) => State -> T.Text -> Address -> m (Either HydraPayError Lovelace)
+headBalance state name addr = do
   withNode state name addr $ \node proxyAddr -> do
     utxos <- getNodeUtxos node proxyAddr
     let

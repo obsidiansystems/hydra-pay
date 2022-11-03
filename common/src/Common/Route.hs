@@ -44,7 +44,7 @@ data HydraPayRoute :: * -> * where
   HydraPayRoute_Commit :: HydraPayRoute ()
   HydraPayRoute_Close :: HydraPayRoute Text
   HydraPayRoute_SubmitTx :: HydraPayRoute Text
-  HydraPayRoute_HeadBalance :: HydraPayRoute Text
+  HydraPayRoute_HeadBalance :: HydraPayRoute (Text :. Text)
   HydraPayRoute_L1Balance :: HydraPayRoute Text
 
 hydraPayRouteEncoder ::( MonadError Text check
@@ -61,13 +61,15 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Withdraw -> PathSegment "withdraw" $ unitEncoder mempty
   HydraPayRoute_Close -> PathSegment "close" singlePathSegmentEncoder
   HydraPayRoute_SubmitTx -> PathSegment "submit-tx" singlePathSegmentEncoder
-  HydraPayRoute_HeadBalance -> PathSegment "head-balance" singlePathSegmentEncoder
+  HydraPayRoute_HeadBalance -> PathSegment "head-balance" $ pathParamEncoder id $ singlePathSegmentEncoder
   HydraPayRoute_L1Balance -> PathSegment "l1-balance" singlePathSegmentEncoder
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Setup :: FrontendRoute ()
   FrontendRoute_OpenChannel :: FrontendRoute ()
   FrontendRoute_PaymentChannel :: FrontendRoute ()
+  FrontendRoute_OpeningChannel :: FrontendRoute ()
+  FrontendRoute_SendFunds :: FrontendRoute ()
   -- This type is used to define frontend routes, i.e. ones for which the backend will serve the frontend.
 
 fullRouteEncoder
