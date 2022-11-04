@@ -30,6 +30,9 @@ import Network.WebSockets.Client
 import qualified Network.WebSockets.Connection as WS
 
 import Control.Concurrent
+import Data.Time (getCurrentTime, diffUTCTime)
+import Data.Time.Clock.Compat (nominalDiffTimeToSeconds)
+import Data.Fixed
 
 import Data.Text.Prettyprint.Doc
 import Control.Monad.Log
@@ -162,6 +165,11 @@ l1Balance state addr = do
     fullAmount = sum txInAmounts
   pure fullAmount
 
+-- | The balance of the proxy address associated with the address given
+getTotalFunds :: (MonadIO m) => State -> Address -> m Lovelace
+getTotalFunds state addr = do
+  (proxyAddr, _) <- addOrGetKeyInfo state addr
+  l1Balance state proxyAddr
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
 buildAddTx txType state fromAddr amount = do
@@ -339,7 +347,7 @@ getNodeUtxos node proxyAddr = do
       _ -> pure Nothing
 
 
-submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError ())
+submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError Pico)
 submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
   withNode state name addr $ \node proxyAddr -> do
     c <- liftIO $ _node_get_listen_chan node
@@ -351,17 +359,19 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     signedTxJsonStr <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
     let jsonTx :: Aeson.Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . LBS.pack $ signedTxJsonStr
     let txCborHexStr = fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
+
+    startTime <- liftIO $ getCurrentTime
     liftIO $ _node_send_msg node $ NewTx . T.pack $ txCborHexStr
     -- TODO: Could we make sure we saw the transaction that we sent and not another one?
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
-        TxValid tx ->
-          pure . Just $ Right ()
+        TxValid tx -> do
+          endTime <- liftIO $ getCurrentTime
+          pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
         ServerOutput.TxInvalid utxo tx validationError ->
           pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
         _ -> pure Nothing
-
 
 
 terminateHead :: (MonadIO m) => State -> HeadName -> m ()

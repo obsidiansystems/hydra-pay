@@ -101,6 +101,13 @@ getDevnetAddress i = do
   addrs <- getDevnetAddresses [i]
   pure $ join $ headMay <$> addrs
 
+postWithdrawalFullBalance :: Int -> IO ()
+postWithdrawalFullBalance i = do
+  Just addr <- getDevnetAddress i
+  req <- parseRequest $ "http://localhost:8000/hydra/funds/" <> T.unpack addr
+  balance :: Lovelace <- getResponseBody <$> httpJSON req
+  postWithdrawal i balance
+
 postWithdrawal :: Int -> Lovelace -> IO ()
 postWithdrawal i amount = do
   Just addr <- getDevnetAddress i

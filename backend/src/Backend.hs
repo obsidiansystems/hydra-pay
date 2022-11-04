@@ -137,7 +137,7 @@ backend = Backend
                         Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
                 HydraPayRoute_SubmitTx :/ addr ->
-                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . submitTxOnHead state addr)
+                  handleJsonRequestBody ((fmap . fmap) Just . submitTxOnHead state addr)
 
                 HydraPayRoute_Head :/ () -> do
                   handleJsonRequestBody $
@@ -151,10 +151,22 @@ backend = Backend
 
                 HydraPayRoute_L1Balance :/ addr -> do
                   writeLBS . Aeson.encode =<< l1Balance state addr
+
+                HydraPayRoute_Funds :/ addr -> do
+                  writeLBS . Aeson.encode =<< getTotalFunds state addr
+
               BackendRoute_DemoAddresses :/ () -> do
                 addrs <- liftIO $ T.lines <$> T.readFile "devnet/addresses"
                 writeLBS $ Aeson.encode addrs
                 pure ()
+
+              BackendRoute_DemoCloseFanout :/ () -> do
+                liftIO $ do
+                  postCloseHead "demo"
+                  threadDelay 12000000
+                  postWithdrawalFullBalance 1
+                  postWithdrawalFullBalance 2
+                  threadDelay 30000
 
               BackendRoute_DemoFundInit :/ () -> do
                 liftIO $ do
@@ -167,7 +179,7 @@ backend = Backend
 
                   threadDelay 1000000
 
-                  postInitHead "demo" 1
+                  postInitHeadCustomContestation 3 "demo" 1
 
                   threadDelay 3000000
 

@@ -47,6 +47,8 @@ library
                , stm
                , monad-loops
                , mtl
+               , time
+               , time-compat
 
   default-extensions:
     OverloadedStrings
