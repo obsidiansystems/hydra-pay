@@ -42,6 +42,7 @@ import HydraPay
 import HydraPay.Client
 import CardanoNodeInfo
 import Control.Monad ((<=<))
+import HydraPay.Api
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do

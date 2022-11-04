@@ -25,6 +25,7 @@ import Data.Traversable
 
 import qualified Data.Aeson as Aeson
 import CardanoNodeInfo
+import HydraPay.Api
 
 testFanout :: CardanoNodeInfo -> T.Text -> IO ()
 testFanout cninfo name = do

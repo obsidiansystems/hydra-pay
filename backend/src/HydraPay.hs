@@ -78,6 +78,8 @@ import Hydra.Types
 import Hydra.Devnet
 import Hydra.ClientInput
 
+import HydraPay.Api
+
 import qualified Hydra.Types as HT
 import CardanoNodeInfo
 import Hydra.ServerOutput as ServerOutput
@@ -197,75 +199,10 @@ getKeyPath = do
 -- TODO: All these action which are about a named head repeat this
 -- fact. Use structure to aid code reuse and help to see patterns.
 
-data HeadCreate = HeadCreate
-  { headCreate_name :: HeadName
-  , headCreate_participants :: [Address]
-  , headCreate_startNetwork :: Bool
-  }
-  deriving (Generic)
-
-instance ToJSON HeadCreate
-instance FromJSON HeadCreate
-
-data HeadInit = HeadInit
-  { headInit_name :: HeadName
-  , headInit_participant :: Address
-  , headInit_contestation :: Int
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON HeadInit
-instance FromJSON HeadInit
-
-data HeadCommit = HeadCommit
-  { headCommit_name :: HeadName
-  , headCommit_participant :: T.Text
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON HeadCommit
-instance FromJSON HeadCommit
-
-data HeadSubmitTx = HeadSubmitTx
-  { headSubmitTx_name :: HeadName
-  , headSubmitTx_toAddr :: Address
-  , amount :: Lovelace
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON HeadSubmitTx
-instance FromJSON HeadSubmitTx
 
 withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
--- This is the API json type that we need to send back out
-data HeadStatus = HeadStatus
-  { headStatus_name :: HeadName
-  , headStatus_running :: Bool
-  , headStatus_status :: Status
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON HeadStatus
-instance FromJSON HeadStatus
-
-data HydraPayError
-  = InvalidPayload
-  | HeadCreationFailed
-  | NotEnoughParticipants
-  | HeadExists HeadName
-  | HeadDoesn'tExist
-  | NetworkIsn'tRunning
-  | FailedToBuildFundsTx
-  | NotAParticipant
-  | InsufficientFunds
-  | FanoutNotPossible
-  | TxInvalid {utxo :: WholeUTXO, transaction :: Value, validationError :: ValidationError}
-  deriving (Eq, Show, Generic)
-
-instance ToJSON HydraPayError
-instance FromJSON HydraPayError
 
 {-
 What does it mean to get the head status?
@@ -314,8 +251,6 @@ dbProxyToHydraKeyInfo pa = keyInfo
       (mkKeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
       (mkKeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
 
-type HeadName = T.Text
-
 -- | State we need to run/manage Heads
 data State = State
   { _state_hydraInfo :: HydraSharedInfo
@@ -337,19 +272,6 @@ data Head = Head
   , _head_status :: Status
   -- ^ The participants list with proxy addresses and not owner addresses
   }
-
-data Status
-  = Status_Pending
-  | Status_Init
-  | Status_Committing
-  | Status_Open
-  | Status_Closed
-  | Status_Fanout
-  | Status_Finalized
-  deriving (Eq, Show, Generic)
-
-instance ToJSON Status
-instance FromJSON Status
 
 -- | A Hydra Node running as part of a network
 data Node = Node
@@ -620,7 +542,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
         TxValid tx ->
           pure . Just $ Right ()
         ServerOutput.TxInvalid utxo tx validationError ->
-          pure . Just $ (Left (HydraPay.TxInvalid utxo tx validationError))
+          pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
         _ -> pure Nothing
 
 

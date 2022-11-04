@@ -14,7 +14,7 @@ where
 import Prelude hiding (filter)
 
 import Hydra.Types
-import HydraPay
+import HydraPay.Api
 
 import Text.Read (readMaybe)
 import Text.Printf (printf)
