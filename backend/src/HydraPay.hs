@@ -317,6 +317,7 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   when headExists $ throwError $ HeadExists name
   let head = Head name (Set.fromList participants) Status_Pending
   liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
+  startNetwork state head
   pure head
 
 data HydraTxError =
