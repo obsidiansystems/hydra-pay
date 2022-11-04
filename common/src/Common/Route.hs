@@ -50,6 +50,8 @@ data HydraPayRoute :: * -> * where
   HydraPayRoute_L1Balance :: HydraPayRoute Text
   HydraPayRoute_Funds :: HydraPayRoute (Text)
 
+  HydraPayRoute_Api :: HydraPayRoute ()
+
 hydraPayRouteEncoder ::( MonadError Text check
                        , MonadError Text parse
                        )
@@ -67,6 +69,7 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_HeadBalance -> PathSegment "head-balance" $ pathParamEncoder id $ singlePathSegmentEncoder
   HydraPayRoute_L1Balance -> PathSegment "l1-balance" singlePathSegmentEncoder
   HydraPayRoute_Funds -> PathSegment "funds" singlePathSegmentEncoder
+  HydraPayRoute_Api -> PathSegment "api" $ unitEncoder mempty
 
 data FrontendRoute :: * -> * where
   FrontendRoute_Setup :: FrontendRoute ()

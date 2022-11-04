@@ -11,6 +11,7 @@ import Data.List (intercalate)
 import Hydra.Devnet
 import Hydra.Types
 import HydraPay
+import HydraPay.WebSocket
 import Network.HTTP.Client
 import Network.HTTP.Simple
 
@@ -190,20 +191,10 @@ getStatus_ = void . getStatus
 getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> Lovelace -> IO ()
 getAndSubmitTx cninfo i tt amount = do
   Just [addr] <- getDevnetAddresses [i]
-  let
-    endpoint = case tt of
-      Fuel -> "add-fuel"
-      Funds -> "add-funds"
-
-  req <- parseRequest $ intercalate "/" ["http://localhost:8000/hydra"
-                                        , endpoint
-                                        , T.unpack addr
-                                        , show amount
-                                        ]
-  resp <- getResponseBody <$> httpJSON req
-  LBS.putStrLn $ "Received Tx: " <> Aeson.encode resp
-  signAndSubmitTx cninfo addr resp
-  pure ()
+  resp <- getAddFundsTx addr amount
+  case resp of
+    Nothing -> putStrLn "Failed to get Tx"
+    Just tx -> signAndSubmitTx cninfo addr tx
 
 signAndSubmitTx :: CardanoNodeInfo -> Address -> Tx -> IO ()
 signAndSubmitTx cninfo addr tx = do

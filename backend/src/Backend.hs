@@ -40,9 +40,14 @@ import qualified Data.ByteString.Lazy as LBS
 
 import HydraPay
 import HydraPay.Client
+import HydraPay.WebSocket
 import CardanoNodeInfo
-import Control.Monad ((<=<))
+
 import HydraPay.Api
+import Control.Monad ((<=<), forever)
+
+import Network.WebSockets.Snap
+import qualified Network.WebSockets as WS
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
@@ -154,6 +159,17 @@ backend = Backend
 
                 HydraPayRoute_Funds :/ addr -> do
                   writeLBS . Aeson.encode =<< getTotalFunds state addr
+
+                HydraPayRoute_Api :/ () -> do
+                  runWebSocketsSnap $ \pendingConn -> do
+                    conn <- WS.acceptRequest pendingConn
+                    WS.forkPingThread conn 30
+                    forever $ do
+                      mClientMsg <- Aeson.decode <$> WS.receiveData conn
+                      case mClientMsg of
+                        Just clientMsg -> handleTaggedMessage state clientMsg >>= WS.sendTextData conn . Aeson.encode
+                        Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+                  pure ()
 
               BackendRoute_DemoAddresses :/ () -> do
                 addrs <- liftIO $ T.lines <$> T.readFile "devnet/addresses"
