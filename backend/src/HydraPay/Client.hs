@@ -119,7 +119,7 @@ postCreateHead name indices = do
   Just addresses <- getDevnetAddresses indices
   initReq <- parseRequest $ "http://localhost:8000/hydra/heads"
   let
-    payload = Aeson.encode $ HeadCreate name addresses True
+    payload = Aeson.encode $ HeadCreate name addresses
     req = setRequestBodyLBS payload $ initReq
       { method = "POST"
       }

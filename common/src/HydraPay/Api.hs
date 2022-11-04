@@ -14,7 +14,6 @@ type HeadName = T.Text
 data HeadCreate = HeadCreate
   { headCreate_name :: HeadName
   , headCreate_participants :: [Address]
-  , headCreate_startNetwork :: Bool
   }
   deriving (Generic)
 

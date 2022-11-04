@@ -306,7 +306,7 @@ commitToHead state (HeadCommit name addr) = do
     pure $ Right ()
 
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
-createHead state (HeadCreate name participants start) = do
+createHead state (HeadCreate name participants) = do
   case null participants of
     True -> pure $ Left NotEnoughParticipants
     False -> do
@@ -317,7 +317,7 @@ createHead state (HeadCreate name participants start) = do
           let head = Head name (Set.fromList participants) Status_Pending
           liftIO $ for participants $ putStrLn . T.unpack
           liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
-          when start $ void $ startNetwork state head
+          void $ startNetwork state head
           pure $ Right head
 
 data HydraTxError =

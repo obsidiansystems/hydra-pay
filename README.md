@@ -69,7 +69,8 @@ Foundational:
 
 `POST /hydra/heads`
 
-To create a Head you will give it a friendly name and list the addresses that will become the participants. You can choose to start the network of hydra-nodes or not by setting startNetwork accordingly.
+To create a Head you will give it a friendly name and list the addresses that will become the participants.
+Creating the head starts the Hydra network.
 
 Example payload:
 ``` json
@@ -78,7 +79,6 @@ Example payload:
   "headCreate_participants": [
     "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
   ],
-  "headCreate_startNetwork": true
 }
 ```
 
