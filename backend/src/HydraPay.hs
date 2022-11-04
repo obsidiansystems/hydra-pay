@@ -9,34 +9,6 @@
 
 module HydraPay where
 
-{-
-What is the path of head creation?
-Init requires funds, and it requires that people
-
-In simple terms we just need a list of participants
-because we need to setup the nodes, then we need to init as one of the participants
-
-The issue here is each participant needs fuel, and each participant needs a cardano key
-and a hydra key.
-
-As part of our usecase we can't have people entering their seed phrases. Which means
-until we have external de/commit, we must use proxy addresses that the user can send funds to
-this means that we likely have to provide endpoints to make this convenient!
-
-So in essence creating a head is providing a list of addresses and participants
-These addresses and participants will need to have fuel and fund things, and this
-
-What is a Head?
-A collection of nodes that may have state on L1
-HeadId exists on-chain
-
-Creating a head means sending the participant list
-
-The backend needs to prepare translated addresses for each participant
-
-State Management:
-
--}
 import Prelude hiding ((.))
 import Control.Category ((.))
 import System.Process
@@ -51,12 +23,7 @@ import Data.Set (Set)
 import qualified Data.Map as Map
 import Data.Aeson ((.:))
 import Data.Aeson as Aeson
-import Data.Proxy
-import Data.Pool
 import Data.Maybe
-import Database.Beam
-import Database.Beam.Postgres
-import qualified Database.Beam.AutoMigrate as BA
 import Data.String.Interpolate ( i, iii )
 import System.IO (IOMode(WriteMode), openFile)
 import Network.WebSockets.Client
@@ -67,8 +34,6 @@ import Control.Concurrent
 import Data.Text.Prettyprint.Doc
 import Control.Monad.Log
 import System.Directory
-
-import Gargoyle.PostgreSQL.Connect
 
 import Data.Traversable
 
@@ -88,105 +53,8 @@ import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
+import Control.Monad.IO.Class
 
-type HeadId = Int
-
-data ProxyAddressesT f = ProxyAddress
-  { proxyAddress_ownerAddress :: Columnar f T.Text
-  , proxyAddress_address :: Columnar f T.Text
-
-  , proxyAddress_cardanoVerificationKey :: Columnar f T.Text
-  , proxyAddress_cardanoSigningKey :: Columnar f T.Text
-  , proxyAddress_hydraVerificationKey :: Columnar f T.Text
-  , proxyAddress_hydraSigningKey :: Columnar f T.Text
-  }
-  deriving (Generic, Beamable)
-
-data HeadsT f = DbHead
-  { head_name :: Columnar f T.Text
-  , head_state :: Columnar f T.Text
-  }
-  deriving (Generic, Beamable)
-
--- NOTE So beam doesn't have many to many or uniqueness constraints
--- we would have to use beam-migrate or beam-automigrate to include these things as
--- they are properites of the database.
-data HeadParticipantsT f = HeadParticipant
-  { headParticipant_head :: PrimaryKey HeadsT f
-  , headParticipant_proxy :: PrimaryKey ProxyAddressesT f
-  }
-  deriving (Generic, Beamable)
-
-type ProxyAddress = ProxyAddressesT Identity
-
-data HydraDB f = HydraDB
-  { hydraDb_proxyAddresses :: f (TableEntity ProxyAddressesT)
-  , hydraDb_heads :: f (TableEntity HeadsT)
-  , hydraDb_headParticipants :: f (TableEntity HeadParticipantsT)
-  }
-  deriving (Generic, Database be)
-
-instance Table ProxyAddressesT where
-  data PrimaryKey ProxyAddressesT f = ProxyAddressID (Columnar f T.Text)
-    deriving (Generic, Beamable)
-  primaryKey = ProxyAddressID . proxyAddress_ownerAddress
-
-instance Table HeadsT where
-  data PrimaryKey HeadsT f = HeadID (Columnar f T.Text)
-    deriving (Generic, Beamable)
-  primaryKey = HeadID . head_name
-
-instance Table HeadParticipantsT where
-  data PrimaryKey HeadParticipantsT f = HeadParticipantID (PrimaryKey HeadsT f) (PrimaryKey ProxyAddressesT f)
-    deriving (Generic, Beamable)
-  primaryKey = HeadParticipantID <$> headParticipant_head <*> headParticipant_proxy
-
-hydraDb :: DatabaseSettings Postgres HydraDB
-hydraDb = defaultDbSettings
-
-hydraDbAnnotated :: BA.AnnotatedDatabaseSettings Postgres HydraDB
-hydraDbAnnotated = BA.defaultAnnotatedDbSettings hydraDb
-
-hsSchema :: BA.Schema
-hsSchema = BA.fromAnnotatedDbSettings hydraDbAnnotated (Proxy @'[])
-
-hydraShowMigration :: Connection -> IO ()
-hydraShowMigration conn =
-  runBeamPostgres conn $ BA.printMigration $ BA.migrate conn hsSchema
-
-hydraAutoMigrate :: Connection -> IO ()
-hydraAutoMigrate = BA.tryRunMigrationsWithEditUpdate hydraDbAnnotated
-
-withHydraPool :: (Pool Connection -> IO a) -> IO a
-withHydraPool action = withDb "db" $ \pool -> do
-  withResource pool $ \conn -> do
-    hydraShowMigration conn
-    hydraAutoMigrate conn
-  action pool
-
-proxyAddressExists :: Connection -> Address -> IO Bool
-proxyAddressExists conn addr = do
-  fmap isJust $ runBeamPostgres conn $ runSelectReturningOne $ select $ do
-    pa <- all_ (hydraDb_proxyAddresses hydraDb)
-    guard_ $ proxyAddress_ownerAddress pa ==. val_ addr
-    pure pa
-
-addProxyAddress :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> Address -> Connection -> m ()
-addProxyAddress cninf addr conn = do
-  path <- liftIO getKeyPath
-  keyInfo <- generateKeysIn $ T.unpack addr
-
-  let
-    cvk = getVerificationKeyFilePath $ _verificationKey . _cardanoKeys $ keyInfo
-    csk = getSigningKeyFilePath $ _signingKey . _cardanoKeys $ keyInfo
-    hvk = getVerificationKeyFilePath $ _verificationKey . _hydraKeys $ keyInfo
-    hsk = getSigningKeyFilePath $ _signingKey . _hydraKeys $ keyInfo
-
-  cardanoAddress <- liftIO $ getCardanoAddress cninf $ _verificationKey . _cardanoKeys $ keyInfo
-
-  liftIO $ runBeamPostgres conn $ runInsert $ insert (hydraDb_proxyAddresses hydraDb) $
-    insertValues [ProxyAddress addr cardanoAddress (T.pack cvk) (T.pack csk) (T.pack hvk) (T.pack hsk)]
-  pure ()
 
 -- | The location where we store cardano and hydra keys
 getKeyPath :: IO FilePath
@@ -196,60 +64,9 @@ getKeyPath = do
   where
     path = "keys"
 
--- TODO: All these action which are about a named head repeat this
--- fact. Use structure to aid code reuse and help to see patterns.
-
-
 withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
-
-{-
-What does it mean to get the head status?
-
-Check if the network is running
-Fetch status as last seen from the database
-Scan the logs to actually have the network state
--}
-
-{-
-What does it mean to create a head?
-Really just to list the participants and record that as a head that may exist
-the Head could also be called created when it is actually initialized on L1
-so we should have the different parts of getting to the init state
-
-So creation in HydraPay terms is simply the intent to actually have one of these heads
-To get to init a couple of things need to happen:
-
-- Funds need to be sent to the proxy addresses: this constitutes an endpoint for getting the transaction
-that will do this?
-
-- Then we have to ensure everybody has Fuel outputs so that is likely another endpoint thing or maybe
-they can be combined
-
-- After that somebody just has to send in "Init" which is one of the valid operations you can do to your node
-that request should be routed automatically
-
-- Starting and stopping heads should be more or less automatic, we shouldn't worry about that for now
-for now creating a head is analogous to running one, but we should be able to run a head by just
--}
-
-getProxyAddressKeyInfo :: MonadIO m => Connection -> Address -> m (Maybe HydraKeyInfo)
-getProxyAddressKeyInfo conn addr = liftIO $ do
-  mpa <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
-    pa <- all_ (hydraDb_proxyAddresses hydraDb)
-    guard_ $ proxyAddress_ownerAddress pa ==. val_ addr
-    pure pa
-  pure $ dbProxyToHydraKeyInfo <$> mpa
-
-
-dbProxyToHydraKeyInfo :: ProxyAddress -> HydraKeyInfo
-dbProxyToHydraKeyInfo pa = keyInfo
-  where
-    keyInfo =
-      HydraKeyInfo
-      (mkKeyPair (T.unpack $ proxyAddress_cardanoSigningKey pa) (T.unpack $ proxyAddress_cardanoVerificationKey pa))
-      (mkKeyPair (T.unpack $ proxyAddress_hydraSigningKey pa) (T.unpack $ proxyAddress_hydraVerificationKey pa))
 
 -- | State we need to run/manage Heads
 data State = State
