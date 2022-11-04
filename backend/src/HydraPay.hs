@@ -54,6 +54,7 @@ import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
 import Control.Monad.IO.Class
+import Control.Monad.Except
 
 
 -- | The location where we store cardano and hydra keys
@@ -305,20 +306,18 @@ commitToHead state (HeadCommit name addr) = do
     liftIO $ _node_send_msg node $ Commit proxyFunds
     pure $ Right ()
 
+
+-- | Create a head by starting a Hydra network.
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
-createHead state (HeadCreate name participants) = do
-  case null participants of
-    True -> pure $ Left NotEnoughParticipants
-    False -> do
-      mHead <- lookupHead state name
-      case mHead of
-        Just _ -> pure $ Left $ HeadExists name
-        Nothing -> do
-          let head = Head name (Set.fromList participants) Status_Pending
-          liftIO $ for participants $ putStrLn . T.unpack
-          liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
-          void $ startNetwork state head
-          pure $ Right head
+createHead state (HeadCreate name participants) = runExceptT $ do
+  when (null participants) $ throwError NotEnoughParticipants
+  -- FIXME(parenthetical): I think there are concurrency issues here?
+  -- What if createHead is called twice quickly?
+  headExists <- isJust <$> lookupHead state name
+  when headExists $ throwError $ HeadExists name
+  let head = Head name (Set.fromList participants) Status_Pending
+  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
+  pure head
 
 data HydraTxError =
   HydraTxNotSeen

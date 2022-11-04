@@ -46,6 +46,7 @@ library
                , temporary
                , stm
                , monad-loops
+               , mtl
 
   default-extensions:
     OverloadedStrings
