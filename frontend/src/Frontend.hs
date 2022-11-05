@@ -112,14 +112,10 @@ frontend = Frontend
                       text "ADA"
 
                   elClass "div" "flex flex-row text-gray-400" $ do
-                    elClass "div" "flex flex-col mr-4" $ do
-                      elClass "div" "text-xs" $ text "Fee"
-                      elClass "div" "" $ text "0 ADA"
-
                     elClass "div" "flex flex-col" $ do
                       elClass "div" "text-xs" $ text "Time"
                       elClass "div" "" $ do
-                        dynText $ T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (/1000000000) . demoTx_time <$> tx
+                        dynText $ showAsMs . demoTx_time <$> tx
                         text "ms"
               pure $ () <$ removeThisPopup
 
@@ -144,6 +140,9 @@ data DemoTx = DemoTx
   , demoTx_time :: Pico
   }
   deriving (Eq, Show)
+
+showAsMs :: Pico -> T.Text
+showAsMs = T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (*100)
 
 appView ::
   ( Reflex t
@@ -359,69 +358,101 @@ appView bobAddress aliceAddress latestTxs = do
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
 
-      -- Balances
-      elClass "div" "text-2xl mb-2 font-semibold mt-8" $ do
-        text "Balances "
-        elClass "span" "text-sm" $ text "In payment channel"
-
-      (bobBalance, aliceBalance) <- elClass "div" "flex flex-row mt-4" $ do
-        let
-          headBalanceWidget name addr =
-            elClass "div" "text-lg flex flex-col mr-10" $ do
-              elClass "div" "font-semibold" $ text name
-              -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-              balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
-                Nothing -> pure $ constDyn 0
-                Just addr -> prerender (pure $ constDyn 0) $ mdo
-                  addrLoad <- getPostBuild
-                  balanceResult :: Event t (Maybe (Either HydraPayError Int)) <- getAndDecode $ "/hydra/head-balance/demo/" <> addr <$ leftmost [addrLoad, reqFailed]
-                  let
-                    gotBalance = fmapMaybe (preview (_Just . _Right)) balanceResult
-                    reqFailed = fmapMaybe (preview _Nothing) balanceResult
-
-                  mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
-
-                  dyn_ $ ffor mBalance $ \case
-                    Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                    Just balance -> do
-                      text $ T.pack . printf "%.2f" $ balance
-                      text " ADA"
-
-                  pure $ maybe 0 id <$> mBalance
-
-              balanceDyn <- join <$> holdDyn (pure 0) balanceDynChanged
-              pure $ balanceDyn
-
-        bb <- headBalanceWidget "Bob" bobAddress
-        ab <- headBalanceWidget "Alice" aliceAddress
-        pure (bb, ab)
-
-      -- Divider
-      elClass "div" "mt-2 w-full h-px bg-gray-200" blank
-
-      -- Statistics
-      elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "Statistics"
+      elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "L1 Balance"
 
       elClass "div" "flex flex-row mt-4" $ do
-        elClass "div" "mr-16" $ do
-          elClass "div" "text-lg font-semibold" $ text "Total Transactions"
-          elClass "div" "text-3xl text-gray-600" $ text "0"
+        elClass "div" "text-lg flex flex-col mr-10" $ do
+          elClass "div" "font-semibold" $ text "Bob"
+          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
+          elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
+            Nothing -> pure ()
+            Just addr -> prerender_ blank $ do
+              addrLoad <- getPostBuild
+              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
+              dyn_ $ ffor mBalance $ \case
+                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
+                Just balance -> do
+                  text $ T.pack . printf "%.2f" $ balance
+                  text " ADA"
 
-        elClass "div" "mr-16" $ do
-          elClass "div" "text-lg font-semibold" $ text "Total Time"
-          elClass "div" "text-3xl text-gray-600" $ text "0ms"
-
-        elClass "div" "" $ do
-          elClass "div" "text-lg font-semibold" $ text "Total Fees"
-          elClass "div" "text-3xl text-gray-600" $ do
-            text "0"
-            elClass "span" "text-xl text-gray-600 font-semibold" $ text "ADA"
+        elClass "div" "text-lg flex flex-col mr-10" $ do
+          elClass "div" "font-semibold" $ text "Alice"
+          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
+          elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
+            Nothing -> pure ()
+            Just addr -> prerender_ blank $ do
+              addrLoad <- getPostBuild
+              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
+              dyn_ $ ffor mBalance $ \case
+                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
+                Just balance -> do
+                  text $ T.pack . printf "%.2f" $ balance
+                  text " ADA"
 
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
 
-      -- Action buttons: Send & Automate
+      -- Balances
+      elClass "div" "text-2xl mb-2 font-semibold mt-8" $ do
+        text "Payment Channel Balance"
+
       rec
+        (bobBalance, aliceBalance) <- elClass "div" "flex flex-row mt-4" $ do
+          let
+            headBalanceWidget name addr refetch =
+              elClass "div" "text-lg flex flex-col mr-10" $ do
+                elClass "div" "font-semibold" $ text name
+                -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
+                balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
+                  Nothing -> pure $ constDyn 0
+                  Just addr -> prerender (pure $ constDyn 0) $ mdo
+                    addrLoad <- getPostBuild
+                    balanceResult :: Event t (Maybe (Either HydraPayError Int)) <- getAndDecode $ "/hydra/head-balance/demo/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
+                    let
+                      gotBalance = fmapMaybe (preview (_Just . _Right)) balanceResult
+                      reqFailed = fmapMaybe (preview _Nothing) balanceResult
+
+                    mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
+
+                    dyn_ $ ffor mBalance $ \case
+                      Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
+                      Just balance -> do
+                        text $ T.pack . printf "%.2f" $ balance
+                        text " ADA"
+
+                    pure $ maybe 0 id <$> mBalance
+
+                balanceDyn <- join <$> holdDyn (pure 0) balanceDynChanged
+                pure $ balanceDyn
+
+          bb <- headBalanceWidget "Bob" bobAddress autoTx
+          ab <- headBalanceWidget "Alice" aliceAddress autoTx
+          pure (bb, ab)
+
+        -- Divider
+        elClass "div" "mt-2 w-full h-px bg-gray-200" blank
+
+        -- Statistics
+        elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "Statistics"
+
+        elClass "div" "flex flex-row mt-4" $ do
+          elClass "div" "mr-16" $ do
+            elClass "div" "text-lg font-semibold" $ text "Total Transactions"
+            elClass "div" "text-3xl text-gray-600" $ dynText $ T.pack . show . Map.size <$> latestTxs
+
+          elClass "div" "mr-16" $ do
+            elClass "div" "text-lg font-semibold" $ text "Total Time"
+            elClass "div" "text-3xl text-gray-600" $ do
+              dynText $ showAsMs . Map.foldr ((+) . demoTx_time) 0 <$> latestTxs
+              text "ms"
+
+        -- Divider
+        elClass "div" "mt-2 w-full h-px bg-gray-200" blank
+
+        -- Action buttons: Send & Automate
+      
         routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
         (automateButton, _) <- elClass' "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ dynText $ ffor automating $ \case
           True -> "Automating"
@@ -432,39 +463,39 @@ appView bobAddress aliceAddress latestTxs = do
 
         automating <- foldDyn ($) False $ not <$ toggleAutomate
 
-      autoTxEv <- dyn $ ffor automating $ \case
-        False -> pure never
-        True -> fmap switchDyn $ prerender (pure never) $ do
-          tick <- tickLossyFromPostBuildTime 1
-          randomAmount :: Event t Lovelace <- performEvent $ (liftIO $ ada <$> randomRIO (1,10)) <$ tick
-          let
-            nextToAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
-              if bb > ab then aliceAddress else bobAddress
+        autoTxEv <- dyn $ ffor automating $ \case
+          False -> pure never
+          True -> fmap switchDyn $ prerender (pure never) $ do
+            tick <- tickLossyFromPostBuildTime 1
+            randomAmount :: Event t Lovelace <- performEvent $ (liftIO $ ada <$> randomRIO (1,10)) <$ tick
+            let
+              nextToAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
+                if bb > ab then aliceAddress else bobAddress
 
-            nextFromAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
-              if bb > ab then bobAddress else aliceAddress
+              nextFromAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
+                if bb > ab then bobAddress else aliceAddress
 
-            sendUrl = (fmap ("/hydra/submit-tx/"<>) <$> nextFromAddr)
+              sendUrl = (fmap ("/hydra/submit-tx/"<>) <$> nextFromAddr)
 
-            bobIsTo = ((==) <$> nextToAddr <*> bobAddress)
-            toName = ffor bobIsTo $ \case
-              True -> "Bob"
-              False -> "Alice"
+              bobIsTo = ((==) <$> nextToAddr <*> bobAddress)
+              toName = ffor bobIsTo $ \case
+                True -> "Bob"
+                False -> "Alice"
 
-            changeDemoBuildTxFunc = attachWith DemoTx (current toName) randomAmount
+              changeDemoBuildTxFunc = attachWith DemoTx (current toName) randomAmount
 
-            submitPayload = attachWith (<*>) (current $ fmap (HeadSubmitTx "demo") <$> nextToAddr) $ Just <$> randomAmount
-            submitReq = attachWithMaybe (<*>) (current $ fmap postJson <$> sendUrl) submitPayload
+              submitPayload = attachWith (<*>) (current $ fmap (HeadSubmitTx "demo") <$> nextToAddr) $ Just <$> randomAmount
+              submitReq = attachWithMaybe (<*>) (current $ fmap postJson <$> sendUrl) submitPayload
 
-          picoToLatestTx <- holdDyn Nothing $ Just <$> changeDemoBuildTxFunc
-          sendAdaResponse <- performRequestAsync submitReq
+            picoToLatestTx <- holdDyn Nothing $ Just <$> changeDemoBuildTxFunc
+            sendAdaResponse <- performRequestAsync submitReq
 
-          let
-            sendSuccess = fmapMaybe (preview _Just) $ (decodeText <=< _xhrResponse_responseText) <$> sendAdaResponse
+            let
+              sendSuccess = fmapMaybe (preview _Just) $ (decodeText <=< _xhrResponse_responseText) <$> sendAdaResponse
 
-          pure $ attachWithMaybe (<*>) (current picoToLatestTx) $ Just <$> sendSuccess
+            pure $ attachWithMaybe (<*>) (current picoToLatestTx) $ Just <$> sendSuccess
 
-      autoTx <- switchHold never autoTxEv
+        autoTx <- switchHold never autoTxEv
 
       -- Transaction History
       elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "History"
@@ -482,14 +513,10 @@ appView bobAddress aliceAddress latestTxs = do
                   text "ADA"
 
               elClass "div" "flex flex-row text-gray-400" $ do
-                elClass "div" "flex flex-col mr-4" $ do
-                  elClass "div" "text-xs" $ text "Fee"
-                  elClass "div" "" $ text "0 ADA"
-
                 elClass "div" "flex flex-col" $ do
                   elClass "div" "text-xs" $ text "Time"
                   elClass "div" "" $ do
-                    dynText $ T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (/1000000) . demoTx_time <$> tx
+                    dynText $ showAsMs . demoTx_time <$> tx
                     text "ms"
 
       elClass "div" "flex flex-col-reverse overflow-scroll-y flex-grow" $ dyn_ $ ffor (Map.null <$> latestTxs) $ \case
