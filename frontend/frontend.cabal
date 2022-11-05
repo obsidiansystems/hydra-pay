@@ -23,6 +23,7 @@ library
                , transformers
                , time
                , lens
+               , random
   default-extensions:
     RecursiveDo
     RankNTypes

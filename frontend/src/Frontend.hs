@@ -20,6 +20,7 @@ import HydraPay.Api
 import Text.Read (readMaybe)
 import Text.Printf (printf)
 
+import System.Random
 import Data.Map as Map
 import qualified Data.Map as Map
 import Data.Fixed
@@ -363,15 +364,15 @@ appView bobAddress aliceAddress latestTxs = do
         text "Balances "
         elClass "span" "text-sm" $ text "In payment channel"
 
-      elClass "div" "flex flex-row mt-4" $ do
+      (bobBalance, aliceBalance) <- elClass "div" "flex flex-row mt-4" $ do
         let
           headBalanceWidget name addr =
             elClass "div" "text-lg flex flex-col mr-10" $ do
               elClass "div" "font-semibold" $ text name
               -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-              elClass "div" "font-semibold" $ dyn_ $ ffor addr $ \case
-                Nothing -> pure ()
-                Just addr -> prerender_ blank $ mdo
+              balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
+                Nothing -> pure $ constDyn 0
+                Just addr -> prerender (pure $ constDyn 0) $ mdo
                   addrLoad <- getPostBuild
                   balanceResult :: Event t (Maybe (Either HydraPayError Int)) <- getAndDecode $ "/hydra/head-balance/demo/" <> addr <$ leftmost [addrLoad, reqFailed]
                   let
@@ -386,8 +387,14 @@ appView bobAddress aliceAddress latestTxs = do
                       text $ T.pack . printf "%.2f" $ balance
                       text " ADA"
 
-        headBalanceWidget "Bob" bobAddress
-        headBalanceWidget "Alice" aliceAddress
+                  pure $ maybe 0 id <$> mBalance
+
+              balanceDyn <- join <$> holdDyn (pure 0) balanceDynChanged
+              pure $ balanceDyn
+
+        bb <- headBalanceWidget "Bob" bobAddress
+        ab <- headBalanceWidget "Alice" aliceAddress
+        pure (bb, ab)
 
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
@@ -414,8 +421,50 @@ appView bobAddress aliceAddress latestTxs = do
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
 
       -- Action buttons: Send & Automate
-      routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
-      elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ text "Automate"
+      rec
+        routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
+        (automateButton, _) <- elClass' "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ dynText $ ffor automating $ \case
+          True -> "Automating"
+          False -> "Automate"
+
+        let
+          toggleAutomate = domEvent Click automateButton
+
+        automating <- foldDyn ($) False $ not <$ toggleAutomate
+
+      autoTxEv <- dyn $ ffor automating $ \case
+        False -> pure never
+        True -> fmap switchDyn $ prerender (pure never) $ do
+          tick <- tickLossyFromPostBuildTime 1
+          randomAmount :: Event t Lovelace <- performEvent $ (liftIO $ ada <$> randomRIO (1,10)) <$ tick
+          let
+            nextToAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
+              if bb > ab then aliceAddress else bobAddress
+
+            nextFromAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
+              if bb > ab then bobAddress else aliceAddress
+
+            sendUrl = (fmap ("/hydra/submit-tx/"<>) <$> nextFromAddr)
+
+            bobIsTo = ((==) <$> nextToAddr <*> bobAddress)
+            toName = ffor bobIsTo $ \case
+              True -> "Bob"
+              False -> "Alice"
+
+            changeDemoBuildTxFunc = attachWith DemoTx (current toName) randomAmount
+
+            submitPayload = attachWith (<*>) (current $ fmap (HeadSubmitTx "demo") <$> nextToAddr) $ Just <$> randomAmount
+            submitReq = attachWithMaybe (<*>) (current $ fmap postJson <$> sendUrl) submitPayload
+
+          picoToLatestTx <- holdDyn Nothing $ Just <$> changeDemoBuildTxFunc
+          sendAdaResponse <- performRequestAsync submitReq
+
+          let
+            sendSuccess = fmapMaybe (preview _Just) $ (decodeText <=< _xhrResponse_responseText) <$> sendAdaResponse
+
+          pure $ attachWithMaybe (<*>) (current picoToLatestTx) $ Just <$> sendSuccess
+
+      autoTx <- switchHold never autoTxEv
 
       -- Transaction History
       elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "History"
@@ -449,4 +498,4 @@ appView bobAddress aliceAddress latestTxs = do
           _ <- listWithKey latestTxs $ \_ tx -> historyItem tx
           pure ()
 
-      pure never
+      pure autoTx
