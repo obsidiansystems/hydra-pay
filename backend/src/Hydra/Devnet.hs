@@ -31,6 +31,7 @@ module Hydra.Devnet
   , cardanoCliPath
   , submitTx
   , waitForTxIn
+  , txInput
   , buildSignedHydraTx
   )
 
@@ -446,7 +447,6 @@ submitTx cninf signedFile = do
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
         }
 
--- TODO(skylar): Check lovelace vs the full amount!
 buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO String
 buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
   let fullAmount = sum txInAmounts

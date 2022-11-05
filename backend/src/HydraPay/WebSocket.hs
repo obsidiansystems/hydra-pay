@@ -3,6 +3,10 @@
 module HydraPay.WebSocket where
 
 import Hydra.Types
+import Hydra.ClientInput
+import Hydra.ServerOutput
+import Hydra.Devnet
+
 import HydraPay
 
 import Data.IORef
@@ -26,7 +30,15 @@ instance FromJSON a => FromJSON (Tagged a)
 
 data ClientMsg
   = ClientHello
-  | GetAddFundsTx Address Lovelace
+
+  | CreateHead HeadCreate
+  | InitHead HeadInit
+  | CommitHead HeadCommit
+  | CloseHead HeadName
+
+  | CheckFuel Address
+  | Withdraw Address
+  | GetAddTx TxType Address Lovelace
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -35,6 +47,8 @@ instance FromJSON ClientMsg
 data ServerMsg
   = ServerHello
   | FundsTx Tx
+  | FuelAmount Lovelace
+  | OperationSuccess
   | InvalidMessage
   | UnhandledMessage
   | InternalError HydraPayError
@@ -50,10 +64,46 @@ handleTaggedMessage state (Tagged tid msg) = do
 handleClientMessage :: State -> ClientMsg -> IO ServerMsg
 handleClientMessage state = \case
   ClientHello -> pure ServerHello
-  GetAddFundsTx addr amount -> do
-    result <- buildAddTx Funds state addr amount
+
+  Withdraw address -> do
+    -- Withdraw everything except the minRemainder
+    amount <- getProxyFunds state address
+    result <- withdraw state $ WithdrawRequest address (amount - minRemainder)
+    case result of
+      Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) $ txInput 0 txid
+      _ -> pure ()
+    pure $ either InternalError (const OperationSuccess) result
+
+  GetAddTx txtype addr amount -> do
+    result <- buildAddTx txtype state addr amount
     pure $ either InternalError FundsTx result
+
+  CheckFuel addr -> do
+    -- Calc the fuel amount
+    fuel <- getProxyFuel state addr
+    pure $ FuelAmount fuel
+
+  CreateHead hc -> do
+    result <- createHead state hc
+    pure $ either InternalError (const OperationSuccess) result
+
+  InitHead hi -> do
+    result <- initHead state hi
+    pure $ either InternalError (const OperationSuccess) result
+
+  CommitHead hc -> do
+    result <- commitToHead state hc
+    pure $ either InternalError (const OperationSuccess) result
+
+  CloseHead name -> do
+    sendToHeadAndWaitFor Close (\case
+      HeadIsFinalized {} -> True
+      _ -> False) state name
+    pure OperationSuccess
+
   _ -> pure UnhandledMessage
+  where
+    minRemainder = 3000000
 
 -- Integration tests for the various messages
 testSayHello :: IO ()
@@ -67,22 +117,19 @@ testSayHello = do
       _ -> putStrLn ""
     pure ()
 
-data ClientState = ClientState
-  { clientState_nextId :: IORef Int
-  , clientState_conn :: WS.Connection
-  }
+runHydraPayClient :: (WS.Connection -> IO a) -> IO a
+runHydraPayClient action = do
+  WS.runClient "localhost" 8000 "hydra/api" action
 
-getNextId :: ClientState -> IO Int
-getNextId (ClientState _ _) = pure 1
-
-{-newtype ClientT m a = ClientT
-  { runClientT :: ClientState -> ReaderT ClientState m a
-  }-}
+requestResponse :: WS.Connection -> ClientMsg -> IO (Maybe ServerMsg)
+requestResponse conn msg = do
+  WS.sendTextData conn . Aeson.encode $ msg
+  Aeson.decode <$> WS.receiveData conn
 
 getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
 getAddFundsTx addr amount = do
   WS.runClient "localhost" 8000 "hydra/api" $ \conn -> do
-    WS.sendTextData conn . Aeson.encode $ Tagged 0 $ GetAddFundsTx addr amount
+    WS.sendTextData conn . Aeson.encode $ Tagged 0 $ GetAddTx Funds addr amount
 
     result <- untilJust $ do
       msg <- Aeson.decode <$> WS.receiveData conn

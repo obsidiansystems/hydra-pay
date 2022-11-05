@@ -15,7 +15,7 @@ data HeadCreate = HeadCreate
   { headCreate_name :: HeadName
   , headCreate_participants :: [Address]
   }
-  deriving (Generic)
+  deriving (Eq, Show, Generic)
 
 instance ToJSON HeadCreate
 instance FromJSON HeadCreate
@@ -32,7 +32,7 @@ instance FromJSON HeadInit
 
 data HeadCommit = HeadCommit
   { headCommit_name :: HeadName
-  , headCommit_participant :: T.Text
+  , headCommit_participant :: Address
   }
   deriving (Eq, Show, Generic)
 

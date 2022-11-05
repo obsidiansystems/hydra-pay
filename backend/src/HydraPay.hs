@@ -140,7 +140,10 @@ instance FromJSON Tx where
 
 data TxType =
   Funds | Fuel
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON TxType
+instance FromJSON TxType
 
 isFuelType :: TxType -> Bool
 isFuelType Fuel = True
@@ -157,19 +160,28 @@ headBalance state name addr = do
     pure (Right fullAmount)
 
 
-l1Balance :: (MonadIO m) => State -> Address -> m Lovelace
-l1Balance state addr = do
+l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
+l1Balance state addr includeFuel = do
   utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
   let
-    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ (bool filterOutFuel id includeFuel) utxos
     fullAmount = sum txInAmounts
   pure fullAmount
 
 -- | The balance of the proxy address associated with the address given
-getTotalFunds :: (MonadIO m) => State -> Address -> m Lovelace
-getTotalFunds state addr = do
+getProxyFunds :: (MonadIO m) => State -> Address -> m Lovelace
+getProxyFunds state addr = do
   (proxyAddr, _) <- addOrGetKeyInfo state addr
-  l1Balance state proxyAddr
+  l1Balance state proxyAddr False
+
+getProxyFuel :: (MonadIO m) => State -> Address -> m Lovelace
+getProxyFuel  state addr = do
+  (proxyAddr, _) <- addOrGetKeyInfo state addr
+  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
+  let
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
+    fullAmount = sum txInAmounts
+  pure fullAmount
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
 buildAddTx txType state fromAddr amount = do
@@ -236,11 +248,10 @@ withNode state name addr f = do
         Just node -> f node proxyAddr
 
 initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
-initHead state (HeadInit name addr con) = do
-  withNode state name addr $ \node _ -> do
-    liftIO $ _node_send_msg node $ Init $ fromIntegral con
-    -- TODO: Response to Init message?
-    pure $ Right ()
+initHead state (HeadInit name _ con) = do
+  (fmap.fmap) (const ()) $ sendToHeadAndWaitFor (Init $ fromIntegral con) (\case
+    ReadyToCommit {} -> True
+    _ -> False) state name
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -262,6 +273,7 @@ withdraw state (WithdrawRequest addr lovelace) = do
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
     total = sum txInAmounts
 
+  liftIO $ putStrLn $ "Address has: " <> show total <> " Lovelace"
   case total >= lovelace of
     False -> do
       pure $ Left InsufficientFunds

@@ -23,6 +23,8 @@ import Snap.Core
 import Control.Monad.Log
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
+import Data.Foldable
+
 import Data.String.Interpolate ( i )
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -44,7 +46,7 @@ import HydraPay.WebSocket
 import CardanoNodeInfo
 
 import HydraPay.Api
-import Control.Monad ((<=<), forever)
+import Control.Monad ((<=<), forever, when)
 
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
@@ -155,10 +157,10 @@ backend = Backend
                   writeLBS $ Aeson.encode result
 
                 HydraPayRoute_L1Balance :/ addr -> do
-                  writeLBS . Aeson.encode =<< l1Balance state addr
+                  writeLBS . Aeson.encode =<< l1Balance state addr True
 
                 HydraPayRoute_Funds :/ addr -> do
-                  writeLBS . Aeson.encode =<< getTotalFunds state addr
+                  writeLBS . Aeson.encode =<< getProxyFunds state addr
 
                 HydraPayRoute_Api :/ () -> do
                   runWebSocketsSnap $ \pendingConn -> do
@@ -167,7 +169,7 @@ backend = Backend
                     forever $ do
                       mClientMsg <- Aeson.decode <$> WS.receiveData conn
                       case mClientMsg of
-                        Just clientMsg -> handleTaggedMessage state clientMsg >>= WS.sendTextData conn . Aeson.encode
+                        Just clientMsg -> handleClientMessage state clientMsg >>= WS.sendTextData conn . Aeson.encode
                         Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
                   pure ()
 
@@ -177,32 +179,51 @@ backend = Backend
                 pure ()
 
               BackendRoute_DemoCloseFanout :/ () -> do
-                liftIO $ do
-                  postCloseHead "demo"
-                  threadDelay 12000000
-                  postWithdrawalFullBalance 1
-                  postWithdrawalFullBalance 2
-                  threadDelay 30000
+                liftIO $ runHydraPayClient $ \conn -> do
+                  Just [addr1, addr2] <- getDevnetAddresses [1,2]
+                  -- Close the head, wait for fanout!
+                  Just OperationSuccess <- requestResponse conn $ CloseHead "demo"
+
+                  -- Move funds from proxy addresses back to host addresses
+                  -- result <- requestResponse conn $ Withdraw addr1
+                  -- putStrLn $ show result
+                  Just OperationSuccess <- requestResponse conn $ Withdraw addr1
+                  Just OperationSuccess <- requestResponse conn $ Withdraw addr2
+                  pure ()
+
+              BackendRoute_DemoTestWithdrawal :/ () -> do
+                liftIO $ runHydraPayClient $ \conn -> do
+                  Just [addr1] <- getDevnetAddresses [1]
+
+                  Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr1 (ada 1000)
+                  signAndSubmitTx devnetDefaultInfo addr1 tx
+
+                  Just OperationSuccess <- requestResponse conn $ Withdraw addr1
+                  pure ()
 
               BackendRoute_DemoFundInit :/ () -> do
-                liftIO $ do
-                  getAndSubmitTx devnetDefaultInfo 1 Funds (ada 1000)
-                  getAndSubmitTx devnetDefaultInfo 1 Fuel (ada 100)
-                  getAndSubmitTx devnetDefaultInfo 2 Funds (ada 1000)
-                  getAndSubmitTx devnetDefaultInfo 2 Fuel (ada 100)
+                liftIO $ runHydraPayClient $ \conn -> do
+                  Just addrs@[addr1, addr2] <- getDevnetAddresses [1,2]
 
-                  postCreateHead "demo" [1..2]
+                  for_ addrs $ \addr -> do
+                    Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr (ada 1000)
+                    signAndSubmitTx devnetDefaultInfo addr tx
 
-                  threadDelay 1000000
+                    Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
 
-                  postInitHeadCustomContestation 3 "demo" 1
+                    when (amount < ada 30) $ do
+                      Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
+                      signAndSubmitTx devnetDefaultInfo addr fueltx
 
-                  threadDelay 3000000
+                  Just OperationSuccess <- requestResponse conn $ CreateHead $ HeadCreate "demo" addrs
+                  Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
 
-                  postCommitHead "demo" 1
-                  postCommitHead "demo" 2
+                  threadDelay 10000
+                  for_ addrs $ \addr -> do
+                    Just OperationSuccess <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr
+                    pure()
 
-                  threadDelay 1000000
+                  threadDelay 10000
                 writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()

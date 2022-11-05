@@ -28,6 +28,9 @@ lovelaceToAda n = fromIntegral n / 1000000
 filterOutFuel :: WholeUTXO -> WholeUTXO
 filterOutFuel = Map.filter (not . isFuel)
 
+filterFuel :: WholeUTXO -> WholeUTXO
+filterFuel = Map.filter (isFuel)
+
 isFuel :: TxInInfo -> Bool
 isFuel txinfo = datumhash txinfo == Just fuelMarkerDatumHash
 

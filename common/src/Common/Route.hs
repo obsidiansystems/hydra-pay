@@ -32,6 +32,7 @@ data BackendRoute :: * -> * where
   BackendRoute_DemoAddresses :: BackendRoute ()
   BackendRoute_DemoFundInit :: BackendRoute ()
   BackendRoute_DemoCloseFanout :: BackendRoute ()
+  BackendRoute_DemoTestWithdrawal :: BackendRoute ()
   -- You can define any routes that will be handled specially by the backend here.
   -- i.e. These do not serve the frontend, but do something different, such as serving static files.
 
@@ -91,6 +92,7 @@ fullRouteEncoder = mkFullRouteEncoder
       BackendRoute_DemoFundInit -> PathSegment "demo-fund-init" $ unitEncoder mempty
       BackendRoute_HydraPay -> PathSegment "hydra" hydraPayRouteEncoder
       BackendRoute_DemoCloseFanout -> PathSegment "demo-close-fanout" $ unitEncoder mempty
+      BackendRoute_DemoTestWithdrawal -> PathSegment "demo-test" $ unitEncoder mempty
   )
   (\case
       FrontendRoute_Setup -> PathEnd $ unitEncoder mempty
