@@ -33,6 +33,7 @@ instance FromJSON HeadInit
 data HeadCommit = HeadCommit
   { headCommit_name :: HeadName
   , headCommit_participant :: Address
+  , headCommit_amount :: Lovelace
   }
   deriving (Eq, Show, Generic)
 
@@ -71,6 +72,7 @@ data HydraPayError
   | NodeCommandFailed
   -- ^ Anytime a command fails
   | NotAParticipant
+  | NoValidUTXOToCommit
   | InsufficientFunds
   | FanoutNotPossible
   | TxInvalid {utxo :: WholeUTXO, transaction :: Value, validationError :: ValidationError}

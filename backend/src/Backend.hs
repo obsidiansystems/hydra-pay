@@ -201,10 +201,13 @@ backend = Backend
 
               BackendRoute_DemoFundInit :/ () -> do
                 liftIO $ runHydraPayClient $ \conn -> do
+                  let
+                    funds = ada 1000
+
                   Just addrs@[addr1, addr2] <- getDevnetAddresses [1,2]
 
                   for_ addrs $ \addr -> do
-                    Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr (ada 1000)
+                    Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr funds
                     signAndSubmitTx devnetDefaultInfo addr tx
 
                     Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
@@ -226,7 +229,7 @@ backend = Backend
                     let
                       -- The delay here lets us have some falloff to avoid thrashing the nodes
                       commitUntilSuccess delay = do
-                        result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr
+                        result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr funds
                         case result of
                           Just (ServerError NodeCommandFailed) -> do
                             threadDelay delay

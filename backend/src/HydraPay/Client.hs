@@ -62,31 +62,35 @@ testHeadOneParticipant :: CardanoNodeInfo -> T.Text -> IO ()
 testHeadOneParticipant cninfo name = do
   postCreateHead name [1]
   threadDelay 1000000
-  getAndSubmitTx cninfo 1 Funds 1000000000
+  getAndSubmitTx cninfo 1 Funds funds
   threadDelay 1000000
   getAndSubmitTx cninfo 1 Fuel 1000000000
   threadDelay 1000000
   postInitHead name 1
   threadDelay 1000000
-  postCommitHead name 1
+  postCommitHead name 1 funds
   threadDelay 1000000
   getStatus_ name
+  where
+    funds = 1000000000
 
 testHeadParticipants :: CardanoNodeInfo -> T.Text -> [Int] -> Int -> IO ()
 testHeadParticipants cninfo name partcipants@(initializer:_) con = do
   postCreateHead name partcipants
   threadDelay 1000000
   for_  partcipants $ \i -> do
-    getAndSubmitTx cninfo i Funds 1000000000
+    getAndSubmitTx cninfo i Funds funds
     getAndSubmitTx cninfo i Fuel 1000000000
     threadDelay 500000
   threadDelay 1000000
   postInitHeadCustomContestation con name initializer
   threadDelay 1000000
   for_  partcipants $ \i -> do
-    postCommitHead name i
+    postCommitHead name i funds
     threadDelay 1000000
   getStatus_ name
+  where
+    funds = 1000000000
 
 getDevnetAddresses :: [Int] -> IO (Maybe [Address])
 getDevnetAddresses is = do
@@ -158,12 +162,12 @@ postInitHeadCustomContestation contestation name i = do
   x <- getResponseBody <$> httpLBS req
   LBS.putStrLn . ("Response: " <>) $ x
 
-postCommitHead :: T.Text -> Int -> IO ()
-postCommitHead name i = do
+postCommitHead :: T.Text -> Int -> Lovelace -> IO ()
+postCommitHead name i amount = do
   Just [addr] <- getDevnetAddresses [i]
   initReq <- parseRequest $ "http://localhost:8000/hydra/commit"
   let
-    payload = Aeson.encode $ HeadCommit name addr
+    payload = Aeson.encode $ HeadCommit name addr amount
     req = setRequestBodyLBS payload $ initReq
       { method = "POST"
       }

@@ -319,30 +319,39 @@ sendToHeadAndWaitFor ci fso state headName = do
       pure $ statusResult
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
-commitToHead state (HeadCommit name addr) = do
+commitToHead state (HeadCommit name addr amount) = do
   withNode state name addr $ \node proxyAddr -> do
-    proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
 
-    sendToNodeAndListen node (Commit proxyFunds) $ (\case
-      Committed {} -> Just $ Right ()
-      CommandFailed {} -> Just $ Left NodeCommandFailed
-      _ -> Nothing)
-    where
-      sendToNodeAndListen node ci fso = do
-        let
-          sendMsg = _node_send_msg node
-          getChan = _node_get_listen_chan node
+    let
+      rightAmount (TxInInfo _ _ val) =
+        Map.lookup "lovelace" val == Just amount
 
-        liftIO $ do
-          channel <- getChan
-          sendMsg ci
-          let
-            waitForCloseHandler = do
-              output <- atomically $ readTChan channel
-              case (fso output) of
-                Just x  -> pure x
-                _ -> waitForCloseHandler
-          waitForCloseHandler
+    -- Get the first UTXO that has the correct amount as we MUST commit 1 or no UTXOs
+    proxyFunds <- Map.take 1 . Map.filter rightAmount . filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
+
+    case Map.null proxyFunds of
+      True -> pure $ Left NoValidUTXOToCommit
+      False -> do
+        sendToNodeAndListen node (Commit proxyFunds) $ (\case
+          Committed {} -> Just $ Right ()
+          CommandFailed {} -> Just $ Left NodeCommandFailed
+          _ -> Nothing)
+        where
+          sendToNodeAndListen node ci fso = do
+            let
+              sendMsg = _node_send_msg node
+              getChan = _node_get_listen_chan node
+
+            liftIO $ do
+              channel <- getChan
+              sendMsg ci
+              let
+                waitForCloseHandler = do
+                  output <- atomically $ readTChan channel
+                  case (fso output) of
+                    Just x  -> pure x
+                    _ -> waitForCloseHandler
+              waitForCloseHandler
 
 
 
