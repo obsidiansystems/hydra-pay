@@ -169,7 +169,7 @@ appView bobAddress aliceAddress latestTxs = do
     FrontendRoute_OpeningChannel -> do
       elClass "div" "w-full h-full text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
-        elClass "div" "text-lg" $ text "Sending funds from Bob and Alice into hydra pay..."
+        elClass "div" "text-lg" $ text "Sending funds from Bob and Alice into Hydra Pay..."
 
         prerender_ blank $ do
           postBuild <- getPostBuild
@@ -452,7 +452,6 @@ appView bobAddress aliceAddress latestTxs = do
         elClass "div" "mt-2 w-full h-px bg-gray-200" blank
 
         -- Action buttons: Send & Automate
-      
         routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
         (automateButton, _) <- elClass' "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ dynText $ ffor automating $ \case
           True -> "Automating"
