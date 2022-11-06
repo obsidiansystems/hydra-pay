@@ -213,11 +213,18 @@ backend = Backend
                       Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
                       signAndSubmitTx devnetDefaultInfo addr fueltx
 
+                  Just (HeadExistsResult exists) <- requestResponse conn $ DoesHeadExist "demo"
+                  when exists $ do
+                    Just OperationSuccess <- requestResponse conn $ TearDownHead "demo"
+                    pure ()
+
                   Just OperationSuccess <- requestResponse conn $ CreateHead $ HeadCreate "demo" addrs
                   Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
 
+                  -- Event waiting for Head Init to finish isn't enough, so we retry commits until success
                   for_ addrs $ \addr -> do
                     let
+                      -- The delay here lets us have some falloff to avoid thrashing the nodes
                       commitUntilSuccess delay = do
                         result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr
                         case result of
@@ -226,6 +233,9 @@ backend = Backend
                             commitUntilSuccess $ delay * 2
                           Just OperationSuccess -> pure ()
                     commitUntilSuccess 100000
+
+                  -- Likely we should wait for HeadIsOpen as well here
+                  threadDelay 100000
                 writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()

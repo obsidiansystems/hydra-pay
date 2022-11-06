@@ -404,6 +404,10 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
           pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
         _ -> pure Nothing
 
+removeHead :: (MonadIO m) => State -> HeadName -> m ()
+removeHead state name = do
+  terminateHead state name
+  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.delete name
 
 terminateHead :: (MonadIO m) => State -> HeadName -> m ()
 terminateHead state headName = do

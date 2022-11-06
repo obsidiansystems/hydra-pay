@@ -9,7 +9,9 @@ import Hydra.Devnet
 
 import HydraPay
 
+import qualified Data.Text as T
 import Data.IORef
+import Data.Foldable
 import Data.Aeson as Aeson
 import GHC.Generics
 
@@ -31,10 +33,15 @@ instance FromJSON a => FromJSON (Tagged a)
 data ClientMsg
   = ClientHello
 
+  | DoesHeadExist T.Text
+
   | CreateHead HeadCreate
   | InitHead HeadInit
   | CommitHead HeadCommit
   | CloseHead HeadName
+
+  | TearDownHead HeadName
+  -- ^ Kills network and removes head
 
   | CheckFuel Address
   | Withdraw Address
@@ -51,6 +58,7 @@ data ServerMsg
   | OperationSuccess
   | InvalidMessage
   | UnhandledMessage
+  | HeadExistsResult Bool
   | ServerError HydraPayError
   deriving (Eq, Show, Generic)
 
@@ -99,6 +107,16 @@ handleClientMessage state = \case
     sendToHeadAndWaitFor Close (\case
       HeadIsFinalized {} -> True
       _ -> False) state name
+    pure OperationSuccess
+
+  DoesHeadExist name -> do
+    result <- getHeadStatus state name
+    pure $ HeadExistsResult $ case result of
+      Left _ -> False
+      Right _ -> True
+
+  TearDownHead name -> do
+    removeHead state name
     pure OperationSuccess
 
   _ -> pure UnhandledMessage
