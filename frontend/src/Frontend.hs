@@ -169,7 +169,19 @@ appView bobAddress aliceAddress latestTxs = do
     FrontendRoute_OpeningChannel -> do
       elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
-        elClass "div" "text-lg" $ text "Sending funds from Bob and Alice into Hydra Pay..."
+
+        let
+          messages = [ "Sending funds from Bob and Alice into Hydra Pay"
+                     , "Creating payment channel"
+                     , "Waiting for payment channel"
+                     ]
+
+        tick <- tickLossyFromPostBuildTime 2
+        rec
+          currentIndex <- holdDyn (0 :: Int) $ fmap (min (length messages - 1) . (+1)) $ current currentIndex <@ tick
+        elClass "div" "text-lg" $ do
+          dynText $ (messages !!) <$> currentIndex
+          text "..."
 
         prerender_ blank $ do
           postBuild <- getPostBuild
@@ -180,7 +192,19 @@ appView bobAddress aliceAddress latestTxs = do
     FrontendRoute_ClosingChannel -> do
       elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
-        elClass "div" "text-lg" $ text "Settling payment channel on L1..."
+
+        let
+          messages = [ "Closing payment channel"
+                     , "Settling payment channel on L1"
+                     , "Withdrawing funds from payment channel"
+                     ]
+
+        tick <- tickLossyFromPostBuildTime 5
+        rec
+          currentIndex <- holdDyn (0 :: Int) $ fmap (min (length messages - 1) . (+1)) $ current currentIndex <@ tick
+        elClass "div" "text-lg" $ do
+          dynText $ (messages !!) <$> currentIndex
+          text "..."
 
         prerender_ blank $ do
           postBuild <- getPostBuild
