@@ -68,6 +68,8 @@ data HydraPayError
   | HeadDoesn'tExist
   | NetworkIsn'tRunning
   | FailedToBuildFundsTx
+  | NodeCommandFailed
+  -- ^ Anytime a command fails
   | NotAParticipant
   | InsufficientFunds
   | FanoutNotPossible

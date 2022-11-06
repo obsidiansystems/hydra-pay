@@ -71,7 +71,6 @@ getKeyPath = do
 withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
-
 -- | State we need to run/manage Heads
 data State = State
   { _state_hydraInfo :: HydraSharedInfo
@@ -323,8 +322,28 @@ commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr) = do
   withNode state name addr $ \node proxyAddr -> do
     proxyFunds <- filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
-    liftIO $ _node_send_msg node $ Commit proxyFunds
-    pure $ Right ()
+
+    sendToNodeAndListen node (Commit proxyFunds) $ (\case
+      Committed {} -> Just $ Right ()
+      CommandFailed {} -> Just $ Left NodeCommandFailed
+      _ -> Nothing)
+    where
+      sendToNodeAndListen node ci fso = do
+        let
+          sendMsg = _node_send_msg node
+          getChan = _node_get_listen_chan node
+
+        liftIO $ do
+          channel <- getChan
+          sendMsg ci
+          let
+            waitForCloseHandler = do
+              output <- atomically $ readTChan channel
+              case (fso output) of
+                Just x  -> pure x
+                _ -> waitForCloseHandler
+          waitForCloseHandler
+
 
 
 -- | Create a head by starting a Hydra network.

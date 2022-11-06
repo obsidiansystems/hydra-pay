@@ -185,8 +185,6 @@ backend = Backend
                   Just OperationSuccess <- requestResponse conn $ CloseHead "demo"
 
                   -- Move funds from proxy addresses back to host addresses
-                  -- result <- requestResponse conn $ Withdraw addr1
-                  -- putStrLn $ show result
                   Just OperationSuccess <- requestResponse conn $ Withdraw addr1
                   Just OperationSuccess <- requestResponse conn $ Withdraw addr2
                   pure ()
@@ -218,12 +216,16 @@ backend = Backend
                   Just OperationSuccess <- requestResponse conn $ CreateHead $ HeadCreate "demo" addrs
                   Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
 
-                  threadDelay 10000
                   for_ addrs $ \addr -> do
-                    Just OperationSuccess <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr
-                    pure()
-
-                  threadDelay 10000
+                    let
+                      commitUntilSuccess delay = do
+                        result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr
+                        case result of
+                          Just (ServerError NodeCommandFailed) -> do
+                            threadDelay delay
+                            commitUntilSuccess $ delay * 2
+                          Just OperationSuccess -> pure ()
+                    commitUntilSuccess 100000
                 writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()

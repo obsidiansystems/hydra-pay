@@ -51,7 +51,7 @@ data ServerMsg
   | OperationSuccess
   | InvalidMessage
   | UnhandledMessage
-  | InternalError HydraPayError
+  | ServerError HydraPayError
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
@@ -72,11 +72,11 @@ handleClientMessage state = \case
     case result of
       Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) $ txInput 0 txid
       _ -> pure ()
-    pure $ either InternalError (const OperationSuccess) result
+    pure $ either ServerError (const OperationSuccess) result
 
   GetAddTx txtype addr amount -> do
     result <- buildAddTx txtype state addr amount
-    pure $ either InternalError FundsTx result
+    pure $ either ServerError FundsTx result
 
   CheckFuel addr -> do
     -- Calc the fuel amount
@@ -85,15 +85,15 @@ handleClientMessage state = \case
 
   CreateHead hc -> do
     result <- createHead state hc
-    pure $ either InternalError (const OperationSuccess) result
+    pure $ either ServerError (const OperationSuccess) result
 
   InitHead hi -> do
     result <- initHead state hi
-    pure $ either InternalError (const OperationSuccess) result
+    pure $ either ServerError (const OperationSuccess) result
 
   CommitHead hc -> do
     result <- commitToHead state hc
-    pure $ either InternalError (const OperationSuccess) result
+    pure $ either ServerError (const OperationSuccess) result
 
   CloseHead name -> do
     sendToHeadAndWaitFor Close (\case
