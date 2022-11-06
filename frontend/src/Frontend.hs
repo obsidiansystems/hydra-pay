@@ -57,7 +57,7 @@ frontend = Frontend
   , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $ do
       elClass "div" "flex-shrink-0 px-8 py-4 text-xl font-semibold" $
         routeLink (FrontendRoute_Setup :/ ()) $ el "h1" $ text "Hydra Pay"
-      elClass "div" "w-full h-full mt-10 flex-grow px-8" $ do
+      elClass "div" "w-full h-full mt-10 flex-grow px-8 overflow-hidden" $ do
         postBuild <- getPostBuild
 
         gotAddrs <- fmap switchDyn $ prerender (pure never) $ do
@@ -122,7 +122,7 @@ frontend = Frontend
           -- When we get a server response, go to open a channel
           newTx <- appView bobAddress aliceAddress latestTxs
 
-          removeStaleTxs <- elClass "div" "absolute top-0 right-0 p-4 h-full overflow-hidden leading-none" $ elClass "div" "flex flex-col-reverse" $ do
+          removeStaleTxs <- elClass "div" "pointer-events-none absolute top-0 right-0 p-4 h-full overflow-hidden leading-none" $ elClass "div" "flex flex-col-reverse" $ do
             eventList <- listWithKey latestPopupTxs $ \txid tx -> do
               removalEv <- newTxPopup tx
               pure $ Map.delete txid <$ removalEv
@@ -142,7 +142,7 @@ data DemoTx = DemoTx
   deriving (Eq, Show)
 
 showAsMs :: Pico -> T.Text
-showAsMs = T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (*100)
+showAsMs = T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (*1000)
 
 appView ::
   ( Reflex t
@@ -159,15 +159,15 @@ appView ::
   , MonadHold t m
   ) => Dynamic t (Maybe T.Text) -> Dynamic t (Maybe T.Text) -> Dynamic t (Map Int DemoTx) -> RoutedT t (R FrontendRoute) m (Event t DemoTx)
 appView bobAddress aliceAddress latestTxs = do
-  fmap switchDyn $ elClass "div" "text-gray-700 max-w-4xl mx-auto p-4 rounded" $ subRoute $ \case
+  fmap switchDyn $ elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" $ subRoute $ \case
     FrontendRoute_Setup -> do
-      elClass "div" "w-full h-full text-3xl flex flex-col justify-center items-center" $ do
+      elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
         elClass "div" "text-lg" $ text "populating addresses..."
         pure never
 
     FrontendRoute_OpeningChannel -> do
-      elClass "div" "w-full h-full text-3xl flex flex-col justify-center items-center" $ do
+      elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
         elClass "div" "text-lg" $ text "Sending funds from Bob and Alice into Hydra Pay..."
 
@@ -178,7 +178,7 @@ appView bobAddress aliceAddress latestTxs = do
       pure never
 
     FrontendRoute_ClosingChannel -> do
-      elClass "div" "w-full h-full text-3xl flex flex-col justify-center items-center" $ do
+      elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"
         elClass "div" "text-lg" $ text "Settling payment channel on L1..."
 
@@ -452,10 +452,11 @@ appView bobAddress aliceAddress latestTxs = do
         elClass "div" "mt-2 w-full h-px bg-gray-200" blank
 
         -- Action buttons: Send & Automate
-        routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
-        (automateButton, _) <- elClass' "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ dynText $ ffor automating $ \case
-          True -> "Automating"
-          False -> "Automate"
+        (automateButton, _) <- elClass "div" "" $ do
+          routeLink (FrontendRoute_SendFunds :/ ()) $ elClass "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold mr-4" $ text "Send ADA"
+          elClass' "button" "rounded mt-4 px-6 py-2 text-center bg-gray-800 text-white font-semibold" $ dynText $ ffor automating $ \case
+            True -> "Automating"
+            False -> "Automate"
 
         let
           toggleAutomate = domEvent Click automateButton
@@ -518,10 +519,13 @@ appView bobAddress aliceAddress latestTxs = do
                     dynText $ showAsMs . demoTx_time <$> tx
                     text "ms"
 
-      elClass "div" "flex flex-col-reverse overflow-scroll-y flex-grow" $ dyn_ $ ffor (Map.null <$> latestTxs) $ \case
+      let
+        noHistory = Map.null <$> latestTxs
+
+      elDynClass "div" "overflow-y-scroll flex-grow" $ dyn_ $ ffor noHistory $ \case
         True -> elClass "div" "text-gray-500" $ text "There is no history yet for this payment channel"
         False -> do
-          _ <- listWithKey latestTxs $ \_ tx -> historyItem tx
+          _ <- elClass "div" "flex flex-col-reverse w-full" $ listWithKey latestTxs $ \_ tx -> historyItem tx
           pure ()
 
       pure autoTx
