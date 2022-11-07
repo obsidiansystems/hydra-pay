@@ -126,7 +126,7 @@ handleClientMessage state = \case
 -- Integration tests for the various messages
 testSayHello :: IO ()
 testSayHello = do
-  WS.runClient "localhost" 8000 "hydra/api" $ \conn -> do
+  WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
     WS.sendTextData conn . Aeson.encode $ Tagged 0 ClientHello
 
     msg <- Aeson.decode <$> WS.receiveData conn
@@ -137,7 +137,7 @@ testSayHello = do
 
 runHydraPayClient :: (WS.Connection -> IO a) -> IO a
 runHydraPayClient action = do
-  WS.runClient "localhost" 8000 "hydra/api" action
+  WS.runClient "127.0.0.1" 8000 "hydra/api" action
 
 requestResponse :: WS.Connection -> ClientMsg -> IO (Maybe ServerMsg)
 requestResponse conn msg = do
@@ -146,7 +146,7 @@ requestResponse conn msg = do
 
 getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
 getAddFundsTx addr amount = do
-  WS.runClient "localhost" 8000 "hydra/api" $ \conn -> do
+  WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
     WS.sendTextData conn . Aeson.encode $ Tagged 0 $ GetAddTx Funds addr amount
 
     result <- untilJust $ do
