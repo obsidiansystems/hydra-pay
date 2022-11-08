@@ -234,7 +234,7 @@ We have a couple important reasons for using this Proxy Address mapping:
 
 - More security: Participants no longer need to provide their private keys to the hydra-node acting on their behalf. This means that developers won't need to ask potential participants for their seed phrase just to be able to join a Head. This keeps in line with the security principle of Hydra: The only funds you can lose are those you commit.
 
-- More convenient fund management: Instead of having to prompty commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
+- More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
 
 ## 🤔 FAQ
 
