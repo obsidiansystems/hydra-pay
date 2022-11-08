@@ -236,6 +236,8 @@ We have a couple important reasons for using this Proxy Address mapping:
 
 - More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
 
+The proxy address scheme will be updated/deprecated based on future changes to Hydra Pay like the upcoming [Incremental De/Commit](https://github.com/orgs/input-output-hk/projects/21) on the Hydra roadmap. 
+
 ## 🤔 FAQ
 
 ### What is Hydra Pay?
