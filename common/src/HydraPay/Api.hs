@@ -81,6 +81,7 @@ data HydraPayError
 instance ToJSON HydraPayError
 instance FromJSON HydraPayError
 
+-- | State the head can be in, progressing linearly though the states.
 data Status
   = Status_Pending
   | Status_Init
@@ -89,7 +90,7 @@ data Status
   | Status_Closed
   | Status_Fanout
   | Status_Finalized
-  deriving (Eq, Show, Generic)
+  deriving (Eq, Ord, Show, Generic)
 
 instance ToJSON Status
 instance FromJSON Status

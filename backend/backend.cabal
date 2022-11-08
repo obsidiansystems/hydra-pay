@@ -49,6 +49,7 @@ library
                , mtl
                , time
                , time-compat
+               , transformers
 
   default-extensions:
     OverloadedStrings
@@ -68,6 +69,7 @@ library
   other-modules:
     Paths
     Hydra.Devnet
+    HydraPay.WebSocket
     CardanoNodeInfo
     
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

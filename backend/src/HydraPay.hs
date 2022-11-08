@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# OPTIONS_GHC -Wno-unused-matches #-}
 
 module HydraPay where
 
@@ -58,6 +59,7 @@ import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
 import Control.Monad.IO.Class
 import Control.Monad.Except
+import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 
 
 -- | The location where we store cardano and hydra keys
@@ -90,6 +92,7 @@ data Head = Head
   , _head_participants :: Set Address
       --- Map Address (Address, HydraKeyInfo)
   , _head_status :: Status
+  , _head_status_bchan :: TChan Status
   -- ^ The participants list with proxy addresses and not owner addresses
   }
 
@@ -363,7 +366,8 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   -- What if createHead is called twice quickly?
   headExists <- isJust <$> lookupHead state name
   when headExists $ throwError $ HeadExists name
-  let head = Head name (Set.fromList participants) Status_Pending
+  statusBTChan <- liftIO newBroadcastTChanIO
+  let head = Head name (Set.fromList participants) Status_Pending statusBTChan
   liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
   startNetwork state head
   pure head
@@ -453,13 +457,29 @@ getHeadStatus state name = liftIO $ do
   mHead <- lookupHead state name
   case mHead of
     Nothing -> pure $ Left HeadDoesn'tExist
-    Just (Head name _ status) -> do
+    Just (Head name _ status _) -> do
       running <- isJust <$> getNetwork state name
       pure $ Right $ HeadStatus name running status
 
+
+-- | Wait for a head to change to or past a state. Returns 'Nothing'
+-- if the head was not found, otherwise 'Just SomeStatus'.
+waitForHeadStatus :: (MonadIO m) => State -> HeadName -> Status -> m (Maybe Status)
+waitForHeadStatus state name status = runMaybeT $ do
+  hd <- MaybeT $ lookupHead state name
+  c <- liftIO . atomically $ dupTChan $ _head_status_bchan hd
+  hd <- MaybeT $ lookupHead state name
+  if _head_status hd >= status
+    then pure $ _head_status hd
+    else untilJust $ do
+      x <- liftIO . atomically $ readTChan c
+      if x >= status
+        then pure $ Just x
+        else pure $ Nothing
+
 -- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
 startNetwork :: MonadIO m => State -> Head -> m Network
-startNetwork state (Head name participants _) = do
+startNetwork state (Head name participants _ statusBTChan) = do
   mNetwork <- getNetwork state name
   case mNetwork of
     Just network -> pure network
@@ -475,6 +495,7 @@ startNetwork state (Head name participants _) = do
         bRcvChan <- liftIO newBroadcastTChanIO
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ do
+          -- FIXME: Instead of threadDelay retry connecting to the WS port
           threadDelay 3000000
           putStrLn $ [i|Connecting to WS port #{port}|]
           runClient "127.0.0.1" port "/" $ \conn -> do
@@ -521,6 +542,7 @@ startNetwork state (Head name participants _) = do
                          _ <- fanoutHead state name
                          pure ()
                       _ -> pure ()
+                    atomically $ writeTChan statusBTChan status
                     pure . Map.adjust (\h -> h { _head_status = status }) name $ current
                 Nothing -> pure ()
               atomically $ writeTChan bRcvChan msg
