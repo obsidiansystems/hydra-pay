@@ -116,7 +116,7 @@ testFn cninf hydraSharedInfo faucetKeys = do
 
   flip finally (do
                    putStrLn "CLEANING UP"
-                 --  terminateHead state "a"
+                   terminateHead state "a"
                ) $ do
     putStrLn "Creating head"
     _ <- createHead state (HeadCreate "a" nodz)
@@ -160,10 +160,12 @@ testFn cninf hydraSharedInfo faucetKeys = do
     -- -- twoFunds <- headBalance state "a" two
     -- -- print twoFunds
 
-    threadDelay $ seconds 1000
+    waitForHeadStatus state "a" Status_Open
+    threadDelay $ seconds 2
     closeHead state "a"
+    waitForHeadStatus state "a" Status_Finalized 
 
-    threadDelay $ seconds 30
+    threadDelay $ seconds 2
 
     -- print "Trying withdraw"
     -- -- TODO: How do I do this without risking InsufficientFunds?
