@@ -33,6 +33,7 @@ module Hydra.Devnet
   , waitForTxIn
   , txInput
   , buildSignedHydraTx
+  , generateCardanoKeys
   )
 
 where
