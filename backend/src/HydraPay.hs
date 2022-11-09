@@ -609,8 +609,6 @@ startHydraNetwork sharedInfo actors = do
 
 data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
-  , _ledgerGenesis :: FilePath
-  , _ledgerProtocolParameters :: FilePath
   , _cardanoNodeInfo :: CardanoNodeInfo
   }
 
@@ -640,11 +638,11 @@ cardanoNodeArgs cninf =
   ]
 
 sharedArgs :: HydraSharedInfo -> [String]
-sharedArgs (HydraSharedInfo hydraScriptsTxId ledgerGenesis protocolParams cardanoNodeInfo) =
+sharedArgs (HydraSharedInfo hydraScriptsTxId cardanoNodeInfo) =
   [ "--ledger-genesis"
-  , ledgerGenesis
+  , _nodeLedgerGenesis cardanoNodeInfo
   , "--ledger-protocol-parameters"
-  , protocolParams
+  , _nodeLedgerProtocolParameters cardanoNodeInfo
   , "--hydra-scripts-tx-id"
   , hydraScriptsTxId
   ] <> cardanoNodeArgs cardanoNodeInfo

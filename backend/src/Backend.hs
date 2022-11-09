@@ -56,13 +56,11 @@ getDevnetHydraSharedInfo = do
   scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
   pure $ HydraSharedInfo
     { _hydraScriptsTxId = T.unpack scripts,
-      _ledgerGenesis = "devnet/genesis-shelley.json",
-      _ledgerProtocolParameters = "devnet/protocol-parameters.json",
       _cardanoNodeInfo = cardanoDevnetNodeInfo
     }
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
+cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
 
 devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
@@ -194,7 +192,7 @@ backend = Backend
                   Just [addr1] <- getDevnetAddresses [1]
 
                   Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr1 (ada 1000)
-                  signAndSubmitTx devnetDefaultInfo addr1 tx
+                  signAndSubmitTx cardanoDevnetNodeInfo addr1 tx
 
                   Just OperationSuccess <- requestResponse conn $ Withdraw addr1
                   pure ()
@@ -208,13 +206,13 @@ backend = Backend
 
                   for_ addrs $ \addr -> do
                     Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr funds
-                    signAndSubmitTx devnetDefaultInfo addr tx
+                    signAndSubmitTx cardanoDevnetNodeInfo addr tx
 
                     Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
 
                     when (amount < ada 30) $ do
                       Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
-                      signAndSubmitTx devnetDefaultInfo addr fueltx
+                      signAndSubmitTx cardanoDevnetNodeInfo addr fueltx
 
                   Just (HeadExistsResult exists) <- requestResponse conn $ DoesHeadExist "demo"
                   when exists $ do

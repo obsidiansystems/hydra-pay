@@ -30,7 +30,7 @@ runLog :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 runLog = flip runLoggingT (print . renderWithSeverity id)
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
+cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
 
 devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
@@ -40,20 +40,22 @@ getDevnetHydraSharedInfo = do
   scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
   pure $ HydraSharedInfo
     { _hydraScriptsTxId = T.unpack scripts,
-        _ledgerGenesis = "devnet/genesis-shelley.json",
-        _ledgerProtocolParameters = "devnet/protocol-parameters.json",
         _cardanoNodeInfo = cardanoDevnetNodeInfo
       }
 
 previewScriptsId = "4081fab39728fa3c05c0edc4dc7c0e8c45129ca6b2b70bf8600c1203a79d2c6d"
 
-previewNodeInfo = CardanoNodeInfo (TestNet 2) "/tmp/cardano-node.socket"
+previewNodeInfo =
+  CardanoNodeInfo
+    { _nodeType = TestNet 2,
+      _nodeSocket = "/tmp/cardano-node.socket",
+      _nodeLedgerGenesis = "/etc/nixos/cardano-preview-testnet-config/shelley-genesis.json",
+      _nodeLedgerProtocolParameters = "preview-parameters.json"
+    }
 
 previewHydraSharedInfo =
   HydraSharedInfo 
   { _hydraScriptsTxId = previewScriptsId,
-    _ledgerGenesis = "/etc/nixos/cardano-preview-testnet-config/shelley-genesis.json",
-    _ledgerProtocolParameters = "preview-parameters.json",
     _cardanoNodeInfo = previewNodeInfo
   }
 

@@ -4,8 +4,7 @@ newtype CardanoNodeType = TestNet { _testNetMagic  :: Int }
 
 data CardanoNodeInfo = CardanoNodeInfo
   { _nodeType :: CardanoNodeType,
-    _nodeSocket :: FilePath
+    _nodeSocket :: FilePath,
+    _nodeLedgerProtocolParameters :: FilePath,
+    _nodeLedgerGenesis :: FilePath
   }
-
-devnetDefaultInfo :: CardanoNodeInfo
-devnetDefaultInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket"
