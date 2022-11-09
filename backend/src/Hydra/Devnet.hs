@@ -10,6 +10,7 @@ module Hydra.Devnet
   , VerificationKey(..)
   , KeyPair(..)
   , mkKeyPair
+  , SomeTx(..)
   , TxId
   , getCardanoAddress
   , seedAddressFromFaucetAndWait
@@ -283,43 +284,20 @@ getTempPath = do
   uid <- UUIDV4.nextRandom
   pure . (uid,) . ("tmp/" <>) . UUID.toString $ uid
 
-buildSignedTx :: CardanoNodeInfo -> SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO (FilePath, TxId)
-buildSignedTx nodeInfo signingKey fromAddr toAddr txInAmounts amount = do
-  let fullAmount = sum txInAmounts
-  txBodyPath <- snd <$> getTempPath
-  void $ readCreateProcess (proc cardanoCliPath
-                       ([ "transaction"
-                        , "build"
-                        , "--babbage-era"
-                        , "--cardano-mode"
-                        ]
-                        <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
-                        <>
-                        [ "--tx-out"
-                        , [i|#{toAddr}+#{amount}|]
-                        , "--change-address"
-                        , T.unpack fromAddr
-                        , "--out-file"
-                        , txBodyPath
-                        ]
-                        <> cardanoNodeArgs nodeInfo)) {env = Just [( "CARDANO_NODE_SOCKET_PATH"
-                                                                   , _nodeSocket $ nodeInfo)] }
-    ""
-  txSignedPath <- snd <$> getTempPath
-  _ <- readCreateProcess
-    (proc cardanoCliPath
-      [ "transaction"
-      , "sign"
-      , "--tx-body-file"
-      , txBodyPath
-      , "--signing-key-file"
-      , getSigningKeyFilePath signingKey
-      , "--out-file"
-      , txSignedPath
-      ])
-    ""
-  txid <- txIdFromSignedTx nodeInfo txSignedPath
-  pure $ (txSignedPath,txid)
+data SomeTx = SomeTx
+  { _tx_ins :: [TxIn]
+  , _tx_outAddr :: Address
+  , _tx_outAmount :: Lovelace
+  , _tx_changeAddr :: Address
+  , _tx_outDatumHash :: Maybe T.Text
+  }
+
+buildSignedTx :: CardanoNodeInfo -> SigningKey -> SomeTx -> IO (FilePath, TxId)
+buildSignedTx nodeInfo signingKey tx = do
+  draftTx <- buildDraftTx nodeInfo tx
+  signedTx <- signTx nodeInfo signingKey draftTx
+  txid <- txIdFromSignedTx nodeInfo signedTx
+  pure (signedTx,txid)
 
 -- | Convenience for getting faucet Output for seeding
 getFirstTxIn :: CardanoNodeInfo -> Address -> IO TxIn
@@ -365,33 +343,44 @@ seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount isFuel = do
   void $ submitTx cninf signedTx
   pure txin
 
-buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
-buildSeedTxForAddress cninf faucetvk addr amount isFuel = do
+buildDraftTx :: () => CardanoNodeInfo -> SomeTx -> IO FilePath
+buildDraftTx cninf tx = do
   filename <- getTempPath'
-  -- when (amount < minTxLovelace) $ error $ "Minmum required UTxO: Lovelace " <> show minTxLovelace
-  let cp faucetAddr hash = (proc cardanoCliPath $ filter (/= "")
+  _ <- readCreateProcess ((proc cardanoCliPath $ filter (/= "")
                               [ "transaction"
                               , "build"
                               , "--babbage-era"
                               , "--cardano-mode"
                               , "--change-address"
-                              , faucetAddr
-                              , "--tx-in"
-                              , hash
-                              , "--tx-out"
-                              , T.unpack addr <> "+" <> show amount
+                              , T.unpack (_tx_changeAddr tx)
                               ]
-                              <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] isFuel
+                              <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ _tx_ins tx)
+                              <>
+                              [ "--tx-out"
+                              , T.unpack (_tx_outAddr tx) <> "+" <> show (_tx_outAmount tx)
+                              ]
+                              <> maybe [] (\h -> [ "--tx-out-datum-hash", T.unpack h ]) (_tx_outDatumHash tx)
                               <>
                               [ "--out-file"
                               , filename
                               ]
                               <> cardanoNodeArgs cninf)
-                            { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] }
+                              { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+                           ""
+  pure filename
+
+
+buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
+buildSeedTxForAddress cninf faucetvk addr amount isFuel = do
   faucetAddr <- getCardanoAddress cninf faucetvk
   hash <- getFirstTxIn cninf faucetAddr
-  _ <- readCreateProcess (cp (T.unpack faucetAddr) (T.unpack hash)) ""
-  pure filename
+  buildDraftTx cninf $ SomeTx
+      { _tx_ins = [hash],
+        _tx_outAddr = addr,
+        _tx_outAmount = amount,
+        _tx_changeAddr = faucetAddr,
+        _tx_outDatumHash = fuelMarkerDatumHash <$ guard isFuel
+      }
 
 -- | Sign a transaction and a path containing it.
 signTx :: CardanoNodeInfo -> SigningKey -> DraftTx -> IO SignedTx

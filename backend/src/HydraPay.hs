@@ -281,7 +281,13 @@ withdraw state (WithdrawRequest addr lovelace) = do
       pure $ Left InsufficientFunds
 
     True -> liftIO $ do
-      (filepath, txid) <- buildSignedTx nodeInfo (_signingKey $ _cardanoKeys keyInfo) proxyAddr addr txInAmounts lovelace
+      (filepath, txid) <- buildSignedTx nodeInfo (_signingKey $ _cardanoKeys keyInfo) $ SomeTx
+          { _tx_ins = Map.keys txInAmounts,
+            _tx_outAddr = addr,
+            _tx_outAmount = lovelace,
+            _tx_changeAddr = proxyAddr,
+            _tx_outDatumHash = Nothing
+          }
       submitTx nodeInfo $ filepath
       pure $ Right txid
 
