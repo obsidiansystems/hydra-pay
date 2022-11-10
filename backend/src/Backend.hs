@@ -41,15 +41,19 @@ import Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 
 import HydraPay
-import HydraPay.Client
 import HydraPay.WebSocket
 import CardanoNodeInfo
 
 import HydraPay.Api
-import Control.Monad ((<=<), forever, when)
+import Control.Monad ((<=<), forever, when, guard)
 
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
+import Data.Traversable (forM)
+import Text.Read (readMaybe)
+import Data.Maybe (fromMaybe)
+import Control.Monad.Trans.Maybe
+import System.Directory (doesFileExist)
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
@@ -86,20 +90,89 @@ handleJsonRequestBody f = do
       . Aeson.decode
       . LBS.fromChunks
 
+data DemoConfig
+  = CfgDevnet
+  | CfgPreview PreviewDemoConfig
+  deriving (Show,Read)
+
+data PreviewDemoConfig = PreviewDemoConfig
+  { _previewNodeInfo :: CardanoNodeInfo
+  , _previewHydraInfo :: HydraSharedInfo
+  , _previewFaucet :: KeyPair
+  , _previewParticipants :: [KeyPair]
+  }
+  deriving (Show,Read)
+
+demoCfgPath :: FilePath
+demoCfgPath = "democonfig"
+
+writeDemoConfig :: DemoConfig -> IO ()
+writeDemoConfig cfg = do
+  writeFile demoCfgPath . show $ cfg
+
+readDemoConfig :: IO DemoConfig
+readDemoConfig = fmap (fromMaybe CfgDevnet) . runMaybeT $ do
+  guard <=< liftIO $ doesFileExist demoCfgPath
+  MaybeT $ readMaybe <$> readFile demoCfgPath
+
+seedDemoAddressesPreview :: PreviewDemoConfig -> Lovelace -> IO ()
+seedDemoAddressesPreview cfg amount = flip runLoggingT (print . renderWithSeverity id) $ do
+  forM_ (_previewParticipants cfg) $ \kp -> do
+    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
+    seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr amount False
+
+deseedDemoAddressesPreview :: PreviewDemoConfig -> IO ()
+deseedDemoAddressesPreview cfg =
+  forM_ (_previewParticipants cfg) $ \kp -> do
+    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
+    faucetAddr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey (_previewFaucet cfg))
+    transferAll (_previewNodeInfo cfg) (_signingKey kp) addr faucetAddr
+
+
+whenDevnet :: (Applicative m) => DemoConfig -> m () -> m ()
+whenDevnet cfg = when (case cfg of
+                          CfgDevnet -> True
+                          _ -> False)
+
+runLogging = flip runLoggingT (print . renderWithSeverity id)
+
+withCardanoNode :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m, _) =>
+  (State -> CardanoNodeInfo -> [(KeyPair, Address)] -> LoggingT (WithSeverity (Doc ann)) IO a) -> m a
+withCardanoNode f = do
+  cfg <- liftIO readDemoConfig
+  case cfg of
+    CfgDevnet -> do
+      prepareDevnet
+      liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
+        flip runLoggingT (print . renderWithSeverity id) $ do
+          liftIO $ threadDelay (seconds 3)
+          logMessage $ WithSeverity Informational [i|
+            Cardano node is running
+            |]
+          prefix <- liftIO getTempPath'
+          oneKs <- generateCardanoKeys $ prefix <> "one"
+          one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
+          twoKs <- generateCardanoKeys $ prefix <> "two"
+          two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
+          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
+          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
+          state <- getHydraPayState =<< getDevnetHydraSharedInfo
+          f state cardanoDevnetNodeInfo [(oneKs, one), (twoKs, two)]
+    CfgPreview pcfg -> liftIO . flip runLoggingT (print . renderWithSeverity id) $ do
+      state <- getHydraPayState (_previewHydraInfo pcfg)
+      participants <- forM (_previewParticipants pcfg) $ \kp -> do
+        addr <- liftIO $ getCardanoAddress (_previewNodeInfo pcfg) (_verificationKey kp)
+        pure (kp, addr)
+      f state (_previewNodeInfo pcfg) participants
+                    
+
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
       -- NOTE(skylar): Running heads is a map from head name to network handle
       flip runLoggingT (print . renderWithSeverity id) $ do
-        prepareDevnet
-        liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
-          flip runLoggingT (print . renderWithSeverity id) $ do
-            logMessage $ WithSeverity Informational [i|
-              Cardano node is running
-              |]
-            liftIO $ threadDelay $ seconds 3
-            seedTestAddresses cardanoDevnetNodeInfo devnetFaucetKeys 10
-            state <- getHydraPayState =<< getDevnetHydraSharedInfo
+        withCardanoNode $ \state cninf (participants@[(ks1, addr1), (ks2, addr2)]) -> do
+            let addrs = snd <$> participants
             logMessage $ WithSeverity Informational [i|
               Serving
               |]
@@ -172,13 +245,11 @@ backend = Backend
                   pure ()
 
               BackendRoute_DemoAddresses :/ () -> do
-                addrs <- liftIO $ T.lines <$> T.readFile "devnet/addresses"
-                writeLBS $ Aeson.encode addrs
+                writeLBS $ Aeson.encode [addr1,addr2]
                 pure ()
 
               BackendRoute_DemoCloseFanout :/ () -> do
                 liftIO $ runHydraPayClient $ \conn -> do
-                  Just [addr1, addr2] <- getDevnetAddresses [1,2]
                   -- Close the head, wait for fanout!
                   Just OperationSuccess <- requestResponse conn $ CloseHead "demo"
 
@@ -189,10 +260,9 @@ backend = Backend
 
               BackendRoute_DemoTestWithdrawal :/ () -> do
                 liftIO $ runHydraPayClient $ \conn -> do
-                  Just [addr1] <- getDevnetAddresses [1]
 
                   Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr1 (ada 1000)
-                  signAndSubmitTx cardanoDevnetNodeInfo addr1 tx
+                  signAndSubmitTx cninf (_signingKey ks1) tx
 
                   Just OperationSuccess <- requestResponse conn $ Withdraw addr1
                   pure ()
@@ -200,48 +270,60 @@ backend = Backend
               BackendRoute_DemoFundInit :/ () -> do
                 liftIO $ runHydraPayClient $ \conn -> do
                   let
-                    funds = ada 1000
+                    funds = ada 300
 
-                  Just addrs@[addr1, addr2] <- getDevnetAddresses [1,2]
-
-                  for_ addrs $ \addr -> do
+                  for_ participants $ \(ks,addr) -> do
+                    liftIO $ putStrLn [i|Doing requestResponse conn $ GetAddTx Funds addr funds|]
+                    let sk = _signingKey ks
                     Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr funds
-                    signAndSubmitTx cardanoDevnetNodeInfo addr tx
+                    liftIO $ putStrLn [i|Doing signAndSubmitTx cninf sk tx|]
+                    signAndSubmitTx cninf sk tx
 
+                    liftIO $ putStrLn [i|Doing make fuel tx|]
                     Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
 
+                    liftIO $ putStrLn [i|Doing other stuff|]
                     when (amount < ada 30) $ do
                       Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
-                      signAndSubmitTx cardanoDevnetNodeInfo addr fueltx
-
+                      signAndSubmitTx cninf sk fueltx
+                  putStrLn "ASKING IF HEAD EXISTS"
                   Just (HeadExistsResult exists) <- requestResponse conn $ DoesHeadExist "demo"
+                  putStrLn [i|RESULT #{exists}|]
                   when exists $ do
+                    putStrLn "HEADEXISTS"
                     Just OperationSuccess <- requestResponse conn $ TearDownHead "demo"
                     pure ()
-
+                  putStrLn "CREATEHEAD"
                   Just OperationSuccess <- requestResponse conn $ CreateHead $ HeadCreate "demo" addrs
+--                  threadDelay (seconds 10)
+                  putStrLn "INITHEAD"
                   Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
-
+--                  threadDelay (seconds 10)
+                  waitForHeadStatus state "demo" Status_Init
                   -- Event waiting for Head Init to finish isn't enough, so we retry commits until success
+                  putStrLn "STARTING COMMITTING"
                   for_ addrs $ \addr -> do
                     let
                       -- The delay here lets us have some falloff to avoid thrashing the nodes
                       commitUntilSuccess delay = do
+                        putStrLn [i|Committing #{addr}|]
                         result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr funds
+                        putStrLn [i|Result #{result}|]
                         case result of
                           Just (ServerError NodeCommandFailed) -> do
                             threadDelay delay
                             commitUntilSuccess $ delay * 2
                           Just OperationSuccess -> pure ()
-                    commitUntilSuccess 100000
-
-                  -- Likely we should wait for HeadIsOpen as well here
-                  threadDelay 100000
+                    commitUntilSuccess (seconds 30)
+                  putStrLn "WAITING FOR OPEN"
+                  waitForHeadStatus state "demo" Status_Open
+                  
                 writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
   }
+
 
 seconds :: Int -> Int
 seconds = (* 1000000)

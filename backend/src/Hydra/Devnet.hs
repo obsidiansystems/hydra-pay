@@ -29,6 +29,7 @@ module Hydra.Devnet
   , minTxLovelace
   , addressesPath
   , getTempPath
+  , getTempPath'
   , cardanoCliPath
   , submitTx
   , waitForTxIn
@@ -98,6 +99,7 @@ seedTestAddresses cninf faucetKeys amount = do
   where
     path = addressesPath
 
+-- TODO: delete this function in favor of keys-as-values
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
   contents <- flip zip [1..] . T.lines <$> T.readFile path
@@ -141,17 +143,17 @@ generateKeysIn fp =
 
 newtype SigningKey = SigningKey
   { getSigningKeyFilePath :: FilePath }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 newtype VerificationKey = VerificationKey
   { getVerificationKeyFilePath :: FilePath }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data KeyPair = KeyPair
   { _signingKey :: SigningKey
   , _verificationKey :: VerificationKey
   }
-  deriving (Show)
+  deriving (Show, Read)
 
 mkKeyPair :: FilePath -> FilePath -> KeyPair
 mkKeyPair spath vpath = KeyPair (SigningKey spath) (VerificationKey vpath)
@@ -160,7 +162,7 @@ data HydraKeyInfo = HydraKeyInfo
   { _cardanoKeys :: KeyPair
   , _hydraKeys :: KeyPair
   }
-  deriving (Show)
+  deriving (Show, Read)
 
 -- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.cardano.{vk,sk}" keys being

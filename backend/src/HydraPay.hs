@@ -26,7 +26,7 @@ import Data.Aeson ((.:))
 import Data.Aeson as Aeson
 import Data.Maybe
 import Data.String.Interpolate ( i, iii )
-import System.IO (IOMode(WriteMode), openFile)
+import System.IO (IOMode(WriteMode), openFile, hClose)
 import Network.WebSockets.Client
 import qualified Network.WebSockets.Connection as WS
 
@@ -60,6 +60,7 @@ import Data.Aeson.Types (parseMaybe)
 import Control.Monad.IO.Class
 import Control.Monad.Except
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
+import System.IO.Temp (withTempFile)
 
 
 -- | The location where we store cardano and hydra keys
@@ -603,6 +604,7 @@ data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
   , _cardanoNodeInfo :: CardanoNodeInfo
   }
+  deriving (Show, Read)
 
 data HydraNodeInfo = HydraNodeInfo
   { _nodeId :: Int
@@ -613,6 +615,7 @@ data HydraNodeInfo = HydraNodeInfo
   , _monitoringPort :: Int
   , _keys :: HydraKeyInfo
   }
+  deriving (Show,Read)
 
 -- | Takes the node participant and the list of peers
 mkHydraNodeCP :: HydraSharedInfo -> HydraNodeInfo -> [HydraNodeInfo] -> CreateProcess
@@ -688,3 +691,27 @@ cardanoNodeCreateProcess =
    , "devnet/vrf.skey"
    ]) { std_out = CreatePipe
       }
+
+
+signAndSubmitTx :: CardanoNodeInfo -> SigningKey -> Tx -> IO ()
+signAndSubmitTx cninfo sk tx = do
+  withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
+    LBS.hPut draftHandle $ Aeson.encode tx
+    hClose draftHandle
+    withTempFile "." "tx.signed" $ \signedFile signedHandle -> do
+      hClose signedHandle
+      let cp = (proc cardanoCliPath [ "transaction"
+                                    , "sign"
+                                    , "--tx-body-file"
+                                    , draftFile
+                                    , "--signing-key-file"
+                                    , getSigningKeyFilePath sk
+                                    , "--out-file"
+                                    , signedFile
+                                    ])
+            { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninfo)]
+            }
+      _ <- readCreateProcess cp ""
+      submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
+
+

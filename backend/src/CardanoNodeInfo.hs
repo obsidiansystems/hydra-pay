@@ -1,6 +1,7 @@
 module CardanoNodeInfo where
 
 newtype CardanoNodeType = TestNet { _testNetMagic  :: Int }
+  deriving (Show,Read)
 
 data CardanoNodeInfo = CardanoNodeInfo
   { _nodeType :: CardanoNodeType,
@@ -8,3 +9,4 @@ data CardanoNodeInfo = CardanoNodeInfo
     _nodeLedgerProtocolParameters :: FilePath,
     _nodeLedgerGenesis :: FilePath
   }
+  deriving (Show,Read)

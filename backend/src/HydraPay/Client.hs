@@ -192,14 +192,16 @@ mapLeft f (Right b) = Right b
 getStatus_ :: T.Text -> IO ()
 getStatus_ = void . getStatus
 
+-- TODO: delete this function in favour of keys-as-values
 getAndSubmitTx :: CardanoNodeInfo -> Int -> TxType -> Lovelace -> IO ()
 getAndSubmitTx cninfo i tt amount = do
   Just [addr] <- getDevnetAddresses [i]
   resp <- getAddFundsTx addr amount
   case resp of
     Nothing -> putStrLn "Failed to get Tx"
-    Just tx -> signAndSubmitTx cninfo addr tx
+    Just tx -> HydraPay.Client.signAndSubmitTx cninfo addr tx
 
+-- TODO: delete this function in favour of keys-as-values
 signAndSubmitTx :: CardanoNodeInfo -> Address -> Tx -> IO ()
 signAndSubmitTx cninfo addr tx = do
   withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
