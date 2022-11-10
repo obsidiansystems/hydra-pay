@@ -35,6 +35,10 @@ module Hydra.Devnet
   , txInput
   , buildSignedHydraTx
   , generateCardanoKeys
+  , getTipSlotNo
+  , transferAmount
+  , transferAll
+  , getAllLovelaceUtxos
   )
 
 where
@@ -328,6 +332,14 @@ getCardanoAddress cninf keyPath =
                <> cardanoNodeArgs cninf
          ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
+
+-- | Returns Nothing if the address doesn't have enough funds to cover fees.
+transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Maybe TxIn)
+transferAll cninf signingKey fromAddr destAddr = do
+  txins <- getAllLovelaceUtxos cninf fromAddr
+  transferAmount cninf signingKey txins destAddr True Nothing
+  
+
 seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m TxIn
 seedAddressFromFaucetAndWait cninf faucetKeys addr amount isFuel = do
   txin <- liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount isFuel
@@ -369,6 +381,92 @@ buildDraftTx cninf tx = do
                            ""
   pure filename
 
+buildRawEmptyTx :: () => CardanoNodeInfo -> [TxIn] -> [Address] -> IO FilePath
+buildRawEmptyTx cninf txins outAddrs = do
+  filename <- getTempPath'
+  _ <- readCreateProcess ((proc cardanoCliPath $ filter (/= "")
+                              [ "transaction"
+                              , "build-raw"
+                              ]
+                              <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ txins)
+                              <>
+                              concatMap (\addr -> [ "--tx-out", T.unpack addr <> "+0" ]) outAddrs
+                              <>
+                              [ "--fee", "0"
+                              , "--invalid-hereafter", "0"
+                              , "--out-file", filename
+                              ])
+                              { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+                           ""
+  pure filename
+
+calculateMinFees :: () => CardanoNodeInfo -> FilePath -> Int -> Int -> IO Lovelace
+calculateMinFees cninf rawEmptyTx inCount outCount = do
+  out <- readCreateProcess ((proc cardanoCliPath $ filter (/= "")
+                              [ "transaction"
+                              , "calculate-min-fee"
+                              , "--tx-body-file", rawEmptyTx
+                              , "--tx-in-count", show inCount
+                              , "--tx-out-count", show outCount
+                              , "--witness-count", "1"
+                              , "--byron-witness-count", "0"
+                              , "--protocol-params-file", _nodeLedgerProtocolParameters cninf
+                              ]
+                              <> cardanoNodeArgs cninf)
+                              { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+                           ""
+  pure $ read (head (words out))
+
+getTipSlotNo :: CardanoNodeInfo -> IO Integer
+getTipSlotNo cninf = do
+  out1 <- readCreateProcess
+          ((proc cardanoCliPath $ ["query", "tip"] <> cardanoNodeArgs cninf)
+           { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+          ""
+  read <$> readProcess jqPath (pure $ ".\"slot\"") out1
+
+getAllLovelaceUtxos :: CardanoNodeInfo -> Address -> IO (Map TxIn Int)
+getAllLovelaceUtxos cninf fromAddr = do
+  allUtxos <- queryAddressUTXOs cninf fromAddr
+  pure $ Map.mapMaybe (Map.lookup "lovelace" . value) $ allUtxos
+
+-- | Returns Nothing if there are not enough funds available.
+transferAmount :: CardanoNodeInfo -> SigningKey -> Map TxIn Lovelace -> Address -> Bool -> Maybe Lovelace -> IO (Maybe TxId)
+transferAmount cninf signingKey utxos toAddr minusFee maybeAmount = do
+  let txins = Map.keys utxos
+  let fullAmount :: Lovelace = sum . Map.elems $ utxos
+  emptyTx <- buildRawEmptyTx cninf txins [toAddr]
+  fee' <- calculateMinFees cninf emptyTx (Map.size utxos) 1
+  let fee = if fee' == 0 then ada 3 else fee'
+  let amount = fromMaybe fullAmount maybeAmount
+  if (if minusFee
+      then fee >= amount || amount >= fullAmount
+      else fee + amount >= fullAmount)
+    then pure Nothing
+    else Just <$> do
+      tipSlotNo <- getTipSlotNo cninf
+      -- FIXME: On devnet the calculated fee is 0 even though that's not accepted.
+      -- Using a temporary three Ada as the fee until there's a better way.
+      submitTx cninf
+        =<< signTx cninf signingKey
+        =<< buildRawTx cninf txins (Map.singleton toAddr (bool (+) (-) minusFee fee fullAmount)) (tipSlotNo + 200) fee
+
+buildRawTx :: CardanoNodeInfo -> [TxIn] -> Map Address Lovelace -> Integer -> Lovelace -> IO FilePath
+buildRawTx cninf txins outAmounts invalidAfter fee = do
+  outFile <- getTempPath'
+  _ <- readCreateProcess
+    ((proc cardanoCliPath $ ["transaction", "build-raw"
+                            ]
+                            <> concatMap (\txin -> ["--tx-in", T.unpack txin]) txins
+                            <> concatMap (\(addr,amount) -> [ "--tx-out", [i|#{addr}+#{amount}|] ]) (Map.toList outAmounts)
+                            <> [ "--invalid-hereafter", show invalidAfter
+                               , "--fee", show fee
+                               , "--out-file", outFile
+                               ]
+     )
+     { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+    ""
+  pure outFile
 
 buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
 buildSeedTxForAddress cninf faucetvk addr amount isFuel = do

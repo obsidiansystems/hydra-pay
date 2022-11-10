@@ -74,9 +74,8 @@ handleClientMessage state = \case
   ClientHello -> pure ServerHello
 
   Withdraw address -> do
-    -- Withdraw everything except the minRemainder
-    amount <- getProxyFunds state address
-    result <- withdraw state $ WithdrawRequest address (amount - minRemainder)
+    -- Withdraw everything minus fees
+    result <- withdraw state $ WithdrawRequest address Nothing
     case result of
       Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) $ txInput 0 txid
       _ -> pure ()
@@ -120,8 +119,6 @@ handleClientMessage state = \case
     pure OperationSuccess
 
   _ -> pure UnhandledMessage
-  where
-    minRemainder = 3000000
 
 -- Integration tests for the various messages
 testSayHello :: IO ()

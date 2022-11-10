@@ -98,6 +98,24 @@ runWPreview f = do
 
 
 
+testTransferAll cninf hydraSharedInfo faucetKeys = do
+  oneKs <- runLog $ generateCardanoKeys "tmp/one"
+  print oneKs
+  one <- getCardanoAddress cninf $ _verificationKey oneKs
+  twoKs <- runLog $ generateCardanoKeys "tmp/two"
+  print twoKs
+  two <- getCardanoAddress cninf $ _verificationKey twoKs
+  runLog $ seedAddressFromFaucetAndWait cninf faucetKeys one (ada 100) False
+
+  print =<< queryAddressUTXOs cninf one
+  print =<< queryAddressUTXOs cninf two
+  Just txin <- transferAll cninf (_signingKey oneKs) one two
+  print txin
+  runLog $ waitForTxIn cninf txin
+  print =<< queryAddressUTXOs cninf one
+  print =<< queryAddressUTXOs cninf two
+  pure ()
+
 -- (state, ((one,oneKs), (two,twoKs))) <- runWDevnet testFn
 testFn :: CardanoNodeInfo -> HydraSharedInfo -> KeyPair -> IO (State, ((Address, KeyPair), (Address, KeyPair)))
 testFn cninf hydraSharedInfo faucetKeys = do
@@ -173,10 +191,10 @@ testFn cninf hydraSharedInfo faucetKeys = do
     -- -- TODO: How do I do this without risking InsufficientFunds?
     oneFnds <- getProxyFunds state one
     print oneFnds
-    print =<< withdraw state (WithdrawRequest one (oneFnds - (ada 3)))
+    print =<< withdraw state (WithdrawRequest one Nothing)
     twoFnds <- getProxyFunds state two
     print twoFnds
-    print =<< withdraw state (WithdrawRequest two (twoFnds - (ada 3)))
+    print =<< withdraw state (WithdrawRequest two Nothing)
     -- print =<< withdraw state (WithdrawRequest two (ada ))
 
     -- print ""

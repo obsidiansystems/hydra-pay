@@ -162,6 +162,9 @@ headBalance state name addr = do
     pure (Right fullAmount)
 
 
+stateCardanoNodeInfo :: State -> CardanoNodeInfo
+stateCardanoNodeInfo = _cardanoNodeInfo . _state_hydraInfo
+
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
 l1Balance state addr includeFuel = do
   utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
@@ -257,7 +260,8 @@ initHead state (HeadInit name _ con) = do
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
-  , withdraw_amount :: Lovelace
+  -- | Nothing to redraw all.
+  , withdraw_amount :: Maybe Lovelace
   }
   deriving(Eq, Show, Generic)
 
@@ -265,9 +269,9 @@ instance ToJSON WithdrawRequest
 instance FromJSON WithdrawRequest
 
 
--- | Withdraw funds (if available from proxy request)
+-- | Withdraw funds (if available from proxy request), fee is subtracted.
 withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
-withdraw state (WithdrawRequest addr lovelace) = do
+withdraw state (WithdrawRequest addr maybeAmount) = do
   (proxyAddr, keyInfo) <- addOrGetKeyInfo state addr
   utxos <- queryAddressUTXOs nodeInfo proxyAddr
   let
@@ -276,21 +280,9 @@ withdraw state (WithdrawRequest addr lovelace) = do
     total = sum txInAmounts
 
   liftIO $ putStrLn $ "Address has: " <> show total <> " Lovelace"
-  case total >= lovelace of
-    False -> do
-      pure $ Left InsufficientFunds
-
-    True -> liftIO $ do
-      (filepath, txid) <- buildSignedTx nodeInfo (_signingKey $ _cardanoKeys keyInfo) $ SomeTx
-          { _tx_ins = Map.keys txInAmounts,
-            _tx_outAddr = addr,
-            _tx_outAmount = lovelace,
-            _tx_changeAddr = proxyAddr,
-            _tx_outDatumHash = Nothing
-          }
-      submitTx nodeInfo $ filepath
-      pure $ Right txid
-
+  let signingKey = _signingKey $ _cardanoKeys keyInfo
+  result <- liftIO $ transferAmount nodeInfo signingKey txInAmounts addr True maybeAmount
+  pure $ maybe (Left InsufficientFunds) Right result
   where
     nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 

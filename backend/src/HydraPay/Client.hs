@@ -118,7 +118,7 @@ postWithdrawal i amount = do
   Just addr <- getDevnetAddress i
   initReq <-  parseRequest $ "http://localhost:8000/hydra/withdraw"
   let
-    payload = Aeson.encode $ WithdrawRequest addr amount
+    payload = Aeson.encode $ WithdrawRequest addr (Just amount)
     req = setRequestBodyLBS payload $ initReq
       { method = "POST"
       }
