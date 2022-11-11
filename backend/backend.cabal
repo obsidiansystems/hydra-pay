@@ -66,6 +66,7 @@ library
     HydraPay
     HydraPay.Network
     HydraPay.Client
+    HydraPay.WebSocket
   other-modules:
     Paths
     Hydra.Devnet

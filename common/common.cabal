@@ -34,6 +34,7 @@ library
     Common.Api
     Common.Route
     Common.DemoApi
+    Common.Helpers
 
     Hydra.Types
     Hydra.ServerOutput

@@ -22,18 +22,8 @@ import qualified Data.Aeson as Aeson
 import System.IO
 import System.IO.Temp
 
-seconds :: Int -> Int
-seconds = (* 1000000)
-
-
 runLog :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 runLog = flip runLoggingT (print . renderWithSeverity id)
-
-cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
-
-devnetFaucetKeys :: KeyPair
-devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do

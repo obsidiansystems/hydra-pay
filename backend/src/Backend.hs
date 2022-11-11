@@ -15,6 +15,11 @@ import Prelude hiding (filter)
 import Hydra.Types
 import Hydra.Devnet
 
+import Data.Maybe
+import Data.Map (Map)
+import qualified Data.Map as Map
+
+import Common.Helpers
 import Common.Route
 import Obelisk.Backend
 import Obelisk.Route
@@ -56,23 +61,6 @@ import Control.Monad.Trans.Maybe
 import System.Directory (doesFileExist)
 import qualified HydraPay.WebSocketDemo as WSD
 
-getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
-getDevnetHydraSharedInfo = do
-  scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
-  pure $ HydraSharedInfo
-    { _hydraScriptsTxId = T.unpack scripts
-    , _hydraLedgerGenesis = "devnet/genesis-shelley.json"
-    -- These are devnet-like protocol parameters set to 0 fees:
-    , _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json"
-    , _cardanoNodeInfo = cardanoDevnetNodeInfo
-    }
-
-cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/devnet-protocol-parameters.json" "devnet/genesis-shelley.json"
-
-devnetFaucetKeys :: KeyPair
-devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
-
 -- TODO: See if it's okay to change Either a (Maybe b) to Just Either a b.
 -- What does writing toJSON () to response do?
 handleJsonRequestBody :: (MonadSnap m, ToJSON a,
@@ -94,203 +82,121 @@ handleJsonRequestBody f = do
       . Aeson.decode
       . LBS.fromChunks
 
-data DemoConfig
-  = CfgDevnet
-  | CfgPreview PreviewDemoConfig
-  deriving (Show,Read)
-
-data PreviewDemoConfig = PreviewDemoConfig
-  { _previewNodeInfo :: CardanoNodeInfo
-  , _previewHydraInfo :: HydraSharedInfo
-  , _previewFaucet :: KeyPair
-  , _previewParticipants :: [KeyPair]
-  }
-  deriving (Show,Read)
-
-demoCfgPath :: FilePath
-demoCfgPath = "democonfig"
-
-writeDemoConfig :: DemoConfig -> IO ()
-writeDemoConfig cfg = do
-  writeFile demoCfgPath . show $ cfg
-
-readDemoConfig :: IO DemoConfig
-readDemoConfig = fmap (fromMaybe CfgDevnet) . runMaybeT $ do
-  guard <=< liftIO $ doesFileExist demoCfgPath
-  MaybeT $ readMaybe <$> readFile demoCfgPath
-
-seedDemoAddressPreview :: PreviewDemoConfig -> Lovelace -> KeyPair -> IO TxIn
-seedDemoAddressPreview cfg amount kp = flip runLoggingT (print . renderWithSeverity id) $ do
-    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
-    seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr amount False
-
-seedDemoAddressesPreview :: PreviewDemoConfig -> Lovelace -> IO ()
-seedDemoAddressesPreview cfg amount =
-  forM_ (_previewParticipants cfg) $ seedDemoAddressPreview cfg amount
-
-deseedDemoAddressesPreview :: PreviewDemoConfig -> IO ()
-deseedDemoAddressesPreview cfg =
-  forM_ (_previewParticipants cfg) $ \kp -> do
-    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
-    faucetAddr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey (_previewFaucet cfg))
-    transferAll (_previewNodeInfo cfg) (_signingKey kp) addr faucetAddr
-
-
-whenDevnet :: (Applicative m) => DemoConfig -> m () -> m ()
-whenDevnet cfg = when (case cfg of
-                          CfgDevnet -> True
-                          _ -> False)
-
-runLogging = flip runLoggingT (print . renderWithSeverity id)
-
-withCardanoNode :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m, _) =>
-  (State -> CardanoNodeInfo -> [(KeyPair, Address)] -> LoggingT (WithSeverity (Doc ann)) IO a) -> m a
-withCardanoNode f = do
-  cfg <- liftIO readDemoConfig
-  case cfg of
+setupDemo :: State -> IO ([(KeyPair, Address)])
+setupDemo state = do
+  cns <- readMVar (_state_cardanoNodeState state)
+  case cardanoNodeState_nodeType cns of
     CfgDevnet -> do
-      _ <- liftIO $ readCreateProcess (shell "rm -rf devnet") ""
-      _ <- liftIO $ readCreateProcess (shell "rm -rf demo-logs") ""
-      prepareDevnet
-      liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
-        flip runLoggingT (print . renderWithSeverity id) $ do
-          liftIO $ threadDelay (seconds 3)
-          logMessage $ WithSeverity Informational [i|
-            Cardano node is running
-            |]
-          _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
-                                        , "protocol-parameters"
-                                        , "--testnet-magic"
-                                        , "42"
-                                        , "--out-file"
-                                        , "devnet/devnet-protocol-parameters.json"
-                                        ])
-                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
-                }) ""
-          prefix <- liftIO getTempPath'
-          oneKs <- generateCardanoKeys $ prefix <> "one"
-          one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
-          twoKs <- generateCardanoKeys $ prefix <> "two"
-          two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
-          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
-          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
-          state <- getHydraPayState =<< getDevnetHydraSharedInfo
-          f state cardanoDevnetNodeInfo [(oneKs, one), (twoKs, two)]
-    CfgPreview pcfg -> liftIO . flip runLoggingT (print . renderWithSeverity id) $ do
-      state <- getHydraPayState (_previewHydraInfo pcfg)
-      participants <- forM (_previewParticipants pcfg) $ \kp -> do
+      prefix <- liftIO getTempPath'
+      oneKs <- withLogging $ generateCardanoKeys $ prefix <> "one"
+      one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
+      twoKs <- withLogging $ generateCardanoKeys $ prefix <> "two"
+      two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
+      withLogging $ do
+        seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
+        seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
+      -- seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
+      pure [(oneKs, one), (twoKs, two)]
+
+    CfgPreview pcfg -> do
+      forM (_previewParticipants pcfg) $ \kp -> do
         addr <- liftIO $ getCardanoAddress (_previewNodeInfo pcfg) (_verificationKey kp)
         pure (kp, addr)
-      f state (_previewNodeInfo pcfg) participants
-                    
+
+runLogging = flip runLoggingT (print . renderWithSeverity id)
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
       -- NOTE(skylar): Running heads is a map from head name to network handle
       flip runLoggingT (print . renderWithSeverity id) $ do
-        withCardanoNode $ \state cninf (participants@[(ks1, addr1), (ks2, addr2)]) -> do
-            let addrs = snd <$> participants
-            logMessage $ WithSeverity Informational [i|
-              Serving
-              |]
-            liftIO . serve $ \case
-              BackendRoute_HydraPay :/ hpr -> case hpr of
-                HydraPayRoute_Init :/ () -> do
-                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . initHead state)
-                HydraPayRoute_Commit :/ () -> do
-                  handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . commitToHead state)
-                HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
-                  result <- buildAddTx Fuel state addr amount
-                  case result of
-                    Left err -> writeLBS $ Aeson.encode err
-                    Right tx -> writeLBS $ Aeson.encode tx
+        liftIO $ runHydraPay $ \state -> do
+          hsi <- getHydraSharedInfo state
+          participants <- setupDemo state
+          let cninf = _hydraCardanoNodeInfo hsi
+          liftIO . serve $ \case
+            BackendRoute_HydraPay :/ hpr -> case hpr of
+              HydraPayRoute_Init :/ () -> do
+                handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . initHead state)
+              HydraPayRoute_Commit :/ () -> do
+                handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . commitToHead state)
+              HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
+                result <- buildAddTx Fuel state addr amount
+                case result of
+                  Left err -> writeLBS $ Aeson.encode err
+                  Right tx -> writeLBS $ Aeson.encode tx
 
-                HydraPayRoute_AddFundsTx :/ (addr, amount) -> do
-                  result <- buildAddTx Funds state addr amount
-                  case result of
-                    Left err -> writeLBS $ Aeson.encode err
-                    Right tx -> writeLBS $ Aeson.encode tx
+              HydraPayRoute_AddFundsTx :/ (addr, amount) -> do
+                result <- buildAddTx Funds state addr amount
+                case result of
+                  Left err -> writeLBS $ Aeson.encode err
+                  Right tx -> writeLBS $ Aeson.encode tx
 
-                HydraPayRoute_HeadStatus :/ name -> do
-                  status <- getHeadStatus state name
-                  writeLBS $ Aeson.encode status
+              HydraPayRoute_HeadStatus :/ name -> do
+                status <- getHeadStatus state name
+                writeLBS $ Aeson.encode status
 
-                HydraPayRoute_Close :/ name -> do
-                  status <- closeHead state name
-                  writeLBS $ Aeson.encode status
+              HydraPayRoute_Close :/ name -> do
+                status <- closeHead state name
+                writeLBS $ Aeson.encode status
 
-                HydraPayRoute_Withdraw :/ () -> do
-                  runRequestBody Streams.toList >>= (\case
-                    Nothing -> do
-                      modifyResponse $ setResponseStatus 400 "Bad Request"
-                      writeLBS $ Aeson.encode InvalidPayload
+              HydraPayRoute_Withdraw :/ () -> do
+                runRequestBody Streams.toList >>= (\case
+                  Nothing -> do
+                    modifyResponse $ setResponseStatus 400 "Bad Request"
+                    writeLBS $ Aeson.encode InvalidPayload
 
-                    Just wr -> do
-                      result <- liftIO $ withLogging $ withdraw state wr
-                      case result of
-                        Right txid -> writeLBS $ Aeson.encode txid
-                        Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
+                  Just wr -> do
+                    result <- liftIO $ withLogging $ withdraw state wr
+                    case result of
+                      Right txid -> writeLBS $ Aeson.encode txid
+                      Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
 
-                HydraPayRoute_SubmitTx :/ addr ->
-                  handleJsonRequestBody ((fmap . fmap) Just . submitTxOnHead state addr)
+              HydraPayRoute_SubmitTx :/ addr ->
+                handleJsonRequestBody ((fmap . fmap) Just . submitTxOnHead state addr)
 
-                HydraPayRoute_Head :/ () -> do
-                  handleJsonRequestBody $
-                    fmap (Just <$>)
-                    . mapM (getHeadStatus state . _head_name)
-                    <=< createHead state
+              HydraPayRoute_Head :/ () -> do
+                handleJsonRequestBody $
+                  fmap (Just <$>)
+                  . mapM (getHeadStatus state . _head_name)
+                  <=< createHead state
 
-                HydraPayRoute_HeadBalance :/ (head, addr) -> do
-                  result <- headBalance state head addr
-                  writeLBS $ Aeson.encode result
+              HydraPayRoute_HeadBalance :/ (head, addr) -> do
+                result <- headBalance state head addr
+                writeLBS $ Aeson.encode result
 
-                HydraPayRoute_L1Balance :/ addr -> do
-                  writeLBS . Aeson.encode =<< l1Balance state addr True
+              HydraPayRoute_L1Balance :/ addr -> do
+                writeLBS . Aeson.encode =<< l1Balance state addr True
 
-                HydraPayRoute_Funds :/ addr -> do
-                  writeLBS . Aeson.encode =<< getProxyFunds state addr
+              HydraPayRoute_Funds :/ addr -> do
+                writeLBS . Aeson.encode =<< getProxyFunds state addr
 
-                HydraPayRoute_Api :/ () -> do
-                  runWebSocketsSnap $ \pendingConn -> do
-                    conn <- WS.acceptRequest pendingConn
-                    WS.forkPingThread conn 30
-                    forever $ do
-                      mClientMsg <- Aeson.decode <$> WS.receiveData conn
-                      case mClientMsg of
-                        Just clientMsg -> handleClientMessage state clientMsg >>= WS.sendTextData conn . Aeson.encode
-                        Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
-                  pure ()
+              HydraPayRoute_Api :/ () -> do
+                runWebSocketsSnap $ \pendingConn -> do
+                  conn <- WS.acceptRequest pendingConn
+                  WS.forkPingThread conn 30
+                  WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
 
-              BackendRoute_DemoApi :/ () -> do
-                  runWebSocketsSnap $ \pendingConn -> do
-                    conn <- WS.acceptRequest pendingConn
-                    WS.forkPingThread conn 30
-                    forever $ do
-                      mClientMsg <- Aeson.decode <$> WS.receiveData conn
-                      case mClientMsg of
-                        Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
-                        Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
-                  pure ()
-                
-              BackendRoute_DemoAddresses :/ () -> do
-                writeLBS $ Aeson.encode [addr1,addr2]
+                  forever $ do
+                    mClientMsg <- Aeson.decode <$> WS.receiveData conn
+                    case mClientMsg of
+                      Just clientMsg -> do
+                        msg <- handleTaggedMessage conn state clientMsg
+                        WS.sendTextData conn . Aeson.encode $ msg
+                      Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+
+            BackendRoute_DemoApi :/ () -> do
+                runWebSocketsSnap $ \pendingConn -> do
+                  conn <- WS.acceptRequest pendingConn
+                  WS.forkPingThread conn 30
+                  forever $ do
+                    mClientMsg <- Aeson.decode <$> WS.receiveData conn
+                    case mClientMsg of
+                      Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
+                      Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
                 pure ()
 
-              BackendRoute_DemoTestWithdrawal :/ () -> do
-                liftIO $ runHydraPayClient $ \conn -> do
-
-                  Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr1 (ada 1000)
-                  signAndSubmitTx cninf (_signingKey ks1) tx
-
-                  Just OperationSuccess <- requestResponse conn $ Withdraw addr1
-                  pure ()
-
-              BackendRoute_Api :/ () -> pure ()
-              BackendRoute_Missing :/ _ -> pure ()
+            BackendRoute_Api :/ () -> pure ()
+            BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder
   }
-
-
-seconds :: Int -> Int
-seconds = (* 1000000)

@@ -1,6 +1,10 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
+
 -- | 
 
 module HydraPay.WebSocket where
+
 
 import Hydra.Types
 import Hydra.ClientInput
@@ -8,6 +12,7 @@ import Hydra.ServerOutput
 import Hydra.Devnet
 
 import HydraPay
+import HydraPay.Api
 
 import qualified Data.Text as T
 import Data.IORef
@@ -15,72 +20,79 @@ import Data.Foldable
 import Data.Aeson as Aeson
 import GHC.Generics
 
-import Control.Monad (forever)
-import Control.Monad.Loops (untilJust)
+import qualified Data.Map as Map
 
 import qualified Network.WebSockets as WS
 import HydraPay.Api
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Lens
 
-data Tagged a = Tagged
-  { tagged_id :: Int
-  , tagged_payload :: a
-  }
-  deriving (Eq, Show, Generic)
+import Control.Concurrent
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TChan
+import Control.Monad (forever)
+import Control.Monad.Loops (untilJust)
 
-instance ToJSON a => ToJSON (Tagged a)
-instance FromJSON a => FromJSON (Tagged a)
+import Control.Monad.Reader
+import Control.Monad.Fail
+import Control.Monad.Trans.Maybe
+import Control.Applicative
 
-data ClientMsg
-  = ClientHello
+import System.Process
+import System.Directory
 
-  | DoesHeadExist T.Text
+import qualified Network.WebSockets as WS
+import HydraPay.Api
+import Hydra.Devnet
 
-  | CreateHead HeadCreate
-  | InitHead HeadInit
-  | CommitHead HeadCommit
-  | CloseHead HeadName
+handleTaggedMessage :: WS.Connection -> State -> Tagged ClientMsg -> IO (Tagged ServerMsg)
+handleTaggedMessage conn state (Tagged tid msg) = do
+  msg <- handleClientMessage conn state msg
+  pure $ Tagged tid msg
 
-  | TearDownHead HeadName
-  -- ^ Kills network and removes head
+versionStr :: Version
+versionStr = "0.1.0"
 
-  | CheckFuel Address
-  | Withdraw Address
-  | GetAddTx TxType Address Lovelace
-  deriving (Eq, Show, Generic)
+handleClientMessage :: WS.Connection -> State -> ClientMsg -> IO (ServerMsg)
+handleClientMessage conn state = \case
+  RestartDevnet -> do
+    cns <- readMVar (_state_cardanoNodeState state)
+    case cardanoNodeState_nodeType cns of
+      CfgPreview _ -> pure ()
+      CfgDevnet -> do
+        heads <- Map.keys <$> readMVar (_state_heads state)
+        -- Terminate all the heads!
+        for_ heads $ terminateHead state
 
-instance ToJSON ClientMsg
-instance FromJSON ClientMsg
+        -- Create a new devnet and update the MVar
+        modifyMVar_ (_state_cardanoNodeState state) $ \cns -> do
+          teardownDevnet cns
+          withLogging getCardanoNodeState
+    pure DevnetRestarted
 
+  GetDevnetAddresses amount -> do
+    mAddrs <- getDevnetAddresses [1 .. amount]
+    case mAddrs of
+      Just addrs ->
+        pure $ DevnetAddresses addrs
+      Nothing ->
+        pure $
+        RequestError
+        "Unable to open seeded address file, restart devnet or wait for seeding to complete"
 
+  SubscribeTo name -> do
+    modifyMVar_ (state ^. state_subscribers) $ pure . Map.insertWith (<>) name (pure conn)
+    pure $ SubscriptionStarted name
 
-data ServerMsg
-  = ServerHello
-  | FundsTx Tx
-  | FuelAmount Lovelace
-  | OperationSuccess
-  | InvalidMessage
-  | UnhandledMessage
-  | HeadExistsResult Bool
-  | ServerError HydraPayError
-  deriving (Eq, Show, Generic)
-
-instance ToJSON ServerMsg
-instance FromJSON ServerMsg
-
-handleTaggedMessage :: State -> Tagged ClientMsg -> IO (Tagged ServerMsg)
-handleTaggedMessage state (Tagged tid msg) = do
-  Tagged tid <$> handleClientMessage state msg
-
-handleClientMessage :: State -> ClientMsg -> IO ServerMsg
-handleClientMessage state = \case
-  ClientHello -> pure ServerHello
+  ClientHello -> pure $ ServerHello versionStr
 
   Withdraw address -> do
     -- Withdraw everything minus fees
     result <- withdraw state $ WithdrawRequest address Nothing
     case result of
-      Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) txid
+      Right txid -> do
+        cardanoNodeInfo <- stateCardanoNodeInfo state
+        withLogging $ waitForTxIn cardanoNodeInfo $ txInput 0 txid
       _ -> pure ()
     pure $ either ServerError (const OperationSuccess) result
 
@@ -109,7 +121,7 @@ handleClientMessage state = \case
     sendToHeadAndWaitFor Close (\case
       HeadIsFinalized {} -> True
       _ -> False) state name
-    pure OperationSuccess
+    pure $ OperationSuccess
 
   DoesHeadExist name -> do
     result <- getHeadStatus state name
@@ -119,40 +131,85 @@ handleClientMessage state = \case
 
   TearDownHead name -> do
     removeHead state name
-    pure OperationSuccess
-  _ -> pure UnhandledMessage
+    pure $ OperationSuccess
 
--- Integration tests for the various messages
-testSayHello :: IO ()
-testSayHello = do
-  WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
-    WS.sendTextData conn . Aeson.encode $ Tagged 0 ClientHello
+  _ -> pure $ UnhandledMessage
+  where
+    minRemainder = 3000000
 
-    msg <- Aeson.decode <$> WS.receiveData conn
-    case msg of
-      Just (Tagged 0 ServerHello) -> putStrLn "Server says hello"
-      _ -> putStrLn ""
-    pure ()
+newtype HydraPayClient a = HydraPayClient
+  { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a
+  }
+  deriving (Functor, Applicative, Monad, MonadIO, MonadFail)
 
-runHydraPayClient :: (WS.Connection -> IO a) -> IO a
+data ClientState = ClientState
+  { clientState_connection :: WS.Connection
+  , clientState_inbox :: TChan Msg
+  , clientState_msgs :: TChan ServerMsg
+  , clientState_nextId :: MVar Int
+  }
+
+data Msg
+  = TaggedMsg (Tagged ServerMsg)
+  | PlainMsg ServerMsg
+
+instance FromJSON Msg where
+  parseJSON v = (TaggedMsg <$> parseJSON v) <|> (PlainMsg <$> parseJSON v)
+
+runHydraPayClient :: HydraPayClient a -> IO (Maybe a)
 runHydraPayClient action = do
-  WS.runClient "127.0.0.1" 8000 "hydra/api" action
+  nextId <- newMVar 0
+  broadcastChannel <- newBroadcastTChanIO
+  msgsChannel <- newBroadcastTChanIO
+  WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
+    -- We have a read thread that is centralized so we don't miss any messages
+    _ <- forkIO $ forever $ do
+      mMsg :: Maybe Msg <- Aeson.decode <$> WS.receiveData conn
+      case mMsg of
+        Just (PlainMsg p) -> do
+          atomically $ writeTChan msgsChannel p
+        Just msg ->
+          atomically $ writeTChan broadcastChannel msg
+        Nothing -> pure ()
+      pure ()
+    flip runReaderT (ClientState conn broadcastChannel msgsChannel  nextId) $ runMaybeT $ unHydraPayClient action
 
-requestResponse :: WS.Connection -> ClientMsg -> IO (Maybe ServerMsg)
-requestResponse conn msg = do
-  WS.sendTextData conn . Aeson.encode $ msg
-  Aeson.decode <$> WS.receiveData conn
+requestResponse :: ClientMsg -> HydraPayClient ServerMsg
+requestResponse msg = HydraPayClient . MaybeT . ReaderT $ \(ClientState conn inbox otherInbox nid) -> do
+  n <- modifyMVar nid $ \x -> pure (x + 1, x)
+  readChan <- atomically $ dupTChan inbox
+  WS.sendTextData conn . Aeson.encode $ Tagged n msg
+  Just <$> waitForResponse n readChan
+  where
+    waitForResponse n chan = do
+      msg <- atomically $ readTChan chan
+      case msg of
+        TaggedMsg (Tagged n' msg) | n == n' -> pure msg
+        _ -> waitForResponse n chan
+
+-- Start commiting
+-- Some time after we start commiting, we will get a HeadIsOpen
+-- at that point the Head is ready to go
+-- We need to wait for this HeadIsOpen or some error or something
+waitForHeadOpen :: HeadName -> HydraPayClient ()
+waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ box nid) -> do
+  putStrLn "Waiting for OPEN"
+  readChan <- atomically $ dupTChan box
+  checkForOpenStatus readChan
+  liftIO $ putStrLn "DONE WE ARE OPEN"
+  Just <$> pure ()
+  where
+    checkForOpenStatus box = do
+      putStrLn "Waiting for a thing??"
+      msg <- atomically $ readTChan box
+      putStrLn "Did we even get this??"
+      case msg of
+        HeadStatusChanged name Status_Open | name == hname -> pure ()
+        _ -> checkForOpenStatus box
 
 getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
 getAddFundsTx addr amount = do
-  WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
-    WS.sendTextData conn . Aeson.encode $ Tagged 0 $ GetAddTx Funds addr amount
-
-    result <- untilJust $ do
-      msg <- Aeson.decode <$> WS.receiveData conn
-      case msg of
-        Just (Tagged 0 (FundsTx tx)) -> pure $ Just $ Just tx
-        Just (Tagged 0 _) -> pure $ Just Nothing
-        Just _ -> pure Nothing
-
-    pure result
+  result <- runHydraPayClient $ requestResponse $ GetAddTx Funds addr amount
+  pure $ case result of
+    Just (FundsTx tx) -> Just tx
+    _ -> Nothing

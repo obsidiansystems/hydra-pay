@@ -66,7 +66,8 @@ frontend = Frontend
         gotAddrs <- fmap switchDyn $ prerender (pure never) $ do
           rec
             jsBuild <- getPostBuild
-            result <- getAndDecode $ "/demo-addresses" <$ leftmost [jsBuild, () <$ failedToLoad]
+            result <- getAndDecode $ "/demo-addresses" <$ leftmost [jsBuild]
+                                                                   --, () <$ failedToLoad]
             let
               -- If we failed it is likely the server just hot reloaded in development
               -- and we just try again immediately
@@ -131,8 +132,11 @@ frontend = Frontend
               pure $ Map.delete txid <$ removalEv
 
             pure $ switchDyn $ mergeWith (.) . Map.elems <$> eventList
-        setRoute $ FrontendRoute_OpenChannel :/ () <$ gotAddrs
-        setRoute $ FrontendRoute_Setup :/ () <$ postBuild
+        subRoute_ $ \case
+          FrontendRoute_Monitor -> pure ()
+          _ -> do
+            setRoute $ FrontendRoute_OpenChannel :/ () <$ gotAddrs
+            setRoute $ FrontendRoute_Setup :/ () <$ postBuild
         setRoute $ FrontendRoute_PaymentChannel :/ () <$ newTx
         pure ()
   }
@@ -147,9 +151,42 @@ data DemoTx = DemoTx
 showAsMs :: Pico -> T.Text
 showAsMs = T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (*1000)
 
+monitorView ::
+  ( PostBuild t m
+  , Prerender t m
+  , SetRoute t (R FrontendRoute) (Client m)
+  , SetRoute t (R FrontendRoute) m
+  , RouteToUrl (R FrontendRoute) m
+  , MonadIO (Performable m)
+  , PerformEvent t m
+  , TriggerEvent t m
+  , DomBuilder t m
+  , MonadFix m
+  , MonadHold t m
+  ) => m ()
+monitorView = do
+  prerender_ (text "I am the monitor view, deal with it") $ mdo
+    (buttonEl, _)<- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
+
+    lastTagId <- foldDyn (+) 0 $ length <$> sendToHydraPay
+
+    let
+      sayHello = RestartDevnet <$ domEvent Click buttonEl
+      taggedHello = (current $ Tagged <$> lastTagId) <@> sayHello
+      sendToHydraPay = fmap pure $ (current $ Tagged <$> lastTagId) <@> sayHello
+
+      serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+
+    rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket "ws://localhost:8000/hydra/api" $ def
+      & webSocketConfig_send .~ sendToHydraPay
+
+    responses <- foldDyn (:) [] serverMsg
+    display responses
+
+    pure ()
+
 appView :: forall t m.
-  ( Reflex t
-  , PostBuild t m
+  ( PostBuild t m
   , Prerender t m
   , SetRoute t (R FrontendRoute) (Client m)
   , SetRoute t (R FrontendRoute) m
@@ -163,6 +200,7 @@ appView :: forall t m.
   ) => Dynamic t (Maybe T.Text) -> Dynamic t (Maybe T.Text) -> Dynamic t (Map Int DemoTx) -> RoutedT t (R FrontendRoute) m (Event t DemoTx)
 appView bobAddress aliceAddress latestTxs = do
   fmap switchDyn $ elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" $ subRoute $ \case
+    FrontendRoute_Monitor -> monitorView >> pure never
     FrontendRoute_Setup -> do
       elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
         el "div" $ text "Fast Payments Demo"

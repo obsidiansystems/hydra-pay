@@ -92,20 +92,6 @@ testHeadParticipants cninfo name partcipants@(initializer:_) con = do
   where
     funds = 1000000000
 
-getDevnetAddresses :: [Int] -> IO (Maybe [Address])
-getDevnetAddresses is = do
-  addrs <- zip [1..] . T.lines . T.pack <$> readFile addressesPath
-  pure $ for is (flip lookup addrs)
-
-headMay :: [a] -> Maybe a
-headMay (a:_) = Just a
-headMay _ = Nothing
-
-getDevnetAddress :: Int -> IO (Maybe Address)
-getDevnetAddress i = do
-  addrs <- getDevnetAddresses [i]
-  pure $ join $ headMay <$> addrs
-
 postWithdrawalFullBalance :: Int -> IO ()
 postWithdrawalFullBalance i = do
   Just addr <- getDevnetAddress i

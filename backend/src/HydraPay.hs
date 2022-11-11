@@ -1,5 +1,6 @@
 -- | 
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TupleSections #-}
@@ -10,7 +11,10 @@
 
 module HydraPay where
 
+import Text.Read (readMaybe)
 import Prelude hiding ((.))
+import Control.Lens hiding ((.=))
+import Control.Lens.TH
 import Control.Category ((.))
 import System.Process
 import GHC.Generics
@@ -26,18 +30,24 @@ import Data.Aeson ((.:))
 import Data.Aeson as Aeson
 import Data.Maybe
 import Data.String.Interpolate ( i, iii )
-import System.IO (IOMode(WriteMode), openFile, hClose)
+import System.IO (IOMode(WriteMode), openFile, hClose, Handle)
 import Network.WebSockets.Client
 import qualified Network.WebSockets.Connection as WS
+
+import Common.Helpers
 
 import Control.Concurrent
 import Data.Time (getCurrentTime, diffUTCTime)
 import Data.Time.Clock.Compat (nominalDiffTimeToSeconds)
 import Data.Fixed
 
+import Data.Foldable
+
 import Data.Text.Prettyprint.Doc
 import Control.Monad.Log
 import System.Directory
+
+import HydraPay.Api
 
 import Data.Traversable
 
@@ -62,6 +72,25 @@ import Control.Monad.Except
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 import System.IO.Temp (withTempFile)
 
+{-
+Architecture!
+
+HydraPay must manage all hydra nodes and heads
+
+WebSocket client!
+We need websockets for everything, because we need request responses and notification style stuff to write dApps and such
+The client facing dapp sockets need to be able to notify us about whatever is going on.
+
+Creating a head should probably just init right away, but give us a chance to change things and do whatever...
+A lot of the state management is just waiting for things to happen, with some triggers here and there..
+
+The devnet must be completely separate
+
+The nodes provide and respond to messages
+
+Hydra pay tracks their state and provides and responds to messages.
+-}
+
 
 -- | The location where we store cardano and hydra keys
 getKeyPath :: IO FilePath
@@ -74,19 +103,41 @@ getKeyPath = do
 withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
 withLogging = flip runLoggingT (print . renderWithSeverity id)
 
+
+getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
+getDevnetHydraSharedInfo = do
+  scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
+  pure $ HydraSharedInfo
+    { _hydraScriptsTxId = T.unpack scripts,
+      _hydraLedgerGenesis = "devnet/genesis-shelley.json",
+      _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json",
+      _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
+    }
+
 -- | State we need to run/manage Heads
 data State = State
-  { _state_hydraInfo :: HydraSharedInfo
+  { _state_cardanoNodeState :: MVar CardanoNodeState
   , _state_proxyAddresses :: MVar (Map Address (Address, HydraKeyInfo))
   -- ^ This is really temporary it has the mapping from cardano address to proxy + keys
   , _state_heads :: MVar (Map HeadName Head)
+  , _state_subscribers :: MVar (Map HeadName [WS.Connection])
   -- ^ This is really temporary until we stuff it all in a database
   , _state_networks :: MVar (Map HeadName Network)
   -- , _state_connectionPool :: Pool Connection -- We could ignore htis for now
   , _state_keyPath :: FilePath
+
   , _state_getPorts :: Int -> IO (Maybe [Int])
   , _state_freePorts :: [Int] -> IO ()
   }
+
+-- The Process of the node and the HydraSharedInfo for that node
+data CardanoNodeState = CardanoNodeState
+  { cardanoNodeState_processHandles :: Maybe ProcessHandles
+  , cardanoNodeState_hydraSharedInfo :: HydraSharedInfo
+  , cardanoNodeState_nodeType :: NodeConfig
+  }
+
+type ProcessHandles = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 
 -- | A Hydra Head in Hydra Pay
 data Head = Head
@@ -114,11 +165,12 @@ newtype Network = Network
   { _network_nodes :: Map Address Node
   }
 
-getHydraPayState :: (MonadIO m)
-  => HydraSharedInfo
-  -> m State
-getHydraPayState hydraSharedInfo = do
+runHydraPay :: (State -> IO a)
+  -> IO a
+runHydraPay action = do
   addrs <- liftIO $ newMVar mempty
+  subs <- liftIO $ newMVar mempty
+
   heads <- liftIO $ newMVar mempty
   networks <- liftIO $ newMVar mempty
   path <- liftIO $ getKeyPath
@@ -129,39 +181,121 @@ getHydraPayState hydraSharedInfo = do
            then (ps, Nothing)
            else (ys, Just xs)
   let freePorts ps = void $ modifyMVar_ ports (pure . (ps ++))
-  pure $ State hydraSharedInfo addrs heads networks path getPorts freePorts
+  cardanoNodeState <- withLogging getCardanoNodeState >>= newMVar
+  action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts
 
-data Tx = Tx
-  { txType :: T.Text
-  , txDescription :: T.Text
-  , txCborHex :: T.Text
+getHydraSharedInfo :: MonadIO m => State -> m HydraSharedInfo
+getHydraSharedInfo = liftIO .
+  fmap cardanoNodeState_hydraSharedInfo . readMVar . _state_cardanoNodeState
+
+stateCardanoNodeInfo :: MonadIO m => State -> m CardanoNodeInfo
+stateCardanoNodeInfo = fmap _hydraCardanoNodeInfo . getHydraSharedInfo
+
+getCardanoNodeState :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m CardanoNodeState
+getCardanoNodeState = do
+  cfg <- liftIO readNodeConfig
+  case cfg of
+    CfgDevnet -> liftIO $ do
+      readCreateProcess (shell "rm -rf devnet") ""
+      readCreateProcess (shell "rm -rf demo-logs") ""
+      handles <- createProcess cardanoNodeCreateProcess
+      _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
+                                        , "protocol-parameters"
+                                        , "--testnet-magic"
+                                        , "42"
+                                        , "--out-file"
+                                        , "devnet/devnet-protocol-parameters.json"
+                                        ])
+                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
+                }) ""
+      hydraSharedInfo <- withLogging getDevnetHydraSharedInfo
+      pure $ CardanoNodeState (Just handles) hydraSharedInfo CfgDevnet
+      {-
+      liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
+        flip runLoggingT (print . renderWithSeverity id) $ do
+          liftIO $ threadDelay (seconds 3)
+          logMessage $ WithSeverity Informational [i|
+            Cardano node is running
+            |]
+          _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
+                                        , "protocol-parameters"
+                                        , "--testnet-magic"
+                                        , "42"
+                                        , "--out-file"
+                                        , "devnet/devnet-protocol-parameters.json"
+                                        ])
+                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
+                }) ""
+          prefix <- liftIO getTempPath'
+          oneKs <- generateCardanoKeys $ prefix <> "one"
+          one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
+          twoKs <- generateCardanoKeys $ prefix <> "two"
+          two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
+          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
+          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
+          state <- getHydraPayState =<< getDevnetHydraSharedInfo
+          f state cardanoDevnetNodeInfo [(oneKs, one), (twoKs, two)]-}
+    CfgPreview pcfg -> liftIO $ --liftIO . flip runLoggingT (print . renderWithSeverity id) $ do
+      pure $ CardanoNodeState Nothing (_previewHydraInfo pcfg) (CfgPreview pcfg)
+      {-
+      state <- getHydraPayState (_previewHydraInfo pcfg)
+      participants <- forM (_previewParticipants pcfg) $ \kp -> do
+        addr <- liftIO $ getCardanoAddress (_previewNodeInfo pcfg) (_verificationKey kp)
+        pure (kp, addr)
+      f state (_previewNodeInfo pcfg) participants-}
+
+data NodeConfig
+  = CfgDevnet
+  | CfgPreview PreviewNodeConfig
+  deriving (Show,Read)
+
+data PreviewNodeConfig = PreviewNodeConfig
+  { _previewNodeInfo :: CardanoNodeInfo
+  , _previewHydraInfo :: HydraSharedInfo
+  , _previewFaucet :: KeyPair
+  , _previewParticipants :: [KeyPair]
   }
-  deriving (Eq, Show, Generic)
+  deriving (Show,Read)
 
-instance ToJSON Tx where
-  toJSON (Tx t d c) =
-    object [ "type" .= t
-           , "description" .= d
-           , "cborHex" .= c
-           ]
+demoCfgPath :: FilePath
+demoCfgPath = "democonfig"
 
-instance FromJSON Tx where
-  parseJSON = withObject "Tx" $ \v -> Tx
-    <$> v .: "type"
-    <*> v .: "description"
-    <*> v .: "cborHex"
+writeNodeConfig :: NodeConfig -> IO ()
+writeNodeConfig cfg = do
+  writeFile demoCfgPath . show $ cfg
 
-data TxType =
-  Funds | Fuel
-  deriving (Eq, Show, Generic)
+readNodeConfig :: IO NodeConfig
+readNodeConfig = fmap (fromMaybe CfgDevnet) . runMaybeT $ do
+  guard <=< liftIO $ doesFileExist demoCfgPath
+  MaybeT $ readMaybe <$> readFile demoCfgPath
 
-instance ToJSON TxType
-instance FromJSON TxType
+seedDemoAddressPreview :: PreviewNodeConfig -> Lovelace -> KeyPair -> IO TxIn
+seedDemoAddressPreview cfg amount kp = flip runLoggingT (print . renderWithSeverity id) $ do
+    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
+    seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr amount False
 
-isFuelType :: TxType -> Bool
-isFuelType Fuel = True
-isFuelType _ = False
+seedDemoAddressesPreview :: PreviewNodeConfig -> Lovelace -> IO ()
+seedDemoAddressesPreview cfg amount =
+  forM_ (_previewParticipants cfg) $ seedDemoAddressPreview cfg amount
 
+deseedDemoAddressesPreview :: PreviewNodeConfig -> IO ()
+deseedDemoAddressesPreview cfg =
+  forM_ (_previewParticipants cfg) $ \kp -> do
+    addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
+    faucetAddr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey (_previewFaucet cfg))
+    transferAll (_previewNodeInfo cfg) (_signingKey kp) addr faucetAddr
+
+
+whenDevnet :: (Applicative m) => NodeConfig -> m () -> m ()
+whenDevnet cfg = when (case cfg of
+                          CfgDevnet -> True
+                          _ -> False)
+
+teardownDevnet :: CardanoNodeState -> IO ()
+teardownDevnet (CardanoNodeState handles sharedinfo _) = do
+  maybe (pure ()) cleanupProcess handles
+  exists <- doesPathExist "devnet"
+  when exists $ removePathForcibly "devnet"
 
 headBalance :: (MonadIO m) => State -> HeadName -> Address -> m (Either HydraPayError Lovelace)
 headBalance state name addr = do
@@ -172,13 +306,10 @@ headBalance state name addr = do
       fullAmount = sum txInAmounts
     pure (Right fullAmount)
 
-
-stateCardanoNodeInfo :: State -> CardanoNodeInfo
-stateCardanoNodeInfo = _cardanoNodeInfo . _state_hydraInfo
-
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
 l1Balance state addr includeFuel = do
-  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
+  hydraInfo <- getHydraSharedInfo state
+  utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) addr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ (bool filterOutFuel id includeFuel) utxos
     fullAmount = sum txInAmounts
@@ -191,9 +322,10 @@ getProxyFunds state addr = do
   l1Balance state proxyAddr False
 
 getProxyFuel :: (MonadIO m) => State -> Address -> m Lovelace
-getProxyFuel  state addr = do
+getProxyFuel state addr = do
   (proxyAddr, _) <- addOrGetKeyInfo state addr
-  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) addr
+  hydraInfo <- getHydraSharedInfo state
+  utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) addr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
     fullAmount = sum txInAmounts
@@ -201,7 +333,8 @@ getProxyFuel  state addr = do
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
 buildAddTx txType state fromAddr amount = do
-  utxos <- queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) fromAddr
+  cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
+  utxos <- queryAddressUTXOs cardanoNodeInfo fromAddr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
@@ -226,13 +359,13 @@ buildAddTx txType state fromAddr amount = do
                         [ "--change-address"
                         , T.unpack fromAddr
                         , "--testnet-magic"
-                        , show . _testNetMagic . _nodeType $ _cardanoNodeInfo . _state_hydraInfo $ state
+                        , show . _testNetMagic . _nodeType $ cardanoNodeInfo
                         ]
                         <>
                         [ "--out-file"
                         , txBodyPath
                         ])) { env = Just [( "CARDANO_NODE_SOCKET_PATH"
-                                          , _nodeSocket . _cardanoNodeInfo . _state_hydraInfo $ state)] }
+                                          , _nodeSocket cardanoNodeInfo)] }
     ""
   txResult <- liftIO $ readFile txBodyPath
   case Aeson.decode $ LBS.pack txResult of
@@ -263,6 +396,18 @@ withNode state name addr f = do
         Nothing -> pure $ Left NotAParticipant
         Just node -> f node proxyAddr
 
+withAnyNode ::
+  MonadIO m =>
+  State ->
+  HeadName ->
+  (Node -> m (Either HydraPayError b)) ->
+  m (Either HydraPayError b)
+withAnyNode state name f = do
+  withNetwork state name $ \network -> do
+    case headMay $ Map.elems (_network_nodes network) of
+      Nothing -> pure $ Left NotAParticipant
+      Just node -> f node
+
 initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
 initHead state (HeadInit name _ con) = do
   (fmap.fmap) (const ()) $ sendToHeadAndWaitFor (Init $ fromIntegral con) (\case
@@ -283,6 +428,9 @@ instance FromJSON WithdrawRequest
 -- | Withdraw funds (if available from proxy request), fee is subtracted.
 withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
 withdraw state (WithdrawRequest addr maybeAmount) = do
+  hydraInfo <- getHydraSharedInfo state
+  let
+    nodeInfo = _hydraCardanoNodeInfo hydraInfo
   (proxyAddr, keyInfo) <- addOrGetKeyInfo state addr
   utxos <- queryAddressUTXOs nodeInfo proxyAddr
   let
@@ -294,8 +442,6 @@ withdraw state (WithdrawRequest addr maybeAmount) = do
   let signingKey = _signingKey $ _cardanoKeys keyInfo
   result <- liftIO $ transferAmount nodeInfo signingKey txInAmounts addr True maybeAmount
   pure $ maybe (Left InsufficientFunds) Right result
-  where
-    nodeInfo = _cardanoNodeInfo . _state_hydraInfo $ state
 
 fanoutHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 fanoutHead = sendToHeadAndWaitFor Fanout $ \case
@@ -338,8 +484,9 @@ commitToHead state (HeadCommit name addr amount) = do
       rightAmount (TxInInfo _ _ val) =
         Map.lookup "lovelace" val == Just amount
 
+    cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
     -- Get the first UTXO that has the correct amount as we MUST commit 1 or no UTXOs
-    proxyFunds <- Map.take 1 . Map.filter rightAmount . filterOutFuel <$> queryAddressUTXOs (_cardanoNodeInfo . _state_hydraInfo $ state) proxyAddr
+    proxyFunds <- Map.take 1 . Map.filter rightAmount . filterOutFuel <$> queryAddressUTXOs cardanoNodeInfo proxyAddr
 
     case Map.null proxyFunds of
       True -> pure $ Left NoValidUTXOToCommit
@@ -449,13 +596,14 @@ lookupHead state name = do
 -- | Generate a proxy address with keys,
 addOrGetKeyInfo :: MonadIO m => State -> Address -> m (Address, HydraKeyInfo)
 addOrGetKeyInfo state addr = do
+  cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
   liftIO $ modifyMVar (_state_proxyAddresses state) $ \old -> do
     case Map.lookup addr old of
       Just info -> pure (old, info)
       Nothing -> do
         keyInfo <- withLogging $ generateKeysIn $ T.unpack addr <> "-proxy"
         proxyAddress <- liftIO
-                        $ getCardanoAddress (_cardanoNodeInfo . _state_hydraInfo $ state)
+                        $ getCardanoAddress cardanoNodeInfo
                         $ _verificationKey . _cardanoKeys $ keyInfo
         let info = (proxyAddress, keyInfo)
         pure $ (Map.insert addr info old, info)
@@ -495,7 +643,8 @@ startNetwork state (Head name participants _ statusBTChan) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      nodes <- startHydraNetwork (_state_hydraInfo state) proxyMap (_state_getPorts state)
+      hydraInfo <- getHydraSharedInfo state
+      nodes <- startHydraNetwork hydraInfo proxyMap (_state_getPorts state)
       let numNodes = length nodes
       readyCounterChan <- liftIO $ newChan
       network <- fmap Network . forM nodes $ \(processHndl, nodeInfo, ports) -> do
@@ -536,7 +685,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
                     ReadyToCommit {} -> Just Status_Init
                     Committed {} -> Just Status_Committing
                     HeadIsOpen {} -> Just Status_Open
-                    HeadIsClosed _ _ -> Just Status_Closed
+                    HeadIsClosed {} -> Just Status_Closed
                     ReadyToFanout {} -> Just Status_Fanout
                     HeadIsAborted {} -> Nothing
                     HeadIsFinalized {} -> Just Status_Finalized
@@ -546,12 +695,21 @@ startNetwork state (Head name participants _ statusBTChan) = do
                   liftIO $ modifyMVar_ (_state_heads state) $ \current -> do
                     case _head_status <$> Map.lookup name current of
                       Just currentStatus -> do
+                        -- When the status is Fanout we should issue the fanout
+                        -- Do we actually need to wait for the fanout or should it just be fine without it?
                         when (currentStatus /= status && status == Status_Fanout) $ void $ forkIO $ do
                          _ <- fanoutHead state name
                          pure ()
                       _ -> pure ()
                     atomically $ writeTChan statusBTChan status
                     pure . Map.adjust (\h -> h { _head_status = status }) name $ current
+
+                  subsPerHead <- readMVar (_state_subscribers state)
+                  case Map.lookup name subsPerHead of
+                    Nothing -> pure ()
+                    Just subs -> do
+                      for_ subs $ \conn -> WS.sendTextData conn . Aeson.encode $ HeadStatusChanged name status
+                  pure ()
                 Nothing -> pure ()
               atomically $ writeTChan bRcvChan msg
         pure $ Node
@@ -618,7 +776,7 @@ data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
   , _hydraLedgerProtocolParameters :: FilePath
   , _hydraLedgerGenesis :: FilePath
-  , _cardanoNodeInfo :: CardanoNodeInfo
+  , _hydraCardanoNodeInfo :: CardanoNodeInfo
   }
   deriving (Show, Read)
 
@@ -657,7 +815,7 @@ sharedArgs hsi =
   , _hydraLedgerProtocolParameters hsi
   , "--hydra-scripts-tx-id"
   , _hydraScriptsTxId hsi
-  ] <> cardanoNodeArgs (_cardanoNodeInfo hsi)
+  ] <> cardanoNodeArgs (_hydraCardanoNodeInfo hsi)
 
 nodeArgs :: HydraNodeInfo -> [String]
 nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
@@ -712,7 +870,6 @@ cardanoNodeCreateProcess =
    ]) { std_out = CreatePipe
       }
 
-
 signAndSubmitTx :: CardanoNodeInfo -> SigningKey -> Tx -> IO ()
 signAndSubmitTx cninfo sk tx = do
   withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
@@ -734,4 +891,4 @@ signAndSubmitTx cninfo sk tx = do
       _ <- readCreateProcess cp ""
       submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
 
-
+makeLenses ''State

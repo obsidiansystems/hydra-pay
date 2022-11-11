@@ -1,9 +1,22 @@
 module HydraPay.Api where
 
+{-
+So we need request response AND subscription to a Head
+some operations take time, and some take too much time!
+
+
+Backend handles client messages via request response and Tagged requests
+Now we need to actually handle subscription push based stuff, this means that the backend can
+send stuff whenever it wants.
+
+We should start a thread and just send things to test it
+-}
+
 import GHC.Generics
 import Data.Aeson as Aeson
 import qualified Data.Text as T
 import Hydra.Types
+import Hydra.ServerOutput as ServerOutput
 
 type HeadName = T.Text
 
@@ -61,6 +74,16 @@ data HeadStatus = HeadStatus
 instance ToJSON HeadStatus
 instance FromJSON HeadStatus
 
+
+data Tagged a = Tagged
+  { tagged_id :: Int
+  , tagged_payload :: a
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON a => ToJSON (Tagged a)
+instance FromJSON a => FromJSON (Tagged a)
+
 data HydraPayError
   = InvalidPayload
   | HeadCreationFailed
@@ -94,3 +117,80 @@ data Status
 
 instance ToJSON Status
 instance FromJSON Status
+
+data ClientMsg
+  = ClientHello
+  | DoesHeadExist T.Text
+  | CreateHead HeadCreate
+  | InitHead HeadInit
+  | CommitHead HeadCommit
+  | CloseHead HeadName
+
+  | TearDownHead HeadName
+  -- ^ Kills network and removes head
+
+  | CheckFuel Address
+  | Withdraw Address
+  | GetAddTx TxType Address Lovelace
+  | SubscribeTo HeadName
+
+  | RestartDevnet
+
+  | GetDevnetAddresses Int -- Amount of addresses
+  deriving (Eq, Show, Generic)
+
+instance ToJSON ClientMsg
+instance FromJSON ClientMsg
+
+type Version = T.Text
+data ServerMsg
+  = ServerHello Version
+  | FundsTx Tx
+  | FuelAmount Lovelace
+  | OperationSuccess
+  | SubscriptionStarted HeadName
+  | AlreadySubscribed HeadName
+  | InvalidMessage
+  | UnhandledMessage
+  | HeadExistsResult Bool
+  | DevnetRestarted
+  | ServerError HydraPayError
+  | HeadStatusChanged HeadName Status
+  | NodeMessage (ServerOutput Value)
+  | DevnetAddresses [Address]
+  | RequestError T.Text
+  deriving (Eq, Show, Generic)
+
+instance ToJSON ServerMsg
+instance FromJSON ServerMsg
+
+data Tx = Tx
+  { txType :: T.Text
+  , txDescription :: T.Text
+  , txCborHex :: T.Text
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Tx where
+  toJSON (Tx t d c) =
+    object [ "type" .= t
+           , "description" .= d
+           , "cborHex" .= c
+           ]
+
+instance FromJSON Tx where
+  parseJSON = withObject "Tx" $ \v -> Tx
+    <$> v .: "type"
+    <*> v .: "description"
+    <*> v .: "cborHex"
+
+data TxType =
+  Funds | Fuel
+  deriving (Eq, Show, Generic)
+
+instance ToJSON TxType
+instance FromJSON TxType
+
+isFuelType :: TxType -> Bool
+isFuelType Fuel = True
+isFuelType _ = False

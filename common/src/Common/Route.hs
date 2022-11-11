@@ -72,12 +72,17 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
   HydraPayRoute_Api -> PathSegment "api" $ unitEncoder mempty
 
 data FrontendRoute :: * -> * where
+  -- This is for managing Hydra Pay
+  FrontendRoute_Monitor :: FrontendRoute ()
+
+  -- These are for the demo
   FrontendRoute_Setup :: FrontendRoute ()
   FrontendRoute_OpenChannel :: FrontendRoute ()
   FrontendRoute_PaymentChannel :: FrontendRoute ()
   FrontendRoute_OpeningChannel :: FrontendRoute ()
   FrontendRoute_SendFunds :: FrontendRoute ()
   FrontendRoute_ClosingChannel :: FrontendRoute ()
+
   -- This type is used to define frontend routes, i.e. ones for which the backend will serve the frontend.
 
 fullRouteEncoder
@@ -93,7 +98,8 @@ fullRouteEncoder = mkFullRouteEncoder
       BackendRoute_DemoApi -> PathSegment "demo-api" $ unitEncoder mempty
   )
   (\case
-      FrontendRoute_Setup -> PathEnd $ unitEncoder mempty
+      FrontendRoute_Monitor -> PathEnd $ unitEncoder mempty
+      FrontendRoute_Setup -> PathSegment "setup" $ unitEncoder mempty
       FrontendRoute_OpenChannel -> PathSegment "open" $ unitEncoder mempty
       FrontendRoute_OpeningChannel -> PathSegment "opening" $ unitEncoder mempty
       FrontendRoute_PaymentChannel -> PathSegment "channel" $ unitEncoder mempty

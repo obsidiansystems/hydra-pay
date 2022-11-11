@@ -40,6 +40,10 @@ module Hydra.Devnet
   , transferAmount
   , transferAll
   , getAllLovelaceUtxos
+  , getDevnetAddress
+  , getDevnetAddresses
+  , devnetFaucetKeys
+  , cardanoDevnetNodeInfo
   )
 
 where
@@ -75,8 +79,16 @@ import Data.Maybe (fromMaybe)
 import Data.Traversable
 import CardanoNodeInfo
 
+import Common.Helpers
+
 devnetMagic :: Int
 devnetMagic = 42
+
+cardanoDevnetNodeInfo :: CardanoNodeInfo
+cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet devnetMagic) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
+
+devnetFaucetKeys :: KeyPair
+devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
 
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
@@ -567,3 +579,13 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
       , "/dev/stdout"
       ])
     ""
+
+getDevnetAddresses :: [Int] -> IO (Maybe [Address])
+getDevnetAddresses is = do
+  addrs <- zip [1..] . T.lines . T.pack <$> readFile addressesPath
+  pure $ for is (flip lookup addrs)
+
+getDevnetAddress :: Int -> IO (Maybe Address)
+getDevnetAddress i = do
+  addrs <- getDevnetAddresses [i]
+  pure $ join $ headMay <$> addrs
