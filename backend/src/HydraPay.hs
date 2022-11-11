@@ -84,6 +84,8 @@ data State = State
   , _state_networks :: MVar (Map HeadName Network)
   -- , _state_connectionPool :: Pool Connection -- We could ignore htis for now
   , _state_keyPath :: FilePath
+  , _state_getPorts :: Int -> IO (Maybe [Int])
+  , _state_freePorts :: [Int] -> IO ()
   }
 
 -- | A Hydra Head in Hydra Pay
@@ -91,10 +93,10 @@ data Head = Head
   { _head_name :: HeadName
   -- ^ Unique name of the Head
   , _head_participants :: Set Address
-      --- Map Address (Address, HydraKeyInfo)
+  -- ^ The participants list with proxy addresses and not owner addresses
   , _head_status :: Status
   , _head_status_bchan :: TChan Status
-  -- ^ The participants list with proxy addresses and not owner addresses
+  -- ^ The ports used by the nodes in this head
   }
 
 -- | A Hydra Node running as part of a network
@@ -104,6 +106,7 @@ data Node = Node
   , _node_monitor_thread :: ThreadId
   , _node_send_msg :: ClientInput -> IO ()
   , _node_get_listen_chan :: IO (TChan (ServerOutput Value))
+  , _node_ports :: [Int]
   }
 
 -- | The network of nodes that hold up a head
@@ -119,7 +122,14 @@ getHydraPayState hydraSharedInfo = do
   heads <- liftIO $ newMVar mempty
   networks <- liftIO $ newMVar mempty
   path <- liftIO $ getKeyPath
-  pure $ State hydraSharedInfo addrs heads networks path
+  ports <- liftIO $ newMVar ([9000..11000] :: [Int])
+  let getPorts n = modifyMVar ports $ \ps -> pure $
+        let (xs,ys) = splitAt n ps
+        in if null ys
+           then (ps, Nothing)
+           else (ys, Just xs)
+  let freePorts ps = void $ modifyMVar_ ports (pure . (ps ++))
+  pure $ State hydraSharedInfo addrs heads networks path getPorts freePorts
 
 data Tx = Tx
   { txType :: T.Text
@@ -427,6 +437,7 @@ terminateHead state headName = do
     -- TODO: warn about nonexistence?
     flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
       mapM_ (terminateProcess . _node_handle) . _network_nodes $ n
+      _state_freePorts state . concatMap _node_ports . Map.elems . _network_nodes $ n
       pure (Map.delete headName ns)
 
 -- | Lookup head via name
@@ -484,12 +495,10 @@ startNetwork state (Head name participants _ statusBTChan) = do
     Just network -> pure network
     Nothing -> do
       proxyMap <- participantsToProxyMap state participants
-      nodes <- startHydraNetwork (_state_hydraInfo state) proxyMap
-
-      liftIO $ putStrLn $ intercalate "\n" . fmap (show . _port . snd) . Map.elems $ nodes
+      nodes <- startHydraNetwork (_state_hydraInfo state) proxyMap (_state_getPorts state)
       let numNodes = length nodes
       readyCounterChan <- liftIO $ newChan
-      network <- fmap Network . forM nodes $ \(processHndl, nodeInfo) -> do
+      network <- fmap Network . forM nodes $ \(processHndl, nodeInfo, ports) -> do
         let port =  _apiPort $ nodeInfo
         bRcvChan <- liftIO newBroadcastTChanIO
         sndChan <- liftIO newChan
@@ -551,6 +560,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
           , _node_monitor_thread = monitor
           , _node_send_msg = writeChan sndChan
           , _node_get_listen_chan = atomically $ dupTChan bRcvChan
+          , _node_ports = ports
           }
       liftIO $ putStrLn [i|---- Waiting for #{numNodes} nodes to get ready |]
       let countReadies n = do
@@ -580,25 +590,28 @@ getNetwork state name =
 startHydraNetwork :: (MonadIO m)
   => HydraSharedInfo
   -> Map Address HydraKeyInfo
-  -> m (Map Address (ProcessHandle, HydraNodeInfo))
-startHydraNetwork sharedInfo actors = do
+  -> (Int -> IO (Maybe [Int]))
+  -> m (Map Address (ProcessHandle, HydraNodeInfo, [Int]))
+startHydraNetwork sharedInfo actors getPorts = do
   liftIO $ createDirectoryIfMissing True "demo-logs"
-  liftIO $ sequence . flip Map.mapWithKey nodes $ \name node -> do
+  nodes :: (Map Address (HydraNodeInfo, [Int])) <- liftIO . fmap Map.fromList . mapM node $ zip [1 ..] (Map.toList actors)
+  liftIO $ sequence . flip Map.mapWithKey nodes $ \name (node, ports) -> do
     logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode
     errHndl <- openFile [iii|demo-logs/hydra-node-#{name}.error.log|] WriteMode
-    let cp = (mkHydraNodeCP sharedInfo node (filter ((/= _nodeId node) . _nodeId) (Map.elems nodes)))
+    let cp = (mkHydraNodeCP sharedInfo node (filter ((/= _nodeId node) . _nodeId) (fmap fst $ Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
              }
     (_,_,_,handle) <- createProcess cp
-    pure (handle, node)
+    pure (handle, node, ports)
   where
-    portNum p n = p * 1000 + n
-    node (n, (name, keys)) =
-      ( name
-      , HydraNodeInfo n (portNum 5 n) (portNum 9 n) (portNum 6 n) keys
-      )
-    nodes = Map.fromList . fmap node $ zip [1 ..] (Map.toList actors)
+    node :: forall a. (Int, (a, HydraKeyInfo)) -> IO (a, (HydraNodeInfo, [Int]))
+    node (n, (name, keys)) = do
+      -- TODO: Handle lack of ports
+      Just (ps@[p1,p2,p3]) <- getPorts 3
+      pure ( name
+           , (HydraNodeInfo n p1 p2 p3 keys, ps)
+           )
 
 data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
