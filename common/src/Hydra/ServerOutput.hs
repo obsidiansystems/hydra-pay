@@ -14,8 +14,8 @@ import Hydra.ClientInput
 -- Anything that took effort was replaced by Value
 
 data ServerOutput tx
-  = PeerConnected {peer :: Host}
-  | PeerDisconnected {peer :: Host}
+  = PeerConnected {peer :: NodeId}
+  | PeerDisconnected {peer :: NodeId}
   | ReadyToCommit {parties :: Value}
   | Committed {party :: Party, utxo :: WholeUTXO}
   | HeadIsOpen {utxo :: WholeUTXO}
@@ -36,6 +36,7 @@ data ServerOutput tx
   | TxSeen {transaction :: tx}
   | TxValid {transaction :: tx}
   | TxInvalid {utxo :: WholeUTXO, transaction :: tx, validationError :: ValidationError}
+  | TxExpired {transaction :: tx}
   | SnapshotConfirmed
       { snapshot :: Snapshot tx
       , signatures :: MultiSignature (Snapshot tx)
