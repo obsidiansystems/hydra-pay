@@ -33,6 +33,7 @@ library
   exposed-modules:
     Common.Api
     Common.Route
+    Common.DemoApi
 
     Hydra.Types
     Hydra.ServerOutput

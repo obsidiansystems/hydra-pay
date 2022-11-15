@@ -54,6 +54,7 @@ import Text.Read (readMaybe)
 import Data.Maybe (fromMaybe)
 import Control.Monad.Trans.Maybe
 import System.Directory (doesFileExist)
+import qualified HydraPay.WebSocketDemo as WSD
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
@@ -244,19 +245,20 @@ backend = Backend
                         Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
                   pure ()
 
+              BackendRoute_DemoApi :/ () -> do
+                  runWebSocketsSnap $ \pendingConn -> do
+                    conn <- WS.acceptRequest pendingConn
+                    WS.forkPingThread conn 30
+                    forever $ do
+                      mClientMsg <- Aeson.decode <$> WS.receiveData conn
+                      case mClientMsg of
+                        Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
+                        Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+                  pure ()
+                
               BackendRoute_DemoAddresses :/ () -> do
                 writeLBS $ Aeson.encode [addr1,addr2]
                 pure ()
-
-              BackendRoute_DemoCloseFanout :/ () -> do
-                liftIO $ runHydraPayClient $ \conn -> do
-                  -- Close the head, wait for fanout!
-                  Just OperationSuccess <- requestResponse conn $ CloseHead "demo"
-
-                  -- Move funds from proxy addresses back to host addresses
-                  Just OperationSuccess <- requestResponse conn $ Withdraw addr1
-                  Just OperationSuccess <- requestResponse conn $ Withdraw addr2
-                  pure ()
 
               BackendRoute_DemoTestWithdrawal :/ () -> do
                 liftIO $ runHydraPayClient $ \conn -> do
@@ -267,58 +269,6 @@ backend = Backend
                   Just OperationSuccess <- requestResponse conn $ Withdraw addr1
                   pure ()
 
-              BackendRoute_DemoFundInit :/ () -> do
-                liftIO $ runHydraPayClient $ \conn -> do
-                  let
-                    funds = ada 300
-
-                  for_ participants $ \(ks,addr) -> do
-                    liftIO $ putStrLn [i|Doing requestResponse conn $ GetAddTx Funds addr funds|]
-                    let sk = _signingKey ks
-                    Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr funds
-                    liftIO $ putStrLn [i|Doing signAndSubmitTx cninf sk tx|]
-                    signAndSubmitTx cninf sk tx
-
-                    liftIO $ putStrLn [i|Doing make fuel tx|]
-                    Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
-
-                    liftIO $ putStrLn [i|Doing other stuff|]
-                    when (amount < ada 30) $ do
-                      Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
-                      signAndSubmitTx cninf sk fueltx
-                  putStrLn "ASKING IF HEAD EXISTS"
-                  Just (HeadExistsResult exists) <- requestResponse conn $ DoesHeadExist "demo"
-                  putStrLn [i|RESULT #{exists}|]
-                  when exists $ do
-                    putStrLn "HEADEXISTS"
-                    Just OperationSuccess <- requestResponse conn $ TearDownHead "demo"
-                    pure ()
-                  putStrLn "CREATEHEAD"
-                  Just OperationSuccess <- requestResponse conn $ CreateHead $ HeadCreate "demo" addrs
---                  threadDelay (seconds 10)
-                  putStrLn "INITHEAD"
-                  Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
---                  threadDelay (seconds 10)
-                  waitForHeadStatus state "demo" Status_Init
-                  -- Event waiting for Head Init to finish isn't enough, so we retry commits until success
-                  putStrLn "STARTING COMMITTING"
-                  for_ addrs $ \addr -> do
-                    let
-                      -- The delay here lets us have some falloff to avoid thrashing the nodes
-                      commitUntilSuccess delay = do
-                        putStrLn [i|Committing #{addr}|]
-                        result <- requestResponse conn $ CommitHead $ HeadCommit "demo" addr funds
-                        putStrLn [i|Result #{result}|]
-                        case result of
-                          Just (ServerError NodeCommandFailed) -> do
-                            threadDelay delay
-                            commitUntilSuccess $ delay * 2
-                          Just OperationSuccess -> pure ()
-                    commitUntilSuccess (seconds 30)
-                  putStrLn "WAITING FOR OPEN"
-                  waitForHeadStatus state "demo" Status_Open
-                  
-                writeText "Done"
               BackendRoute_Api :/ () -> pure ()
               BackendRoute_Missing :/ _ -> pure ()
   , _backend_routeEncoder = fullRouteEncoder

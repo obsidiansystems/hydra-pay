@@ -20,6 +20,7 @@ import Control.Monad.Loops (untilJust)
 
 import qualified Network.WebSockets as WS
 import HydraPay.Api
+import Control.Monad.IO.Class (MonadIO, liftIO)
 
 data Tagged a = Tagged
   { tagged_id :: Int
@@ -50,6 +51,8 @@ data ClientMsg
 
 instance ToJSON ClientMsg
 instance FromJSON ClientMsg
+
+
 
 data ServerMsg
   = ServerHello
@@ -117,7 +120,6 @@ handleClientMessage state = \case
   TearDownHead name -> do
     removeHead state name
     pure OperationSuccess
-
   _ -> pure UnhandledMessage
 
 -- Integration tests for the various messages
@@ -153,4 +155,4 @@ getAddFundsTx addr amount = do
         Just (Tagged 0 _) -> pure $ Just Nothing
         Just _ -> pure Nothing
 
-    pure $ result
+    pure result

@@ -40,6 +40,9 @@ import Control.Monad
 import Control.Monad.Fix
 import Control.Monad.IO.Class
 import Control.Applicative
+import Common.DemoApi
+import Control.Monad.Trans.Class
+import Language.Javascript.JSaddle (MonadJSM)
 
 
 -- This runs in a monad that can be run on the client or the server.
@@ -144,7 +147,7 @@ data DemoTx = DemoTx
 showAsMs :: Pico -> T.Text
 showAsMs = T.pack . printf "%.2f" . (realToFrac :: Pico -> Float) . (*1000)
 
-appView ::
+appView :: forall t m.
   ( Reflex t
   , PostBuild t m
   , Prerender t m
@@ -183,10 +186,10 @@ appView bobAddress aliceAddress latestTxs = do
           dynText $ (messages !!) <$> currentIndex
           text "..."
 
-        prerender_ blank $ do
-          postBuild <- getPostBuild
-          result :: Event t (Maybe T.Text) <- getAndDecode $ "/demo-fund-init" <$ postBuild
-          setRoute $  FrontendRoute_PaymentChannel :/ () <$ result
+        prerender_ blank $ mdo
+            ws :: RawWebSocket t (Maybe DServerMsg) <- lift $ jsonWebSocket "ws://localhost:8000/demo-api" $ (WebSocketConfig @t @DClientMsg) wssend never True []
+            let wssend = [DDemoInit] <$ _webSocket_open ws
+            setRoute $ FrontendRoute_PaymentChannel :/ () <$ ffilter (== Just DInitDone) (_webSocket_recv ws)
       pure never
 
     FrontendRoute_ClosingChannel -> do
@@ -206,10 +209,10 @@ appView bobAddress aliceAddress latestTxs = do
           dynText $ (messages !!) <$> currentIndex
           text "..."
 
-        prerender_ blank $ do
-          postBuild <- getPostBuild
-          result :: Event t (Maybe T.Text) <- getAndDecode $ "/demo-close-fanout" <$ postBuild
-          setRoute $  FrontendRoute_OpenChannel :/ () <$ result
+        prerender_ blank $ mdo
+            ws :: RawWebSocket t (Maybe DServerMsg) <- lift $ jsonWebSocket "ws://localhost:8000/demo-api" $ (WebSocketConfig @t @DClientMsg) wssend never True []
+            let wssend = [DCloseFanout] <$ _webSocket_open ws
+            setRoute $ FrontendRoute_OpenChannel :/ () <$ ffilter (== Just DCloseFanoutDone) (_webSocket_recv ws)
       pure never
 
     FrontendRoute_OpenChannel -> do
