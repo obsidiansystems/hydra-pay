@@ -608,9 +608,10 @@ startHydraNetwork sharedInfo actors getPorts = do
     node :: forall a. (Int, (a, HydraKeyInfo)) -> IO (a, (HydraNodeInfo, [Int]))
     node (n, (name, keys)) = do
       -- TODO: Handle lack of ports
+      pd <- getTempPath'
       Just (ps@[p1,p2,p3]) <- getPorts 3
       pure ( name
-           , (HydraNodeInfo n p1 p2 p3 keys, ps)
+           , (HydraNodeInfo n p1 p2 p3 keys pd, ps)
            )
 
 data HydraSharedInfo = HydraSharedInfo
@@ -627,6 +628,7 @@ data HydraNodeInfo = HydraNodeInfo
   -- ^ The port that this node is serving its pub/sub websockets api on
   , _monitoringPort :: Int
   , _keys :: HydraKeyInfo
+  , _persistenceDir :: FilePath
   }
   deriving (Show,Read)
 
@@ -659,7 +661,8 @@ nodeArgs :: HydraNodeInfo -> [String]
 nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
            (HydraKeyInfo
             (KeyPair cskPath _cvkPath)
-            (KeyPair hskPath _hvkPath))) =
+            (KeyPair hskPath _hvkPath))
+           persistenceDir) =
   [ "--node-id"
   , show nodeId
   , "--port"
@@ -672,6 +675,8 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   , getSigningKeyFilePath hskPath
   , "--cardano-signing-key"
   , getSigningKeyFilePath cskPath
+  , "--persistence-dir"
+  , persistenceDir
   ]
 
 peerArgs :: HydraNodeInfo -> [String]
