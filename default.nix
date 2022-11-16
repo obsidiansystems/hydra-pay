@@ -13,7 +13,7 @@
     # In order to use Let's Encrypt for HTTPS deployments you must accept
     # their terms of service at https://letsencrypt.org/repository/.
     # Uncomment and set this to `true` to indicate your acceptance:
-    # terms.security.acme.acceptTerms = false;
+    terms.security.acme.acceptTerms = true;
 
     # Override reflex-platform-func in order to get access to haskellOverlaysPre
     # for adding mobile support.
