@@ -48,6 +48,7 @@ library
                , stm
                , monad-loops
                , mtl
+               , transformers
                , time
                , time-compat
                , transformers
