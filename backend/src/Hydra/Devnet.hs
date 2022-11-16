@@ -439,19 +439,19 @@ transferAmount cninf signingKey utxos toAddr minusFee maybeAmount = do
   let fullAmount :: Lovelace = sum . Map.elems $ utxos
   emptyTx <- buildRawEmptyTx cninf txins [toAddr]
   fee' <- calculateMinFees cninf emptyTx (Map.size utxos) 1
+  -- FIXME: On devnet the calculated fee is 0 even though that's not accepted.
+  -- Using a temporary three Ada as the fee until there's a better way.
   let fee = if fee' == 0 then ada 3 else fee'
   let amount = fromMaybe fullAmount maybeAmount
   if (if minusFee
-      then fee >= amount || amount >= fullAmount
+      then fee >= amount || amount > fullAmount
       else fee + amount >= fullAmount)
     then pure Nothing
     else Just <$> do
       tipSlotNo <- getTipSlotNo cninf
-      -- FIXME: On devnet the calculated fee is 0 even though that's not accepted.
-      -- Using a temporary three Ada as the fee until there's a better way.
       submitTx cninf
         =<< signTx cninf signingKey
-        =<< buildRawTx cninf txins (Map.singleton toAddr (bool (+) (-) minusFee fee fullAmount)) (tipSlotNo + 200) fee
+        =<< buildRawTx cninf txins (Map.singleton toAddr (bool (+) (-) minusFee fullAmount fee)) (tipSlotNo + 200) fee
 
 buildRawTx :: CardanoNodeInfo -> [TxIn] -> Map Address Lovelace -> Integer -> Lovelace -> IO FilePath
 buildRawTx cninf txins outAmounts invalidAfter fee = do

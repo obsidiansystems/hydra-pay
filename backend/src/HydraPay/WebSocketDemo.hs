@@ -49,22 +49,16 @@ demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
                     funds = ada 300
 
                   for_ participants $ \(ks,addr) -> do
-                    liftIO $ putStrLn [i|Doing requestResponse conn $ GetAddTx Funds addr funds|]
                     let sk = _signingKey ks
                     Just (FundsTx tx) <- requestResponse conn $ GetAddTx Funds addr funds
-                    liftIO $ putStrLn [i|Doing signAndSubmitTx cninf sk tx|]
                     signAndSubmitTx cninf sk tx
 
-                    liftIO $ putStrLn [i|Doing make fuel tx|]
                     Just (FuelAmount amount) <- requestResponse conn $ CheckFuel addr
 
-                    liftIO $ putStrLn [i|Doing other stuff|]
                     when (amount < ada 30) $ do
                       Just (FundsTx fueltx) <- requestResponse conn $ GetAddTx Fuel addr (ada 100)
                       signAndSubmitTx cninf sk fueltx
-                  putStrLn "ASKING IF HEAD EXISTS"
                   Just (HeadExistsResult exists) <- requestResponse conn $ DoesHeadExist "demo"
-                  putStrLn [i|RESULT #{exists}|]
                   when exists $ do
                     putStrLn "HEADEXISTS"
                     Just OperationSuccess <- requestResponse conn $ TearDownHead "demo"
@@ -74,9 +68,7 @@ demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
                   threadDelay (seconds 5)
                   putStrLn "INITHEAD"
                   Just OperationSuccess <- requestResponse conn $ InitHead $ HeadInit "demo" addr1 3
-                  putStrLn "INITHEAD REQUESTRESPONSE DONE"
                   threadDelay (seconds 5)
-                  waitForHeadStatus state "demo" Status_Init
                   -- Event waiting for Head Init to finish isn't enough, so we retry commits until success
                   putStrLn "STARTING COMMITTING"
                   for_ addrs $ \addr -> do
@@ -93,18 +85,22 @@ demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
                           Just OperationSuccess -> pure ()
                     commitUntilSuccess (seconds 30)
                   putStrLn "WAITING FOR OPEN"
-                  waitForHeadStatus state "demo" Status_Open
+                  -- TODO: this should be done via the HydraPay WS API
+--                  waitForHeadStatus state "demo" Status_Open
                   pure DInitDone
 
 
+demoCloseFanout :: [(a, Address)] -> IO DServerMsg
 demoCloseFanout (participants@[(ks1, addr1), (ks2, addr2)]) =
   runHydraPayClient $ \conn -> do
                   -- Close the head, wait for fanout!
                   Just OperationSuccess <- requestResponse conn $ CloseHead "demo"
 
                   -- Move funds from proxy addresses back to host addresses
-                  Just OperationSuccess <- requestResponse conn $ Withdraw addr1
-                  Just OperationSuccess <- requestResponse conn $ Withdraw addr2
+                  res <- requestResponse conn $ Withdraw addr1
+                  putStrLn $ "Withdraw addr1 result: " ++ show res
+                  res <- requestResponse conn $ Withdraw addr2
+                  putStrLn $ "Withdraw addr2 result: " ++ show res
                   pure DCloseFanoutDone
 
 

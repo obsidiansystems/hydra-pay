@@ -143,6 +143,8 @@ withCardanoNode f = do
   cfg <- liftIO readDemoConfig
   case cfg of
     CfgDevnet -> do
+      _ <- liftIO $ readCreateProcess (shell "rm -rf devnet") ""
+      _ <- liftIO $ readCreateProcess (shell "rm -rf demo-logs") ""
       prepareDevnet
       liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
         flip runLoggingT (print . renderWithSeverity id) $ do

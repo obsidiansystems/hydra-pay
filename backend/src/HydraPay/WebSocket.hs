@@ -80,7 +80,7 @@ handleClientMessage state = \case
     -- Withdraw everything minus fees
     result <- withdraw state $ WithdrawRequest address Nothing
     case result of
-      Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) $ txInput 0 txid
+      Right txid -> withLogging $ waitForTxIn (_cardanoNodeInfo . _state_hydraInfo $ state) txid
       _ -> pure ()
     pure $ either ServerError (const OperationSuccess) result
 
