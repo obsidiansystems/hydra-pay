@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# OPTIONS_GHC -Wno-unused-local-binds #-}
 {-# LANGUAGE TypeApplications #-}
@@ -43,6 +44,10 @@ import Control.Applicative
 import Common.DemoApi
 import Control.Monad.Trans.Class
 import Language.Javascript.JSaddle (MonadJSM)
+
+import Language.Javascript.JSaddle (jsg, js, liftJSM, fromJSValUnchecked)
+
+default (T.Text)
 
 
 -- This runs in a monad that can be run on the client or the server.
@@ -177,7 +182,26 @@ monitorView = do
 
       serverMsg = fmapMaybe id $ rws ^. webSocket_recv
 
-    rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket "ws://localhost:8000/hydra/api" $ def
+    endpoint <- liftJSM $ do
+      let
+        webSocketProtocol :: T.Text -> T.Text
+        webSocketProtocol "https" = "wss"
+        webSocketProtocol _ = "ws"
+
+      wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+
+      hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+      port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+
+      pure $ mconcat [ wsProtocol
+                     , "://"
+                     , hostname
+                     , ":"
+                     , port
+                     , "/hydra/api"
+                     ]
+
+    rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
       & webSocketConfig_send .~ sendToHydraPay
 
     responses <- foldDyn (:) [] serverMsg
@@ -392,7 +416,7 @@ appView bobAddress aliceAddress latestTxs = do
             & initialAttributes .~ ("class" =: "text-gray-500 w-full px-8 py-6 bg-transparent text-center text-xl" <> "placeholder" =: "1 ADA" <> "type" =: "number")
             & inputElementConfig_initialValue .~ "10"
           elClass "span" "mx-2 my-1" $ text "ADA"
-          pure $ fmap (round . ada) . readMaybe . T.unpack <$> _inputElement_value amountInput
+          pure $ fmap ((round :: Float -> Int) . ada) . readMaybe . T.unpack <$> _inputElement_value amountInput
 
       (sendButton, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Send ADA"
 
