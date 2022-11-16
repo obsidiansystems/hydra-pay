@@ -40,6 +40,7 @@ library
                , beam-postgres
                , beam-automigrate
                , bytestring
+               , lens
                , uuid
                , http-client
                , http-conduit
