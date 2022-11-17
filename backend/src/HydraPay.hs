@@ -616,6 +616,8 @@ startHydraNetwork sharedInfo actors getPorts = do
 
 data HydraSharedInfo = HydraSharedInfo
   { _hydraScriptsTxId :: String
+  , _hydraLedgerProtocolParameters :: FilePath
+  , _hydraLedgerGenesis :: FilePath
   , _cardanoNodeInfo :: CardanoNodeInfo
   }
   deriving (Show, Read)
@@ -648,14 +650,14 @@ cardanoNodeArgs cninf =
   ]
 
 sharedArgs :: HydraSharedInfo -> [String]
-sharedArgs (HydraSharedInfo hydraScriptsTxId cardanoNodeInfo) =
+sharedArgs hsi =
   [ "--ledger-genesis"
-  , _nodeLedgerGenesis cardanoNodeInfo
+  , _hydraLedgerGenesis hsi
   , "--ledger-protocol-parameters"
-  , _nodeLedgerProtocolParameters cardanoNodeInfo
+  , _hydraLedgerProtocolParameters hsi
   , "--hydra-scripts-tx-id"
-  , hydraScriptsTxId
-  ] <> cardanoNodeArgs cardanoNodeInfo
+  , _hydraScriptsTxId hsi
+  ] <> cardanoNodeArgs (_cardanoNodeInfo hsi)
 
 nodeArgs :: HydraNodeInfo -> [String]
 nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort

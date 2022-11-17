@@ -60,8 +60,10 @@ getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => 
 getDevnetHydraSharedInfo = do
   scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
   pure $ HydraSharedInfo
-    { _hydraScriptsTxId = T.unpack scripts,
-      _cardanoNodeInfo = cardanoDevnetNodeInfo
+    { _hydraScriptsTxId = T.unpack scripts
+    , _hydraLedgerGenesis = "devnet/genesis-shelley.json"
+    , _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json"
+    , _cardanoNodeInfo = cardanoDevnetNodeInfo
     }
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
