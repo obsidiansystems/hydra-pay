@@ -27,9 +27,9 @@ let
   deps = obelisk.nixpkgs.thunkSet ./dep;
   # deps' = obelisk.nixpkgs.thunkSet ./cardano-overlays/cardano-packages/dep;
   hydra-poc = import deps.hydra-poc {};
+  cardano-node = import deps.cardano-node {};  
 
   pkgs = obelisk.nixpkgs;
-
   # cardano-libs-overlay = import ./cardano-libs.nix { inherit deps; hydra-poc = deps.hydra-poc; lib = pkgs.lib; };
 in
 project ./. ({ pkgs, ... }: let
@@ -74,8 +74,8 @@ in
       # haskellLib.doJailbreak (self.callCabal2nix "aeson" deps.aeson {}); # 1.5.6.0
       backend = haskellLib.overrideCabal super.backend (drv: {
         librarySystemDepends = (drv.librarySystemDepends or []) ++ [
-          hydra-poc.cardano-node.cardano-node
-          hydra-poc.cardano-node.cardano-cli
+          cardano-node.cardano-node
+          cardano-node.cardano-cli
           hydra-poc.hsPkgs.hydra-node.components.exes.hydra-node
           hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools
           pkgs.jq
