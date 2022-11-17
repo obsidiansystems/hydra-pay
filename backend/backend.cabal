@@ -35,10 +35,10 @@ library
                , gargoyle-postgresql-nix
                , gargoyle
                , resource-pool
-               , postgresql-simple
-               , beam-core
-               , beam-postgres
-               , beam-automigrate
+               -- , postgresql-simple
+               -- , beam-core
+               -- , beam-postgres
+               -- , beam-automigrate
                , bytestring
                , lens
                , uuid

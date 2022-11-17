@@ -72,6 +72,9 @@ in
       # ((self.callHackage "ekg-json" "0.8.9" {}));
       # deriving-aeson = (haskellLib.dontCheck (haskellLib.doJailbreak (self.callHackage "deriving-aeson" "0.2.7" {})));
       # haskellLib.doJailbreak (self.callCabal2nix "aeson" deps.aeson {}); # 1.5.6.0
+      string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
+
+
       backend = haskellLib.overrideCabal super.backend (drv: {
         librarySystemDepends = (drv.librarySystemDepends or []) ++ [
           cardano-node.cardano-node
