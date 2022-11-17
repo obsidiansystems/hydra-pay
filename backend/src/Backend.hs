@@ -118,11 +118,14 @@ readDemoConfig = fmap (fromMaybe CfgDevnet) . runMaybeT $ do
   guard <=< liftIO $ doesFileExist demoCfgPath
   MaybeT $ readMaybe <$> readFile demoCfgPath
 
-seedDemoAddressesPreview :: PreviewDemoConfig -> Lovelace -> IO ()
-seedDemoAddressesPreview cfg amount = flip runLoggingT (print . renderWithSeverity id) $ do
-  forM_ (_previewParticipants cfg) $ \kp -> do
+seedDemoAddressPreview :: PreviewDemoConfig -> Lovelace -> KeyPair -> IO TxIn
+seedDemoAddressPreview cfg amount kp = flip runLoggingT (print . renderWithSeverity id) $ do
     addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
     seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr amount False
+
+seedDemoAddressesPreview :: PreviewDemoConfig -> Lovelace -> IO ()
+seedDemoAddressesPreview cfg amount =
+  forM_ (_previewParticipants cfg) $ seedDemoAddressPreview cfg amount
 
 deseedDemoAddressesPreview :: PreviewDemoConfig -> IO ()
 deseedDemoAddressesPreview cfg =
