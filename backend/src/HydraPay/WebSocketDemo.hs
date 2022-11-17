@@ -85,8 +85,8 @@ demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
                           Just OperationSuccess -> pure ()
                     commitUntilSuccess (seconds 30)
                   putStrLn "WAITING FOR OPEN"
-                  -- TODO: this should be done via the HydraPay WS API
---                  waitForHeadStatus state "demo" Status_Open
+                  -- TODO: waiting on confirmed head open status should be done via the HydraPay WS API
+                  waitForHeadStatus state "demo" Status_Open
                   pure DInitDone
 
 
