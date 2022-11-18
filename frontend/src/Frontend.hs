@@ -49,6 +49,32 @@ import Language.Javascript.JSaddle (jsg, js, liftJSM, fromJSValUnchecked)
 
 default (T.Text)
 
+balanceWidget :: (MonadHold t m, Prerender t m, PostBuild t m, DomBuilder t m) => T.Text -> Dynamic t (Maybe Address) -> Event t a -> T.Text -> m (Dynamic t Float)
+balanceWidget name addr refetch endpoint = do
+  elClass "div" "text-lg flex flex-col mr-10" $ do
+    elClass "div" "font-semibold" $ text name
+    -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
+    balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
+      Nothing -> pure $ constDyn 0
+      Just addr -> prerender (pure $ constDyn 0) $ mdo
+        addrLoad <- getPostBuild >>= delay 0.1
+        balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/" <> endpoint <> "/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
+        let
+          gotBalance = fmapMaybe (preview _Just) balanceResult
+          reqFailed = fmapMaybe (preview _Nothing) balanceResult
+
+        mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
+
+        dyn_ $ ffor mBalance $ \case
+          Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
+          Just balance -> do
+            text $ T.pack . printf "%.2f" $ balance
+            text " ADA"
+
+        pure $ maybe 0 id <$> mBalance
+
+    balanceDyn <- join <$> holdDyn (pure 0) balanceDynChanged
+    pure $ balanceDyn
 
 -- This runs in a monad that can be run on the client or the server.
 -- To run code in a pure client or pure server context, use one of the
@@ -204,8 +230,8 @@ monitorView = do
         endpoint <- liftJSM $ do
           let
             webSocketProtocol :: T.Text -> T.Text
-            webSocketProtocol "https" = "wss"
-            webSocketProtocol _ = "ws"
+            webSocketProtocol "https:" = "wss:"
+            webSocketProtocol _ = "ws:"
 
           wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
 
@@ -213,7 +239,7 @@ monitorView = do
           port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
 
           pure $ mconcat [ wsProtocol
-                         , "://"
+                         , "//"
                          , hostname
                          , ":"
                          , port
@@ -371,30 +397,8 @@ appView bobAddress aliceAddress latestTxs = do
         elClass "span" "text-sm" $ text " In payment channel"
 
       elClass "div" "flex flex-row mt-4" $ do
-        let
-          headBalanceWidget name addr refetch =
-            elClass "div" "text-lg flex flex-col mr-10" $ do
-              elClass "div" "font-semibold" $ text name
-              -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-              elClass "div" "font-semibold" $ dyn_ $ ffor addr $ \case
-                Nothing -> pure ()
-                Just addr -> prerender_ blank $ mdo
-                  addrLoad <- getPostBuild
-                  balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/head-balance/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
-                  let
-                    gotBalance = fmapMaybe (preview _Just) balanceResult
-                    reqFailed = fmapMaybe (preview _Nothing) balanceResult
-
-                  mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
-
-                  dyn_ $ ffor mBalance $ \case
-                    Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                    Just balance -> do
-                      text $ T.pack . printf "%.2f" $ balance
-                      text " ADA"
-
-        headBalanceWidget "Bob" bobAddress never
-        headBalanceWidget "Alice" aliceAddress never
+        balanceWidget "Bob" bobAddress never "head-balance"
+        balanceWidget "Alice" aliceAddress never "head-balance"
 
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
@@ -469,35 +473,8 @@ appView bobAddress aliceAddress latestTxs = do
       elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "L1 Balance"
 
       elClass "div" "flex flex-row mt-4" $ do
-        elClass "div" "text-lg flex flex-col mr-10" $ do
-          elClass "div" "font-semibold" $ text "Bob"
-          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-          elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
-            Nothing -> pure ()
-            Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 1
-              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
-              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
-              dyn_ $ ffor mBalance $ \case
-                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                Just balance -> do
-                  text $ T.pack . printf "%.2f" $ balance
-                  text " ADA"
-
-        elClass "div" "text-lg flex flex-col mr-10" $ do
-          elClass "div" "font-semibold" $ text "Alice"
-          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-          elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
-            Nothing -> pure ()
-            Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 1
-              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
-              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
-              dyn_ $ ffor mBalance $ \case
-                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                Just balance -> do
-                  text $ T.pack . printf "%.2f" $ balance
-                  text " ADA"
+        balanceWidget "Bob" bobAddress never "l1-balance"
+        balanceWidget "Alice" aliceAddress never "l1-balance"
 
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
@@ -508,35 +485,8 @@ appView bobAddress aliceAddress latestTxs = do
 
       rec
         (bobBalance, aliceBalance) <- elClass "div" "flex flex-row mt-4" $ do
-          let
-            headBalanceWidget name addr refetch =
-              elClass "div" "text-lg flex flex-col mr-10" $ do
-                elClass "div" "font-semibold" $ text name
-                -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-                balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
-                  Nothing -> pure $ constDyn 0
-                  Just addr -> prerender (pure $ constDyn 0) $ mdo
-                    addrLoad <- getPostBuild
-                    balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/head-balance/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
-                    let
-                      gotBalance = fmapMaybe (preview _Just) balanceResult
-                      reqFailed = fmapMaybe (preview _Nothing) balanceResult
-
-                    mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
-
-                    dyn_ $ ffor mBalance $ \case
-                      Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                      Just balance -> do
-                        text $ T.pack . printf "%.2f" $ balance
-                        text " ADA"
-
-                    pure $ maybe 0 id <$> mBalance
-
-                balanceDyn <- join <$> holdDyn (pure 0) balanceDynChanged
-                pure $ balanceDyn
-
-          bb <- headBalanceWidget "Bob" bobAddress autoTx
-          ab <- headBalanceWidget "Alice" aliceAddress autoTx
+          bb <- balanceWidget "Bob" bobAddress autoTx "head-balance"
+          ab <- balanceWidget "Alice" aliceAddress autoTx "head-balance"
           pure (bb, ab)
 
         -- Divider
