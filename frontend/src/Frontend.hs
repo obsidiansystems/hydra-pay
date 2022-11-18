@@ -64,6 +64,7 @@ balanceWidget name addr refetch endpoint = do
           reqFailed = fmapMaybe (preview _Nothing) balanceResult
 
         mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
+        display mBalance
 
         dyn_ $ ffor mBalance $ \case
           Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
