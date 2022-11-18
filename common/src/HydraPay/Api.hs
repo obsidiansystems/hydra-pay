@@ -1,28 +1,26 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module HydraPay.Api where
-
-{-
-So we need request response AND subscription to a Head
-some operations take time, and some take too much time!
-
-
-Backend handles client messages via request response and Tagged requests
-Now we need to actually handle subscription push based stuff, this means that the backend can
-send stuff whenever it wants.
-
-We should start a thread and just send things to test it
--}
 
 import GHC.Generics
 import Data.Aeson as Aeson
 import qualified Data.Text as T
+
+import Control.Lens.TH
+
 import Hydra.Types
 import Hydra.ServerOutput as ServerOutput
 
 type HeadName = T.Text
 
--- TODO: All actions which are about a named head repeat this
--- fact. Use structure to aid code reuse, help to see patterns, and
--- encourage correct API use.
+data HydraPayStats = HydraPayStats
+  { _hydraPayStats_heads :: Int
+  , _hydraPayStats_nodes :: Int
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON HydraPayStats
+instance FromJSON HydraPayStats
 
 data HeadCreate = HeadCreate
   { headCreate_name :: HeadName
@@ -135,6 +133,7 @@ data ClientMsg
   | SubscribeTo HeadName
 
   | RestartDevnet
+  | GetStats
 
   | GetDevnetAddresses Int -- Amount of addresses
   deriving (Eq, Show, Generic)
@@ -158,6 +157,7 @@ data ServerMsg
   | HeadStatusChanged HeadName Status
   | NodeMessage (ServerOutput Value)
   | DevnetAddresses [Address]
+  | CurrentStats HydraPayStats
   | RequestError T.Text
   deriving (Eq, Show, Generic)
 
@@ -194,3 +194,5 @@ instance FromJSON TxType
 isFuelType :: TxType -> Bool
 isFuelType Fuel = True
 isFuelType _ = False
+
+makeLenses ''HydraPayStats

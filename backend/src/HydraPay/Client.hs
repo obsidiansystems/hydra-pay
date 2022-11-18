@@ -10,8 +10,8 @@ import Control.Monad
 import Data.List (intercalate)
 import Hydra.Devnet
 import Hydra.Types
+import HydraPay.Api
 import HydraPay
-import HydraPay.WebSocket
 import Network.HTTP.Client
 import Network.HTTP.Simple
 

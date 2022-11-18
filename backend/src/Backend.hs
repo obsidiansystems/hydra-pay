@@ -46,7 +46,8 @@ import Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 
 import HydraPay
-import HydraPay.WebSocket
+import HydraPay.Client
+
 import CardanoNodeInfo
 
 import HydraPay.Api
@@ -60,27 +61,6 @@ import Data.Maybe (fromMaybe)
 import Control.Monad.Trans.Maybe
 import System.Directory (doesFileExist)
 import qualified HydraPay.WebSocketDemo as WSD
-
--- TODO: See if it's okay to change Either a (Maybe b) to Just Either a b.
--- What does writing toJSON () to response do?
-handleJsonRequestBody :: (MonadSnap m, ToJSON a,
-                          FromJSON t, ToJSON b) =>
-  (t -> LoggingT (WithSeverity (Doc ann)) IO (Either a (Maybe b))) ->
-  m ()
-handleJsonRequestBody f = do
-  runRequestBody Streams.toList
-    >>= ( \case
-            Nothing -> do
-              modifyResponse $ setResponseStatus 400 "Bad Request"
-              writeLBS $ Aeson.encode InvalidPayload
-            Just x -> do
-              result <- liftIO $ withLogging $ f x
-              case result of
-                Right a -> mapM_ (writeLBS . Aeson.encode) a
-                Left err -> writeLBS $ Aeson.encode err
-        )
-      . Aeson.decode
-      . LBS.fromChunks
 
 setupDemo :: State -> IO ([(KeyPair, Address)])
 setupDemo state = do
@@ -116,85 +96,18 @@ backend = Backend
           let cninf = _hydraCardanoNodeInfo hsi
           liftIO . serve $ \case
             BackendRoute_HydraPay :/ hpr -> case hpr of
-              HydraPayRoute_Init :/ () -> do
-                handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . initHead state)
-              HydraPayRoute_Commit :/ () -> do
-                handleJsonRequestBody (fmap ((Nothing :: Maybe ()) <$) . commitToHead state)
-              HydraPayRoute_AddFuelTx :/ (addr, amount) -> do
-                result <- buildAddTx Fuel state addr amount
-                case result of
-                  Left err -> writeLBS $ Aeson.encode err
-                  Right tx -> writeLBS $ Aeson.encode tx
-
-              HydraPayRoute_AddFundsTx :/ (addr, amount) -> do
-                result <- buildAddTx Funds state addr amount
-                case result of
-                  Left err -> writeLBS $ Aeson.encode err
-                  Right tx -> writeLBS $ Aeson.encode tx
-
-              HydraPayRoute_HeadStatus :/ name -> do
-                status <- getHeadStatus state name
-                writeLBS $ Aeson.encode status
-
-              HydraPayRoute_Close :/ name -> do
-                status <- closeHead state name
-                writeLBS $ Aeson.encode status
-
-              HydraPayRoute_Withdraw :/ () -> do
-                runRequestBody Streams.toList >>= (\case
-                  Nothing -> do
-                    modifyResponse $ setResponseStatus 400 "Bad Request"
-                    writeLBS $ Aeson.encode InvalidPayload
-
-                  Just wr -> do
-                    result <- liftIO $ withLogging $ withdraw state wr
-                    case result of
-                      Right txid -> writeLBS $ Aeson.encode txid
-                      Left err -> writeLBS $ Aeson.encode err) . Aeson.decode . LBS.fromChunks
-
-              HydraPayRoute_SubmitTx :/ addr ->
-                handleJsonRequestBody ((fmap . fmap) Just . submitTxOnHead state addr)
-
-              HydraPayRoute_Head :/ () -> do
-                handleJsonRequestBody $
-                  fmap (Just <$>)
-                  . mapM (getHeadStatus state . _head_name)
-                  <=< createHead state
-
-              HydraPayRoute_HeadBalance :/ (head, addr) -> do
-                result <- headBalance state head addr
-                writeLBS $ Aeson.encode result
-
-              HydraPayRoute_L1Balance :/ addr -> do
-                writeLBS . Aeson.encode =<< l1Balance state addr True
-
-              HydraPayRoute_Funds :/ addr -> do
-                writeLBS . Aeson.encode =<< getProxyFunds state addr
-
-              HydraPayRoute_Api :/ () -> do
-                runWebSocketsSnap $ \pendingConn -> do
-                  conn <- WS.acceptRequest pendingConn
-                  WS.forkPingThread conn 30
-                  WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
-
-                  forever $ do
-                    mClientMsg <- Aeson.decode <$> WS.receiveData conn
-                    case mClientMsg of
-                      Just clientMsg -> do
-                        msg <- handleTaggedMessage conn state clientMsg
-                        WS.sendTextData conn . Aeson.encode $ msg
-                      Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+              HydraPayRoute_Api :/ () -> websocketApiHandler state
 
             BackendRoute_DemoApi :/ () -> do
-                runWebSocketsSnap $ \pendingConn -> do
-                  conn <- WS.acceptRequest pendingConn
-                  WS.forkPingThread conn 30
-                  forever $ do
-                    mClientMsg <- Aeson.decode <$> WS.receiveData conn
-                    case mClientMsg of
-                      Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
-                      Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
-                pure ()
+              runWebSocketsSnap $ \pendingConn -> do
+                conn <- WS.acceptRequest pendingConn
+                WS.forkPingThread conn 30
+                forever $ do
+                  mClientMsg <- Aeson.decode <$> WS.receiveData conn
+                  case mClientMsg of
+                    Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
+                    Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+              pure ()
 
             BackendRoute_Api :/ () -> pure ()
             BackendRoute_Missing :/ _ -> pure ()

@@ -40,6 +40,8 @@ library
                -- , beam-postgres
                -- , beam-automigrate
                , bytestring
+               , base64-bytestring
+               , case-insensitive
                , lens
                , uuid
                , http-client
@@ -52,6 +54,7 @@ library
                , time
                , time-compat
                , transformers
+               , cryptonite
 
   default-extensions:
     OverloadedStrings
@@ -66,9 +69,9 @@ library
   exposed-modules:
     Backend
     HydraPay
+    HydraPay.Server
     HydraPay.Network
     HydraPay.Client
-    HydraPay.WebSocket
   other-modules:
     Paths
     Hydra.Devnet

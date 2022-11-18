@@ -36,20 +36,6 @@ data BackendRoute :: * -> * where
   -- i.e. These do not serve the frontend, but do something different, such as serving static files.
 
 data HydraPayRoute :: * -> * where
-  HydraPayRoute_Head :: HydraPayRoute ()
-  HydraPayRoute_HeadStatus :: HydraPayRoute Text
-  -- | This route will give you a transaction that you can use to add funds to the proxy of a address
-  HydraPayRoute_AddFundsTx :: HydraPayRoute (Text :. Int)
-  HydraPayRoute_AddFuelTx :: HydraPayRoute (Text :. Int)
-  HydraPayRoute_Withdraw :: HydraPayRoute ()
-  HydraPayRoute_Init :: HydraPayRoute ()
-  HydraPayRoute_Commit :: HydraPayRoute ()
-  HydraPayRoute_Close :: HydraPayRoute Text
-  HydraPayRoute_SubmitTx :: HydraPayRoute Text
-  HydraPayRoute_HeadBalance :: HydraPayRoute (Text :. Text)
-  HydraPayRoute_L1Balance :: HydraPayRoute Text
-  HydraPayRoute_Funds :: HydraPayRoute (Text)
-
   HydraPayRoute_Api :: HydraPayRoute ()
 
 hydraPayRouteEncoder ::( MonadError Text check
@@ -57,18 +43,6 @@ hydraPayRouteEncoder ::( MonadError Text check
                        )
                      => Encoder check parse (R HydraPayRoute) PageName
 hydraPayRouteEncoder = pathComponentEncoder $ \case
-  HydraPayRoute_Head -> PathSegment "heads" $ unitEncoder mempty
-  HydraPayRoute_HeadStatus -> PathSegment "head" singlePathSegmentEncoder
-  HydraPayRoute_AddFundsTx -> PathSegment "add-funds" $ pathParamEncoder id $ singlePathSegmentEncoder . unsafeTshowEncoder
-  HydraPayRoute_AddFuelTx -> PathSegment "add-fuel" $ pathParamEncoder id $ singlePathSegmentEncoder . unsafeTshowEncoder
-  HydraPayRoute_Init -> PathSegment "init" $ unitEncoder mempty
-  HydraPayRoute_Commit -> PathSegment "commit" $ unitEncoder mempty
-  HydraPayRoute_Withdraw -> PathSegment "withdraw" $ unitEncoder mempty
-  HydraPayRoute_Close -> PathSegment "close" singlePathSegmentEncoder
-  HydraPayRoute_SubmitTx -> PathSegment "submit-tx" singlePathSegmentEncoder
-  HydraPayRoute_HeadBalance -> PathSegment "head-balance" $ pathParamEncoder id $ singlePathSegmentEncoder
-  HydraPayRoute_L1Balance -> PathSegment "l1-balance" singlePathSegmentEncoder
-  HydraPayRoute_Funds -> PathSegment "funds" singlePathSegmentEncoder
   HydraPayRoute_Api -> PathSegment "api" $ unitEncoder mempty
 
 data FrontendRoute :: * -> * where

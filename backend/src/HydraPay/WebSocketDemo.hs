@@ -22,9 +22,9 @@ import Control.Monad.Loops (untilJust)
 
 import qualified Network.WebSockets as WS
 import HydraPay.Api
+import HydraPay
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.String.Interpolate ( i )
-import HydraPay.WebSocket
 import Control.Concurrent (threadDelay)
 import CardanoNodeInfo
 import Common.DemoApi
