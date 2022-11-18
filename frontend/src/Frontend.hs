@@ -312,7 +312,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 0.1
+              addrLoad <- getPostBuild >>= delay 1
               gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -327,7 +327,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 0.1
+              addrLoad <- getPostBuild >>= delay 1
               gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -475,7 +475,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 0.1
+              addrLoad <- getPostBuild >>= delay 1
               gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -490,7 +490,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 0.1
+              addrLoad <- getPostBuild >>= delay 1
               gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
