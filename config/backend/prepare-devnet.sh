@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Prepare a "devnet" directory holding credentials, a dummy topology and
 # "up-to-date" genesis files. If the directory exists, it is wiped out.
 set -e
