@@ -15,6 +15,7 @@ library
                , constraints-extras
                , containers
                , time
+               , lens
 
   default-extensions:
     DeriveGeneric
