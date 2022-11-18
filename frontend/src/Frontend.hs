@@ -170,15 +170,21 @@ monitorView ::
   , MonadHold t m
   ) => m ()
 monitorView = do
-  prerender_ (text "I am the monitor view, deal with it") $ mdo
+  prerender_ (text "Loading Monitor") $ mdo
+    (statsEl, _)<- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
     (buttonEl, _)<- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
 
     lastTagId <- foldDyn (+) 0 $ length <$> sendToHydraPay
 
     let
-      sayHello = RestartDevnet <$ domEvent Click buttonEl
-      taggedHello = (current $ Tagged <$> lastTagId) <@> sayHello
-      sendToHydraPay = fmap pure $ (current $ Tagged <$> lastTagId) <@> sayHello
+      restartDevnet = RestartDevnet <$ domEvent Click buttonEl
+      getStats = GetStats <$ domEvent Click statsEl
+
+      sendMsg =
+        mergeWith (<>) $ (fmap . fmap) pure $ [restartDevnet, getStats]
+
+      sendToHydraPay =
+        attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
 
       serverMsg = fmapMaybe id $ rws ^. webSocket_recv
 
@@ -293,7 +299,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild
+              addrLoad <- getPostBuild >>= delay 0.1
               gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -308,7 +314,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild
+              addrLoad <- getPostBuild >>= delay 0.1
               gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -456,7 +462,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild
+              addrLoad <- getPostBuild >>= delay 0.1
               gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
@@ -471,7 +477,7 @@ appView bobAddress aliceAddress latestTxs = do
           elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild
+              addrLoad <- getPostBuild >>= delay 0.1
               gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
