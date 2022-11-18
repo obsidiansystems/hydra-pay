@@ -27,6 +27,7 @@ import GHC.Generics
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Data.Bool
 import Data.List (intercalate)
 import Data.Map (Map)
@@ -302,39 +303,9 @@ getCardanoNodeState = do
                 }) ""
       hydraSharedInfo <- withLogging getDevnetHydraSharedInfo
       pure $ CardanoNodeState (Just handles) hydraSharedInfo CfgDevnet
-      {-
-      liftIO $ withCreateProcess cardanoNodeCreateProcess $ \_ _stdout _ _handle -> do
-        flip runLoggingT (print . renderWithSeverity id) $ do
-          liftIO $ threadDelay (seconds 3)
-          logMessage $ WithSeverity Informational [i|
-            Cardano node is running
-            |]
-          _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
-                                        , "protocol-parameters"
-                                        , "--testnet-magic"
-                                        , "42"
-                                        , "--out-file"
-                                        , "devnet/devnet-protocol-parameters.json"
-                                        ])
-                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
-                }) ""
-          prefix <- liftIO getTempPath'
-          oneKs <- generateCardanoKeys $ prefix <> "one"
-          one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
-          twoKs <- generateCardanoKeys $ prefix <> "two"
-          two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
-          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
-          seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
-          state <- getHydraPayState =<< getDevnetHydraSharedInfo
-          f state cardanoDevnetNodeInfo [(oneKs, one), (twoKs, two)]-}
-    CfgPreview pcfg -> liftIO $ --liftIO . flip runLoggingT (print . renderWithSeverity id) $ do
+
+    CfgPreview pcfg -> liftIO $
       pure $ CardanoNodeState Nothing (_previewHydraInfo pcfg) (CfgPreview pcfg)
-      {-
-      state <- getHydraPayState (_previewHydraInfo pcfg)
-      participants <- forM (_previewParticipants pcfg) $ \kp -> do
-        addr <- liftIO $ getCardanoAddress (_previewNodeInfo pcfg) (_verificationKey kp)
-        pure (kp, addr)
-      f state (_previewNodeInfo pcfg) participants-}
 
 data NodeConfig
   = CfgDevnet
@@ -360,6 +331,38 @@ readNodeConfig :: IO NodeConfig
 readNodeConfig = fmap (fromMaybe CfgDevnet) . runMaybeT $ do
   guard <=< liftIO $ doesFileExist demoCfgPath
   MaybeT $ readMaybe <$> readFile demoCfgPath
+
+websocketApiHandler :: MonadSnap m => State -> m ()
+websocketApiHandler state = do
+  runWebSocketsSnap $ \pendingConn -> do
+    authVar <- newMVar False
+    conn <- WS.acceptRequest pendingConn
+    WS.forkPingThread conn 30
+    WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
+    forever $ do
+      mClientMsg <- Aeson.decode <$> WS.receiveData conn
+      isAuthenticated <- readMVar authVar
+      case (isAuthenticated, mClientMsg) of
+        -- Handle authentication
+        (False, Just (Tagged t (Authenticate token))) -> do
+          let apiKey = _state_apiKey state
+              sentKey = T.encodeUtf8 token
+
+              authResult = apiKey == sentKey
+
+          modifyMVar_ authVar (pure . const authResult)
+          WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
+
+        -- Turn away requests that aren't authenticated
+        (False, Just (Tagged t clientMsg)) -> do
+          WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
+
+        -- When authenticated just process as normal
+        (True, Just clientMsg) -> do
+          msg <- handleTaggedMessage conn state clientMsg
+          WS.sendTextData conn . Aeson.encode $ msg
+
+        (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
 
 seedDemoAddressPreview :: PreviewNodeConfig -> Lovelace -> KeyPair -> IO TxIn
 seedDemoAddressPreview cfg amount kp = flip runLoggingT (print . renderWithSeverity id) $ do
@@ -656,8 +659,9 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
-        TxValid tx -> do
+        SnapshotConfirmed snapshot _ -> do
           endTime <- liftIO $ getCurrentTime
+          liftIO $ putStrLn $ "Snapshot: " <> show (Aeson.encode snapshot)
           pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
         ServerOutput.TxInvalid utxo tx validationError ->
           pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
@@ -981,36 +985,6 @@ signAndSubmitTx cninfo sk tx = do
       _ <- readCreateProcess cp ""
       submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
 
-websocketApiHandler :: MonadSnap m => State -> m ()
-websocketApiHandler state = do
-  runWebSocketsSnap $ \pendingConn -> do
-    let
-      apiKey = _state_apiKey state
-      request = WS.pendingRequest pendingConn
-      headers = WS.requestHeaders request
-
-      authHeader :: CI BS.ByteString
-      authHeader = "authorization"
-
-      sentKey = lookup authHeader headers
-
-      authenticated = Just apiKey == sentKey
-
-    case authenticated of
-      False -> WS.rejectRequest pendingConn "Invalid API Key"
-      True -> do
-        conn <- WS.acceptRequest pendingConn
-        WS.forkPingThread conn 30
-        WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
-
-        forever $ do
-          mClientMsg <- Aeson.decode <$> WS.receiveData conn
-          case mClientMsg of
-            Just clientMsg -> do
-              msg <- handleTaggedMessage conn state clientMsg
-              WS.sendTextData conn . Aeson.encode $ msg
-            Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
-
 handleTaggedMessage :: WS.Connection -> State -> Tagged ClientMsg -> IO (Tagged ServerMsg)
 handleTaggedMessage conn state (Tagged tid msg) = do
   msg <- handleClientMessage conn state msg
@@ -1021,6 +995,12 @@ versionStr = "0.1.0"
 
 handleClientMessage :: WS.Connection -> State -> ClientMsg -> IO (ServerMsg)
 handleClientMessage conn state = \case
+  Authenticate token -> do
+    let apiKey = _state_apiKey state
+        sentKey = T.encodeUtf8 token
+
+    pure $ AuthResult $ apiKey == sentKey
+
   GetStats -> do
     numHeads <- Map.size <$> readMVar (_state_heads state)
     networks <- readMVar (_state_networks state)

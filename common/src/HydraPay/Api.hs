@@ -118,6 +118,7 @@ instance FromJSON Status
 
 data ClientMsg
   = ClientHello
+  | Authenticate T.Text
   | DoesHeadExist T.Text
   | CreateHead HeadCreate
   | InitHead HeadInit
@@ -159,6 +160,8 @@ data ServerMsg
   | DevnetAddresses [Address]
   | CurrentStats HydraPayStats
   | RequestError T.Text
+  | NotAuthenticated
+  | AuthResult Bool
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg

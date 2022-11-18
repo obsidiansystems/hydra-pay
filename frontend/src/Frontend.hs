@@ -170,48 +170,61 @@ monitorView ::
   , MonadHold t m
   ) => m ()
 monitorView = do
-  prerender_ (text "Loading Monitor") $ mdo
-    (statsEl, _)<- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
-    (buttonEl, _)<- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
+  prerender_ (text "Loading Monitor") $ do
 
-    lastTagId <- foldDyn (+) 0 $ length <$> sendToHydraPay
-
+    apiKeyInput <- inputElement $ def
+                   & initialAttributes .~ ("class" =: "pl-4 pr-2 py-1 bg-transparent text-right" <> "placeholder" =: "Hydra Pay API Key")
     let
-      restartDevnet = RestartDevnet <$ domEvent Click buttonEl
-      getStats = GetStats <$ domEvent Click statsEl
+      pressedEnter = keypress Enter apiKeyInput
 
-      sendMsg =
-        mergeWith (<>) $ (fmap . fmap) pure $ [restartDevnet, getStats]
+    mApiKey <- holdDyn Nothing $ fmap Just $ current (_inputElement_value apiKeyInput) <@ pressedEnter
 
-      sendToHydraPay =
-        attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
+    dyn_ $ ffor mApiKey $ \case
+      Nothing -> text "Please enter your API Key"
+      Just apiKey -> mdo
+        (authEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Authenticate"
+        (statsEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
+        (buttonEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
 
-      serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+        lastTagId <- foldDyn (+) 0 $ length <$> sendToHydraPay
 
-    endpoint <- liftJSM $ do
-      let
-        webSocketProtocol :: T.Text -> T.Text
-        webSocketProtocol "https" = "wss"
-        webSocketProtocol _ = "ws"
+        let
+          authenticate = Authenticate apiKey <$ domEvent Click authEl
+          restartDevnet = RestartDevnet <$ domEvent Click buttonEl
+          getStats = GetStats <$ domEvent Click statsEl
 
-      wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+          sendMsg =
+            mergeWith (<>) $ (fmap . fmap) pure $ [authenticate, restartDevnet, getStats]
 
-      hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
-      port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+          sendToHydraPay =
+            attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
 
-      pure $ mconcat [ wsProtocol
-                     , "://"
-                     , hostname
-                     , ":"
-                     , port
-                     , "/hydra/api"
-                     ]
+          serverMsg = fmapMaybe id $ rws ^. webSocket_recv
 
-    rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
-      & webSocketConfig_send .~ sendToHydraPay
+        endpoint <- liftJSM $ do
+          let
+            webSocketProtocol :: T.Text -> T.Text
+            webSocketProtocol "https" = "wss"
+            webSocketProtocol _ = "ws"
 
-    responses <- foldDyn (:) [] serverMsg
-    display responses
+          wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+
+          hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+          port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+
+          pure $ mconcat [ wsProtocol
+                         , "://"
+                         , hostname
+                         , ":"
+                         , port
+                         , "/hydra/api"
+                         ]
+
+        rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
+          & webSocketConfig_send .~ sendToHydraPay
+
+        responses <- foldDyn (:) [] serverMsg
+        display responses
 
     pure ()
 
