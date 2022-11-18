@@ -57,14 +57,14 @@ balanceWidget name addr refetch endpoint = do
     balanceDynChanged <- (fmap . fmap) join $ elClass "div" "font-semibold" $ dyn $ ffor addr $ \case
       Nothing -> pure $ constDyn 0
       Just addr -> prerender (pure $ constDyn 0) $ mdo
-        addrLoad <- getPostBuild >>= delay 0.1
-        balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/" <> endpoint <> "/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
+        addrLoad <- getPostBuild
+        balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/" <> endpoint <> "/" <> addr <$ leftmost [addrLoad, delayedFail, () <$ refetch]
         let
           gotBalance = fmapMaybe (preview _Just) balanceResult
           reqFailed = fmapMaybe (preview _Nothing) balanceResult
 
+        delayedFail <- delay 1 reqFailed
         mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
-        display mBalance
 
         dyn_ $ ffor mBalance $ \case
           Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
@@ -333,35 +333,8 @@ appView bobAddress aliceAddress latestTxs = do
       elClass "div" "text-2xl mb-2 font-semibold mt-8" $ text "Current Balances"
 
       elClass "div" "flex flex-row mt-4" $ do
-        elClass "div" "text-lg flex flex-col mr-10" $ do
-          elClass "div" "font-semibold" $ text "Bob"
-          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-          elClass "div" "font-semibold" $ dyn_ $ ffor bobAddress $ \case
-            Nothing -> pure ()
-            Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 1
-              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
-              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
-              dyn_ $ ffor mBalance $ \case
-                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                Just balance -> do
-                  text $ T.pack . printf "%.2f" $ balance
-                  text " ADA"
-
-        elClass "div" "text-lg flex flex-col mr-10" $ do
-          elClass "div" "font-semibold" $ text "Alice"
-          -- NOTE(skylar): We assume we have loaded bobAddress if this is visible, so we don't worry about the outer Nothing
-          elClass "div" "font-semibold" $ dyn_ $ ffor aliceAddress $ \case
-            Nothing -> pure ()
-            Just addr -> prerender_ blank $ do
-              addrLoad <- getPostBuild >>= delay 1
-              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
-              mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
-              dyn_ $ ffor mBalance $ \case
-                Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
-                Just balance -> do
-                  text $ T.pack . printf "%.2f" $ balance
-                  text " ADA"
+        balanceWidget "Bob" bobAddress never "l1-balance"
+        balanceWidget "Alice" aliceAddress never "l1-balance"
 
       -- Divider
       elClass "div" "mt-2 w-full h-px bg-gray-200" blank
