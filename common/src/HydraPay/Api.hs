@@ -8,6 +8,7 @@ import qualified Data.Text as T
 
 import Control.Lens.TH
 
+import Data.Fixed (Pico)
 import Hydra.Types
 import Hydra.ServerOutput as ServerOutput
 
@@ -132,11 +133,15 @@ data ClientMsg
   | Withdraw Address
   | GetAddTx TxType Address Lovelace
   | SubscribeTo HeadName
+  | SubmitHeadTx Address HeadSubmitTx
 
   | RestartDevnet
   | GetStats
 
   | GetDevnetAddresses Int -- Amount of addresses
+
+  | GetL1Balance Address
+  | GetHeadBalance HeadName Address
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -145,9 +150,10 @@ instance FromJSON ClientMsg
 type Version = T.Text
 data ServerMsg
   = ServerHello Version
+  | OperationSuccess
+  | TxConfirmed Pico
   | FundsTx Tx
   | FuelAmount Lovelace
-  | OperationSuccess
   | SubscriptionStarted HeadName
   | AlreadySubscribed HeadName
   | InvalidMessage
@@ -162,6 +168,8 @@ data ServerMsg
   | RequestError T.Text
   | NotAuthenticated
   | AuthResult Bool
+  | L1Balance Lovelace
+  | HeadBalance Lovelace
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg

@@ -14,6 +14,7 @@ import HydraPay
 import qualified Data.Text as T
 import Data.IORef
 import Data.Foldable
+import qualified Data.ByteString as BS
 import Data.Aeson as Aeson
 import GHC.Generics
 
@@ -29,23 +30,24 @@ import Control.Concurrent (threadDelay)
 import CardanoNodeInfo
 import Common.DemoApi
 
-handleClientMessage :: State -> CardanoNodeInfo -> [(KeyPair, Address)] -> DClientMsg -> IO DServerMsg
-handleClientMessage state cninf participants = \case
+handleClientMessage :: BS.ByteString -> State -> CardanoNodeInfo -> [(KeyPair, Address)] -> DClientMsg -> IO DServerMsg
+handleClientMessage key state cninf participants = \case
   DClientHello -> pure DServerHello
-  DDemoInit -> demoFundInit state cninf participants
-  DCloseFanout -> demoCloseFanout participants
+  DDemoInit -> demoFundInit key state cninf participants
+  DCloseFanout -> demoCloseFanout key participants
   _ -> pure DUnhandledMessage
 
 
 demoFundInit ::
   MonadIO m =>
+  BS.ByteString ->
   State ->
   CardanoNodeInfo ->
   [(KeyPair, Address)] ->
   m DServerMsg
-demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
+demoFundInit key state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
   let addrs = snd <$> participants
-  fmap (maybe DUnhandledMessage id) $ liftIO $ runHydraPayClient $ do
+  fmap (maybe DUnhandledMessage id) $ liftIO $ runHydraPayClient key $ do
     let
       funds = ada 300
 
@@ -93,9 +95,9 @@ demoFundInit state cninf (participants@[(ks1, addr1), (ks2, addr2)]) = do
     pure DInitDone
 
 
-demoCloseFanout :: [(a, Address)] -> IO DServerMsg
-demoCloseFanout (participants@[(ks1, addr1), (ks2, addr2)]) =
-  fmap (maybe DUnhandledMessage id) $ runHydraPayClient $ do
+demoCloseFanout :: BS.ByteString -> [(a, Address)] -> IO DServerMsg
+demoCloseFanout key (participants@[(ks1, addr1), (ks2, addr2)]) =
+  fmap (maybe DUnhandledMessage id) $ runHydraPayClient key $ do
     -- Close the head, wait for fanout!
     OperationSuccess <- requestResponse $ CloseHead "demo"
 

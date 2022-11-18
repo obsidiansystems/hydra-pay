@@ -313,7 +313,7 @@ appView bobAddress aliceAddress latestTxs = do
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
               addrLoad <- getPostBuild >>= delay 0.1
-              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
                 Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
@@ -328,7 +328,7 @@ appView bobAddress aliceAddress latestTxs = do
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
               addrLoad <- getPostBuild >>= delay 0.1
-              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
                 Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
@@ -380,9 +380,9 @@ appView bobAddress aliceAddress latestTxs = do
                 Nothing -> pure ()
                 Just addr -> prerender_ blank $ mdo
                   addrLoad <- getPostBuild
-                  balanceResult :: Event t (Maybe (Either HydraPayError Int)) <- getAndDecode $ "/hydra/head-balance/demo/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
+                  balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/head-balance/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
                   let
-                    gotBalance = fmapMaybe (preview (_Just . _Right)) balanceResult
+                    gotBalance = fmapMaybe (preview _Just) balanceResult
                     reqFailed = fmapMaybe (preview _Nothing) balanceResult
 
                   mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
@@ -442,7 +442,7 @@ appView bobAddress aliceAddress latestTxs = do
       let
         txSendPayload = liftA2 (HeadSubmitTx "demo") <$> toAddr <*> lovelaceSendAmount
         sendAda = fmapMaybe (preview _Just) $ current txSendPayload <@ domEvent Click sendButton
-        sendUrl = (fmap ("/hydra/submit-tx/"<>) <$> fromAddr)
+        sendUrl = (fmap ("/submit-tx/"<>) <$> fromAddr)
         sendReq = liftA2 postJson <$> sendUrl <*> txSendPayload
 
         sendSuccess = fmapMaybe (preview _Just) $ (decodeText <=< _xhrResponse_responseText) <$> sendAdaResponse
@@ -476,7 +476,7 @@ appView bobAddress aliceAddress latestTxs = do
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
               addrLoad <- getPostBuild >>= delay 0.1
-              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
                 Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
@@ -491,7 +491,7 @@ appView bobAddress aliceAddress latestTxs = do
             Nothing -> pure ()
             Just addr -> prerender_ blank $ do
               addrLoad <- getPostBuild >>= delay 0.1
-              gotBalance <- getAndDecode $ "/hydra/l1-balance/" <> addr <$ addrLoad
+              gotBalance <- getAndDecode $ "/l1-balance/" <> addr <$ addrLoad
               mBalance <- holdDyn (Nothing :: Maybe Float) $ fmap lovelaceToAda <$> gotBalance
               dyn_ $ ffor mBalance $ \case
                 Nothing -> elClass "div" "animate-pulse bg-gray-700 w-16 h-4" blank
@@ -517,9 +517,9 @@ appView bobAddress aliceAddress latestTxs = do
                   Nothing -> pure $ constDyn 0
                   Just addr -> prerender (pure $ constDyn 0) $ mdo
                     addrLoad <- getPostBuild
-                    balanceResult :: Event t (Maybe (Either HydraPayError Int)) <- getAndDecode $ "/hydra/head-balance/demo/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
+                    balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/head-balance/" <> addr <$ leftmost [addrLoad, reqFailed, () <$ refetch]
                     let
-                      gotBalance = fmapMaybe (preview (_Just . _Right)) balanceResult
+                      gotBalance = fmapMaybe (preview _Just) balanceResult
                       reqFailed = fmapMaybe (preview _Nothing) balanceResult
 
                     mBalance <- holdDyn (Nothing :: Maybe Float) $ Just . lovelaceToAda <$> gotBalance
@@ -583,7 +583,7 @@ appView bobAddress aliceAddress latestTxs = do
               nextFromAddr = join $ ffor2 bobBalance aliceBalance $ \bb ab ->
                 if bb > ab then bobAddress else aliceAddress
 
-              sendUrl = (fmap ("/hydra/submit-tx/"<>) <$> nextFromAddr)
+              sendUrl = (fmap ("/submit-tx/"<>) <$> nextFromAddr)
 
               bobIsTo = ((==) <$> nextToAddr <*> bobAddress)
               toName = ffor bobIsTo $ \case

@@ -1,9 +1,7 @@
 -- |
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
@@ -659,9 +657,8 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
-        SnapshotConfirmed snapshot _ -> do
+        TxValid {} -> do
           endTime <- liftIO $ getCurrentTime
-          liftIO $ putStrLn $ "Snapshot: " <> show (Aeson.encode snapshot)
           pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
         ServerOutput.TxInvalid utxo tx validationError ->
           pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
@@ -1001,6 +998,21 @@ handleClientMessage conn state = \case
 
     pure $ AuthResult $ apiKey == sentKey
 
+  GetHeadBalance headname addr -> do
+    result <- headBalance state headname addr
+    pure $ case result of
+      Left err -> ServerError err
+      Right balance -> HeadBalance balance
+
+  SubmitHeadTx addr hstx -> do
+    result <- submitTxOnHead state addr hstx
+    pure $ case result of
+      Left err -> ServerError err
+      Right pico -> TxConfirmed pico
+
+  GetL1Balance addr -> do
+    L1Balance <$> l1Balance state addr False
+
   GetStats -> do
     numHeads <- Map.size <$> readMVar (_state_heads state)
     networks <- readMVar (_state_networks state)
@@ -1094,7 +1106,12 @@ handleClientMessage conn state = \case
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a
   }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadFail)
+  deriving ( Functor
+           , Applicative
+           , Monad
+           , MonadIO
+           , MonadFail
+           )
 
 data ClientState = ClientState
   { clientState_connection :: WS.Connection
@@ -1110,8 +1127,8 @@ data Msg
 instance FromJSON Msg where
   parseJSON v = (TaggedMsg <$> parseJSON v) <|> (PlainMsg <$> parseJSON v)
 
-runHydraPayClient :: HydraPayClient a -> IO (Maybe a)
-runHydraPayClient action = do
+runHydraPayClient :: BS.ByteString -> HydraPayClient a -> IO (Maybe a)
+runHydraPayClient apiKey action = do
   nextId <- newMVar 0
   broadcastChannel <- newBroadcastTChanIO
   msgsChannel <- newBroadcastTChanIO
@@ -1126,7 +1143,9 @@ runHydraPayClient action = do
           atomically $ writeTChan broadcastChannel msg
         Nothing -> pure ()
       pure ()
-    flip runReaderT (ClientState conn broadcastChannel msgsChannel  nextId) $ runMaybeT $ unHydraPayClient action
+    flip runReaderT (ClientState conn broadcastChannel msgsChannel  nextId) $ runMaybeT $ unHydraPayClient $ do
+      AuthResult True <- requestResponse $ Authenticate $ T.decodeUtf8 apiKey
+      action
 
 requestResponse :: ClientMsg -> HydraPayClient ServerMsg
 requestResponse msg = HydraPayClient . MaybeT . ReaderT $ \(ClientState conn inbox otherInbox nid) -> do
@@ -1162,8 +1181,9 @@ waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ bo
         _ -> checkForOpenStatus box
 
 getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
-getAddFundsTx addr amount = do
+getAddFundsTx addr amount = pure Nothing
+{-
   result <- runHydraPayClient $ requestResponse $ GetAddTx Funds addr amount
   pure $ case result of
     Just (FundsTx tx) -> Just tx
-    _ -> Nothing
+    _ -> Nothing-}

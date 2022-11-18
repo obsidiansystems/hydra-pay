@@ -93,7 +93,9 @@ backend = Backend
         liftIO $ runHydraPay $ \state -> do
           hsi <- getHydraSharedInfo state
           participants <- setupDemo state
-          let cninf = _hydraCardanoNodeInfo hsi
+          let
+            cninf = _hydraCardanoNodeInfo hsi
+            apiKey = _state_apiKey state
           liftIO . serve $ \case
             BackendRoute_HydraPay :/ hpr -> case hpr of
               HydraPayRoute_Api :/ () -> websocketApiHandler state
@@ -105,7 +107,7 @@ backend = Backend
                 forever $ do
                   mClientMsg <- Aeson.decode <$> WS.receiveData conn
                   case mClientMsg of
-                    Just clientMsg -> WSD.handleClientMessage state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
+                    Just clientMsg -> WSD.handleClientMessage apiKey state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
                     Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
               pure ()
 
