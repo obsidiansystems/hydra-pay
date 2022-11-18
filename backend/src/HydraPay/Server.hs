@@ -16,6 +16,8 @@ import Data.CaseInsensitive
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
 
+import Data.Int
+
 import Prelude hiding ((.))
 import Control.Lens hiding ((.=))
 import Control.Lens.TH
@@ -396,7 +398,7 @@ headBalance state name addr = do
     utxos <- getNodeUtxos node proxyAddr
     let
       txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
-      fullAmount = sum txInAmounts
+      fullAmount = toInteger $ sum txInAmounts
     pure (Right fullAmount)
 
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
@@ -405,7 +407,7 @@ l1Balance state addr includeFuel = do
   utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) addr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ (bool filterOutFuel id includeFuel) utxos
-    fullAmount = sum txInAmounts
+    fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
 -- | The balance of the proxy address associated with the address given
@@ -421,7 +423,7 @@ getProxyFuel state addr = do
   utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) addr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
-    fullAmount = sum txInAmounts
+    fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
@@ -433,8 +435,8 @@ buildAddTx txType state fromAddr amount = do
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
 
   let
-    fullAmount = sum txInAmounts
-    txInCount = Map.size txInAmounts
+    fullAmount = toInteger $ sum txInAmounts
+    txInCount = toInteger $ Map.size txInAmounts
   txBodyPath <- liftIO $ snd <$> getTempPath
   _ <- liftIO $ readCreateProcess (proc cardanoCliPath
                        (filter (/= "") $ [ "transaction"
@@ -528,7 +530,7 @@ withdraw state (WithdrawRequest addr maybeAmount) = do
   utxos <- queryAddressUTXOs nodeInfo proxyAddr
   let
     notFuel = filterOutFuel utxos
-    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
+    txInAmounts = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
     total = sum txInAmounts
 
   liftIO $ putStrLn $ "Address has: " <> show total <> " Lovelace"
@@ -575,7 +577,7 @@ commitToHead state (HeadCommit name addr amount) = do
 
     let
       rightAmount (TxInInfo _ _ val) =
-        Map.lookup "lovelace" val == Just amount
+        Map.lookup "lovelace" val == Just (fromIntegral amount)
 
     cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
     -- Get the first UTXO that has the correct amount as we MUST commit 1 or no UTXOs
@@ -644,7 +646,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     c <- liftIO $ _node_get_listen_chan node
     senderUtxos :: Map TxIn TxInInfo <- getNodeUtxos node proxyAddr
     let signingKey = _signingKey . _cardanoKeys . _keys . _node_info $ node
-    let lovelaceUtxos = Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
+    let lovelaceUtxos = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
     -- FIXME: fails on empty lovelaceUtxos
     (toAddrProxy, _) <- addOrGetKeyInfo state toAddr
     signedTxJsonStr <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
@@ -1014,12 +1016,12 @@ handleClientMessage conn state = \case
     L1Balance <$> l1Balance state addr False
 
   GetStats -> do
-    numHeads <- Map.size <$> readMVar (_state_heads state)
+    numHeads <- toInteger . Map.size <$> readMVar (_state_heads state)
     networks <- readMVar (_state_networks state)
 
     let
-      numNodes :: Int
-      numNodes = Map.foldr (+) 0 . fmap (Map.size . _network_nodes) $ networks
+      numNodes :: Integer
+      numNodes = toInteger $ Map.foldr (+) 0 . fmap (Map.size . _network_nodes) $ networks
 
     pure $ CurrentStats $ HydraPayStats numHeads numNodes
 
@@ -1039,7 +1041,7 @@ handleClientMessage conn state = \case
     pure DevnetRestarted
 
   GetDevnetAddresses amount -> do
-    mAddrs <- getDevnetAddresses [1 .. amount]
+    mAddrs <- getDevnetAddresses [1 .. fromIntegral amount]
     case mAddrs of
       Just addrs ->
         pure $ DevnetAddresses addrs
@@ -1117,7 +1119,7 @@ data ClientState = ClientState
   { clientState_connection :: WS.Connection
   , clientState_inbox :: TChan Msg
   , clientState_msgs :: TChan ServerMsg
-  , clientState_nextId :: MVar Int
+  , clientState_nextId :: MVar Int64
   }
 
 data Msg

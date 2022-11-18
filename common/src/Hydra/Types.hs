@@ -14,7 +14,7 @@ import Numeric.Natural (Natural)
 -- | Cardano address
 type Address = T.Text
 
-type Lovelace = Int
+type Lovelace = Integer
 
 type NodeId = T.Text
 
@@ -24,7 +24,7 @@ type WholeUTXO = Map TxIn TxInInfo
 ada :: Num a => a -> a
 ada = (* 1000000)
 
-lovelaceToAda :: Int -> Float
+lovelaceToAda :: Integer -> Float
 lovelaceToAda n = fromIntegral n / 1000000
 
 filterOutFuel :: WholeUTXO -> WholeUTXO

@@ -2,6 +2,7 @@
 
 module HydraPay.Api where
 
+import Data.Int
 import GHC.Generics
 import Data.Aeson as Aeson
 import qualified Data.Text as T
@@ -15,8 +16,8 @@ import Hydra.ServerOutput as ServerOutput
 type HeadName = T.Text
 
 data HydraPayStats = HydraPayStats
-  { _hydraPayStats_heads :: Int
-  , _hydraPayStats_nodes :: Int
+  { _hydraPayStats_heads :: Integer
+  , _hydraPayStats_nodes :: Integer
   }
   deriving (Eq, Show, Generic)
 
@@ -35,7 +36,7 @@ instance FromJSON HeadCreate
 data HeadInit = HeadInit
   { headInit_name :: HeadName
   , headInit_participant :: Address
-  , headInit_contestation :: Int
+  , headInit_contestation :: Integer
   }
   deriving (Eq, Show, Generic)
 
@@ -75,7 +76,7 @@ instance FromJSON HeadStatus
 
 
 data Tagged a = Tagged
-  { tagged_id :: Int
+  { tagged_id :: Int64
   , tagged_payload :: a
   }
   deriving (Eq, Show, Generic)
@@ -138,7 +139,7 @@ data ClientMsg
   | RestartDevnet
   | GetStats
 
-  | GetDevnetAddresses Int -- Amount of addresses
+  | GetDevnetAddresses Integer -- Amount of addresses
 
   | GetL1Balance Address
   | GetHeadBalance HeadName Address

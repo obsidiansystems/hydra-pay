@@ -351,7 +351,7 @@ getCardanoAddress cninf keyPath =
 transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Maybe TxIn)
 transferAll cninf signingKey fromAddr destAddr = do
   txins <- getAllLovelaceUtxos cninf fromAddr
-  transferAmount cninf signingKey txins destAddr True Nothing
+  transferAmount cninf signingKey (fmap toInteger txins) destAddr True Nothing
   
 
 seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m TxIn

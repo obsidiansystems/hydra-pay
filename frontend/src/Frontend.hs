@@ -15,6 +15,8 @@ where
 import Prelude hiding (filter)
 import qualified Prelude as Pre
 
+import Data.Int
+
 import Hydra.Types
 import HydraPay.Api
 
@@ -58,7 +60,7 @@ balanceWidget name addr refetch endpoint = do
       Nothing -> pure $ constDyn 0
       Just addr -> prerender (pure $ constDyn 0) $ mdo
         addrLoad <- getPostBuild
-        balanceResult :: Event t (Maybe Int) <- getAndDecode $ "/" <> endpoint <> "/" <> addr <$ leftmost [addrLoad, delayedFail, () <$ refetch]
+        balanceResult :: Event t (Maybe Integer) <- getAndDecode $ "/" <> endpoint <> "/" <> addr <$ leftmost [addrLoad, delayedFail, () <$ refetch]
         let
           gotBalance = fmapMaybe (preview _Just) balanceResult
           reqFailed = fmapMaybe (preview _Nothing) balanceResult
@@ -213,7 +215,7 @@ monitorView = do
         (statsEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
         (buttonEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
 
-        lastTagId <- foldDyn (+) 0 $ length <$> sendToHydraPay
+        lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
 
         let
           authenticate = Authenticate apiKey <$ domEvent Click authEl
@@ -408,12 +410,12 @@ appView bobAddress aliceAddress latestTxs = do
         toAddr <- holdDyn Nothing $ leftmost [current bobAddress <@ sendBuild, changeSelection]
         pure ()
 
-      lovelaceSendAmount :: Dynamic t (Maybe Int) <- el "div" $ elClass "div" "mt-4 w-full border-2 border-gray-200 flex flex-row items-center" $ do
+      lovelaceSendAmount :: Dynamic t (Maybe Integer) <- el "div" $ elClass "div" "mt-4 w-full border-2 border-gray-200 flex flex-row items-center" $ do
           amountInput <- inputElement $ def
             & initialAttributes .~ ("class" =: "text-gray-500 w-full px-8 py-6 bg-transparent text-center text-xl" <> "placeholder" =: "1 ADA" <> "type" =: "number")
             & inputElementConfig_initialValue .~ "10"
           elClass "span" "mx-2 my-1" $ text "ADA"
-          pure $ fmap ((round :: Float -> Int) . ada) . readMaybe . T.unpack <$> _inputElement_value amountInput
+          pure $ fmap ((round :: Float -> Integer) . ada) . readMaybe . T.unpack <$> _inputElement_value amountInput
 
       (sendButton, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Send ADA"
 

@@ -30,7 +30,7 @@ import HydraPay.Api
 
 testFanout :: CardanoNodeInfo -> T.Text -> IO ()
 testFanout cninfo name = do
-  testHeadParticipants cninfo name [1..3] contestation
+  testHeadParticipants cninfo name [1..3] $ fromIntegral contestation
   postCloseHead name
   threadDelay $ contestation * 1000000
   waitForFanout 1000000
@@ -140,7 +140,7 @@ postInitHeadCustomContestation contestation name i = do
   Just [addr] <- getDevnetAddresses [i]
   initReq <- parseRequest $ "http://localhost:8000/hydra/init"
   let
-    payload = Aeson.encode $ HeadInit name addr contestation
+    payload = Aeson.encode $ HeadInit name addr (toInteger contestation)
     req = setRequestBodyLBS payload $ initReq
       { method = "POST"
       }
