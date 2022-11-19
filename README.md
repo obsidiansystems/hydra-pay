@@ -260,7 +260,7 @@ Example Payload:
 
 Get the amount of Lovelace available on the head at your (Proxy) Address.
 ``` json
-{ tag : "GetHeadBalance", head: "test", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+{ "tag" : "GetHeadBalance", "head": "test", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
@@ -301,7 +301,7 @@ Example Payload:
 Get the amount of Lovelace available on the head at your (Proxy) Address on L1.
 
 ``` json
-{ tag : "GetL1Balance", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+{ "tag" : "GetL1Balance", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
