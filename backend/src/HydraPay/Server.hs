@@ -43,13 +43,11 @@ import System.IO (IOMode(WriteMode), openFile, Handle)
 import Network.WebSockets.Client
 import qualified Network.WebSockets.Connection as WS
 
-import Crypto.Random
-import Data.ByteString.Base64 as Base64
-
 import Control.Monad.Reader
 import Control.Monad.Fail
 import Control.Monad.Trans.Maybe
 import Control.Applicative
+import Control.Exception
 
 import qualified Network.WebSockets as WS
 
@@ -255,11 +253,7 @@ runHydraPay action = do
     MaybeT $ getConfig "backend/api-key"
 
   key <- case result of
-    Nothing -> do
-      putStrLn "Generating New API Key..."
-      newKey <- Base64.encode <$> getRandomBytes 32
-      BS.writeFile "config/backend/api-key" newKey
-      pure newKey
+    Nothing -> error "No API Key found in config/backend/api-key"
     Just key -> pure key
 
   addrs <- liftIO $ newMVar mempty

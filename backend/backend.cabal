@@ -54,7 +54,6 @@ library
                , time
                , time-compat
                , transformers
-               , cryptonite
                , obelisk-executable-config-lookup
 
   default-extensions:
