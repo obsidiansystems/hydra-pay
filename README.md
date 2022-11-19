@@ -54,20 +54,118 @@ Foundational:
 - [x] Head Init and Commit
 - [x] Head network spawning and monitoring
 - [x] Convenience API for adding funds and creating fuel (CIP-30, and hardware wallet compatible) 
-- [x] REST Endpoints
-- [ ] Websocket support
+- [x] Websocket support
+- [x] API Documentation
+- [x] Authentication support
+- [x] Tested on Preview
+- [x] Tested over https and wss
+- [ ] Deployment Guide
+- [ ] Docker Deployment Guide
+- [ ] Best Practices
 - [ ] TTL on add funds and fuel pre-built transactions
 - [ ] Integration of hydra libraries
 - [ ] Choice of network: Devnet, Preview, Preprod, Mainnet
-- [ ] API Documentation
-- [ ] Initial client interaction library
 - [ ] How to Contribute
 
 ## 🗝 API
 
-### Head Creation
+The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api.
 
-`POST /hydra/heads`
+Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance.
+
+In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/.
+
+### WebSocket API Design
+
+The Hydra Pay API allows both Request/Response and subscription based server-pushed information for managing your Heads and Payment Channels.
+
+Anytime you make a request to the Server you must Tag it with a request-id, and you will receieve a response with the same request-id. It is the Client's responsiblity to provide unique requests ids for any in-flight requests. The simplest way to achieve this is track the last request-id starting from 0 and increment whenever any request is made to the Server.
+
+All requests to the Server must be tagged.
+
+### Tagging Requests, and Request/Response in Hydra Pay
+
+All communication the Client does with the Server through the WebSocket must be Tagged. For example you may say hello to the server with a `ClientHello` message:
+
+``` json
+{ tag : ClientHello }
+```
+
+To Tag this message, we need the unique request-id, if we were sending this as the first message to our Server we may use 0 as the request-id. Tagging is as simple as wrapping the above message like so:
+
+``` json
+{ tagged_payload : { tag : ClientHello }, tagged_id : 0 }
+```
+
+This request can now be sent through the websocket, at which point we should recieve a Tagged Response as follows:
+
+``` json
+{ tagged_payload : { tag : ServerHello, version : "0.1.0" }, tagged_id : 0 }
+```
+
+Remeber that all communication the Client makes with the Server must be tagged. This forms the request response part of the API.
+
+### Subscriptions
+
+There are requests in the Hydra Pay API that tell Hydra Pay that you are interested in receiving timely information about a Head or Heads. When Hydra Pay knows you are interested in this data, you will recieve un-tagged (as opposed to Tagged as you would see in request response), payloads delivering the subscribed to information update.
+
+Information might include a Head changing state, an error or failure, a restart of a Node, or the inability to settle or fanout based on the fuel of one or more participants in a Head.
+
+This allows Light Wallet and DApp developers to have their implementation react and respond to these issues in a timely and automatic way.
+
+### Authentication
+
+When you launch or deploy a Hydra Pay instance you will need to provide an API Key to authenticate against, this is a secret that should be only known to your DApp/LightWallet and your Hydra Pay instance. 
+
+Upon opening a websocket connection to your HydraPay instance, you should immediately Authenticate by sending a Tagged `Authenticate` request (see below).
+
+### Request and Response Payloads
+
+Here is a list of request/response payloads. Remember that you must Tag (see above), these payloads when communicating with the Server. 
+
+#### ClientHello
+
+Say hello to the server, it will report its version when it says hello back:
+
+``` json
+{ tag: ClientHello }
+```
+
+Example Response:
+``` json
+{ tag: ServerHello, version: "0.1.0" }
+```
+
+#### Authentication 
+
+To start making legitimate requests to your Server(Hydra Pay Instance), you must first authenticate yourself on the open websocket connection.
+This will use the API Key you set up when you deployed the Server.
+
+``` json
+{ tag: Authenticate, contents: "KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM=" }
+```
+
+Example Response:
+``` json
+{ tag: AuthenticationResult, contents: true }
+```
+
+#### Subscribe to Head
+
+Subscribing to a Head means you are interested in getting timely information about this Head's operation, including state changes, errors, and status updates like snapshot confirmation, node status and restarts. You will recieve *un-tagged* requests on the websocket where you subscribed.
+
+This makes it easier to implement logic where you wait for say a head to close and fanout, without having to poll the socket.
+
+```json
+{ tag: SubscribeTo, contents: "test" }
+```
+
+Example Response:
+``` json
+{ tag: SubscriptionStarted, contents: "test" }
+```
+
+#### Head Creation
 
 To create a Head you will give it a friendly name and list the addresses that will become the participants.
 Creating the head starts the Hydra network.
@@ -82,9 +180,7 @@ Example payload:
 }
 ```
 
-### Head Status
-
-`GET /hydra/head/:head-name`
+#### Head Status
 
 Get the status of the Head on-chain and the status of the network of hydra-nodes.
 
@@ -97,9 +193,7 @@ Example Response:
 }
 ```
 
-### Head Init
-
-`POST /hydra/init`
+#### Head Init
 
 Post the inital state of your Head on chain, and start waiting for Commitments from the participants.
 
@@ -111,9 +205,7 @@ Example Payload:
 }
 ```
 
-### Head Commit
-
-`POST /hydra/commit`
+#### Head Commit
 
 Commit the funds at your Proxy Address to the named Head.
 
@@ -125,9 +217,7 @@ Example Payload:
 }
 ```
 
-### Add Funds
-
-`GET /hydra/add-funds/:cardano-address`
+#### Add Funds
 
 Get a CIP-30 compatible CBOR transaction that will fund your Proxy Address.
 
@@ -140,9 +230,7 @@ Example Response:
 }
 ```
 
-### Add Fuel
-
-`GET /hydra/add-fuel/:cardano-address`
+#### Add Fuel
 
 Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address. 
 
@@ -155,9 +243,7 @@ Example Response:
 }
 ```
 
-### Send funds on Head
-
-`POST /hydra/submit-tx/:cardano-address`
+#### Send funds on Head
 
 Send funds from your Proxy Address to another participant identified by their L1 Address.
 
@@ -170,20 +256,19 @@ Example Payload:
 }
 ```
 
-### Query head funds
-
-`GET /hydra/head-balance/:head-name/:cardano-address`
+#### Query Head Balance
 
 Get the amount of Lovelace available on the head at your (Proxy) Address.
+``` json
+{ tag : GetHeadBalance, head: "test", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+```
 
 Example Response:
 ``` json
 10000000
 ```
 
-### Close
-
-`POST /hydra/close/:head-name`
+#### Close
 
 Close the head.
 
@@ -197,9 +282,7 @@ Example Response:
 ```
 
 
-### Withdraw
-
-`POST /hydra/withdraw/`
+#### Withdraw
 
 Withdraw funds from your Proxy Address to your main address.
 
@@ -212,11 +295,14 @@ Example Payload:
 }
 ```
 
-### Query L1 funds
 
-`GET /hydra/l1-balance/:cardano-address`
+#### Query L1 Balance
 
-Get the amount of Lovelace available on the head at your (Proxy) Address.
+Get the amount of Lovelace available on the head at your (Proxy) Address on L1.
+
+``` json
+{ tag : GetL1Balance, addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+```
 
 Example Response:
 ``` json
