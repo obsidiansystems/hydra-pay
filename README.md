@@ -128,12 +128,12 @@ Here is a list of request/response payloads. Remember that you must Tag (see abo
 Say hello to the server, it will report its version when it says hello back:
 
 ``` json
-{ tag: ClientHello }
+{ tag: "ClientHello" }
 ```
 
 Example Response:
 ``` json
-{ tag: ServerHello, version: "0.1.0" }
+{ tag: "ServerHello", version: "0.1.0" }
 ```
 
 #### Authentication 
@@ -142,12 +142,12 @@ To start making legitimate requests to your Server(Hydra Pay Instance), you must
 This will use the API Key you set up when you deployed the Server.
 
 ``` json
-{ tag: Authenticate, contents: "KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM=" }
+{ tag: "Authenticate", contents: "KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM=" }
 ```
 
 Example Response:
 ``` json
-{ tag: AuthenticationResult, contents: true }
+{ tag: "AuthenticationResult", contents: true }
 ```
 
 #### Subscribe to Head
@@ -157,12 +157,12 @@ Subscribing to a Head means you are interested in getting timely information abo
 This makes it easier to implement logic where you wait for say a head to close and fanout, without having to poll the socket.
 
 ```json
-{ tag: SubscribeTo, contents: "test" }
+{ tag: "SubscribeTo", contents: "test" }
 ```
 
 Example Response:
 ``` json
-{ tag: SubscriptionStarted, contents: "test" }
+{ tag: "SubscriptionStarted", contents: "test" }
 ```
 
 #### Head Creation
@@ -260,7 +260,7 @@ Example Payload:
 
 Get the amount of Lovelace available on the head at your (Proxy) Address.
 ``` json
-{ tag : GetHeadBalance, head: "test", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+{ tag : "GetHeadBalance", head: "test", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
@@ -301,7 +301,7 @@ Example Payload:
 Get the amount of Lovelace available on the head at your (Proxy) Address on L1.
 
 ``` json
-{ tag : GetL1Balance, addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
+{ tag : "GetL1Balance", addr : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
