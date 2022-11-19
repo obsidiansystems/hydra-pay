@@ -539,8 +539,6 @@ withdraw state (WithdrawRequest addr maybeAmount) = do
     notFuel = filterOutFuel utxos
     txInAmounts = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
     total = sum txInAmounts
-
-  liftIO $ putStrLn $ "Address has: " <> show total <> " Lovelace"
   let signingKey = _signingKey $ _cardanoKeys keyInfo
   result <- liftIO $ transferAmount nodeInfo signingKey txInAmounts addr True maybeAmount
   pure $ maybe (Left InsufficientFunds) Right result
@@ -1169,30 +1167,17 @@ requestResponse msg = HydraPayClient . MaybeT . ReaderT $ \(ClientState conn inb
         TaggedMsg (Tagged n' msg) | n == n' -> pure msg
         _ -> waitForResponse n chan
 
--- Start commiting
--- Some time after we start commiting, we will get a HeadIsOpen
--- at that point the Head is ready to go
--- We need to wait for this HeadIsOpen or some error or something
 waitForHeadOpen :: HeadName -> HydraPayClient ()
 waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ box nid) -> do
-  putStrLn "Waiting for OPEN"
   readChan <- atomically $ dupTChan box
   checkForOpenStatus readChan
-  liftIO $ putStrLn "DONE WE ARE OPEN"
   Just <$> pure ()
   where
     checkForOpenStatus box = do
-      putStrLn "Waiting for a thing??"
       msg <- atomically $ readTChan box
-      putStrLn "Did we even get this??"
       case msg of
         HeadStatusChanged name Status_Open | name == hname -> pure ()
         _ -> checkForOpenStatus box
 
 getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
 getAddFundsTx addr amount = pure Nothing
-{-
-  result <- runHydraPayClient $ requestResponse $ GetAddTx Funds addr amount
-  pure $ case result of
-    Just (FundsTx tx) -> Just tx
-    _ -> Nothing-}
