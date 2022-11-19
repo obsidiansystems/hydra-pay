@@ -11,6 +11,7 @@
 module HydraPay.Server where
 
 
+import Control.Exception
 import Snap.Core
 import Data.CaseInsensitive
 import Network.WebSockets.Snap
@@ -275,7 +276,9 @@ runHydraPay action = do
            else (ys, Just xs)
   let freePorts ps = void $ modifyMVar_ ports (pure . (ps ++))
   cardanoNodeState <- withLogging getCardanoNodeState >>= newMVar
-  action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts key
+  finally (action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts key) $ do
+    node <- readMVar cardanoNodeState
+    stopCardanoNode node
 
 getHydraSharedInfo :: MonadIO m => State -> m HydraSharedInfo
 getHydraSharedInfo = liftIO .
@@ -386,9 +389,13 @@ whenDevnet cfg = when (case cfg of
                           CfgDevnet -> True
                           _ -> False)
 
-teardownDevnet :: CardanoNodeState -> IO ()
-teardownDevnet (CardanoNodeState handles sharedinfo _) = do
+stopCardanoNode :: CardanoNodeState -> IO ()
+stopCardanoNode (CardanoNodeState handles _ _) =
   maybe (pure ()) cleanupProcess handles
+
+teardownDevnet :: CardanoNodeState -> IO ()
+teardownDevnet cnode = do
+  stopCardanoNode cnode
   exists <- doesPathExist "devnet"
   when exists $ removePathForcibly "devnet"
 
