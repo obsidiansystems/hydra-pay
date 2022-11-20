@@ -62,12 +62,13 @@ getDevnetHydraSharedInfo = do
   pure $ HydraSharedInfo
     { _hydraScriptsTxId = T.unpack scripts
     , _hydraLedgerGenesis = "devnet/genesis-shelley.json"
+    -- These are devnet-like protocol parameters set to 0 fees:
     , _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json"
     , _cardanoNodeInfo = cardanoDevnetNodeInfo
     }
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
+cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet 42) "devnet/node.socket" "devnet/devnet-protocol-parameters.json" "devnet/genesis-shelley.json"
 
 devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"
@@ -157,6 +158,15 @@ withCardanoNode f = do
           logMessage $ WithSeverity Informational [i|
             Cardano node is running
             |]
+          _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
+                                        , "protocol-parameters"
+                                        , "--testnet-magic"
+                                        , "42"
+                                        , "--out-file"
+                                        , "devnet/devnet-protocol-parameters.json"
+                                        ])
+                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
+                }) ""
           prefix <- liftIO getTempPath'
           oneKs <- generateCardanoKeys $ prefix <> "one"
           one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs

@@ -438,10 +438,7 @@ transferAmount cninf signingKey utxos toAddr minusFee maybeAmount = do
   let txins = Map.keys utxos
   let fullAmount :: Lovelace = sum . Map.elems $ utxos
   emptyTx <- buildRawEmptyTx cninf txins [toAddr]
-  fee' <- calculateMinFees cninf emptyTx (Map.size utxos) 1
-  -- FIXME: On devnet the calculated fee is 0 even though that's not accepted.
-  -- Using a temporary three Ada as the fee until there's a better way.
-  let fee = if fee' == 0 then ada 3 else fee'
+  fee <- calculateMinFees cninf emptyTx (Map.size utxos) 1
   let amount = fromMaybe fullAmount maybeAmount
   if (if minusFee
       then fee >= amount || amount > fullAmount
