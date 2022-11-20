@@ -70,6 +70,7 @@ library
     Paths
     Hydra.Devnet
     HydraPay.WebSocket
+    HydraPay.WebSocketDemo
     HydraPay.SubmitTxDirectTest
     CardanoNodeInfo
     
