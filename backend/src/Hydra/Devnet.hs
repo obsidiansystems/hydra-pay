@@ -85,7 +85,7 @@ devnetMagic :: Int
 devnetMagic = 42
 
 cardanoDevnetNodeInfo :: CardanoNodeInfo
-cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet devnetMagic) "devnet/node.socket" "devnet/protocol-parameters.json" "devnet/genesis-shelley.json"
+cardanoDevnetNodeInfo = CardanoNodeInfo (TestNet devnetMagic) "devnet/node.socket" "devnet/devnet-protocol-parameters.json" "devnet/genesis-shelley.json"
 
 devnetFaucetKeys :: KeyPair
 devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/faucet.vk"

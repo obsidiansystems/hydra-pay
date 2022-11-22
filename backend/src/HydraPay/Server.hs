@@ -288,7 +288,9 @@ getCardanoNodeState = do
     CfgDevnet -> liftIO $ do
       readCreateProcess (shell "rm -rf devnet") ""
       readCreateProcess (shell "rm -rf demo-logs") ""
+      liftIO $ flip runLoggingT (print . renderWithSeverity id) $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
+      threadDelay (seconds 3)
       _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
                                         , "protocol-parameters"
                                         , "--testnet-magic"
