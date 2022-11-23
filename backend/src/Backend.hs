@@ -23,8 +23,7 @@ import Obelisk.Route
 import Control.Monad.Log
 import Control.Monad.IO.Class (liftIO)
 
-
-
+import Snap.Core
 
 import Control.Concurrent
 
@@ -93,6 +92,12 @@ backend = Backend
                     Just clientMsg -> WSD.handleClientMessage apiKey state cninf participants clientMsg >>= WS.sendTextData conn . Aeson.encode
                     Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
               pure ()
+
+            BackendRoute_DemoAddresses :/ () -> do
+              writeText "100000000"
+
+            BackendRoute_DemoTestWithdrawal :/ () -> do
+              writeText "Done"
 
             BackendRoute_Api :/ () -> pure ()
             BackendRoute_Missing :/ _ -> pure ()
