@@ -89,9 +89,17 @@ frontend = Frontend
       elAttr "link" ("rel" =: "preconnect" <> "href" =: "https://fonts.googleapis.com") blank
       elAttr "link" ("rel" =: "preconnect" <> "href" =: "https://fonts.gstatic.com") blank
       elAttr "link" ("href"=:"https://fonts.googleapis.com/css2?family=Inria+Sans:wght@300&family=Inter:wght@100;200;300;400;500;600;700;800;900&family=Krona+One&family=Rajdhani:wght@300;400;500;600;700&display=swap" <> "rel"=:"stylesheet") blank
-      elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
+      -- elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
+
+      -- Highlight JS for syntax highlighting
+      elAttr "link" ("rel" =: "stylesheet" <> "href" =: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/styles/default.min.css") blank
+      elAttr "script" ("src" =: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/highlight.min.js") blank
+
   , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $ do
+      elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" $
+        monitorView
+      {-
       elClass "div" "flex-shrink-0 px-8 py-4 text-xl font-semibold" $
         routeLink (FrontendRoute_Setup :/ ()) $ el "h1" $ text "Hydra Pay"
       elClass "div" "w-full h-full mt-10 flex-grow px-8 overflow-hidden" $ do
@@ -172,7 +180,7 @@ frontend = Frontend
             setRoute $ FrontendRoute_OpenChannel :/ () <$ gotAddrs
             setRoute $ FrontendRoute_Setup :/ () <$ postBuild
         setRoute $ FrontendRoute_PaymentChannel :/ () <$ newTx
-        pure ()
+        pure ()-}
   }
 
 data DemoTx = DemoTx
@@ -198,63 +206,133 @@ monitorView ::
   , MonadFix m
   , MonadHold t m
   ) => m ()
-monitorView = do
-  prerender_ (text "Loading Monitor") $ do
+monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-2 rounded flex flex-col" $ do
+  prerender_ (text "Loading Live Documentation") $ do
+    endpoint <- liftJSM $ do
+      let
+        webSocketProtocol :: T.Text -> T.Text
+        webSocketProtocol "https:" = "wss:"
+        webSocketProtocol _ = "ws:"
 
-    apiKeyInput <- inputElement $ def
-                   & initialAttributes .~ ("class" =: "pl-4 pr-2 py-1 bg-transparent text-right" <> "placeholder" =: "Hydra Pay API Key")
-    let
-      pressedEnter = keypress Enter apiKeyInput
+      wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
 
-    mApiKey <- holdDyn Nothing $ fmap Just $ current (_inputElement_value apiKeyInput) <@ pressedEnter
+      hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+      port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
 
-    dyn_ $ ffor mApiKey $ \case
-      Nothing -> text "Please enter your API Key"
-      Just apiKey -> mdo
-        (authEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Authenticate"
-        (statsEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
-        (buttonEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
+      pure $ mconcat [ wsProtocol
+                     , "//"
+                     , hostname
+                     , ":"
+                     , port
+                     , "/hydra/api"
+                     ]
+    pb <- getPostBuild
 
-        lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
+    rec
+      lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
 
-        let
-          authenticate = Authenticate apiKey <$ domEvent Click authEl
-          restartDevnet = RestartDevnet <$ domEvent Click buttonEl
-          getStats = GetStats <$ domEvent Click statsEl
+      let
+        sendMsg =
+          mergeWith (<>) $ (fmap . fmap) pure $ [authenticate]
 
-          sendMsg =
-            mergeWith (<>) $ (fmap . fmap) pure $ [authenticate, restartDevnet, getStats]
+        authenticate = Authenticate "That gabagool" <$ pb
 
-          sendToHydraPay =
-            attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
+        sendToHydraPay =
+          attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
 
-          serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+      rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
+        & webSocketConfig_send .~ sendToHydraPay
 
-        endpoint <- liftJSM $ do
+    elClass "div" "p-2" $ do
+      elClass "div" "text-3xl flex flex-col justify-center items-center" $ do
+        el "div" $ text "Hydra Pay Live Documentation"
+
+      -- Divider
+      elClass "div" "mt-2 w-full h-px bg-gray-200" blank
+
+      -- Page Title
+      elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Authentication Request"
+
+      elClass "p" "" $ do
+        text "When you launch or deploy a Hydra Pay instance you will need to provide an API Key to authenticate against, this is a secret that should be only known to your DApp/LightWallet and your Hydra Pay instance."
+        text "Upon opening a websocket connection to your HydraPay instance, you should immediately Authenticate by sending a Tagged `Authenticate` request (see below)."
+
+    elClass "div" "mt-4 p-2 bg-white rounded" $ do
+      elClass "div" "mb-2 font-semibold flex flex-row" $ do
+        elClass "div" "mr-2" $ text "Payload"
+        elClass "div" "text-green-400" $ text "Object"
+
+      elClass "div" "flex flex-col" $ do
+        elClass "div" "" $ text "Api Key"
+        _ <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border")
+        pure ()
+
+    elClass "div" "" blank
+    pure ()
+
+    elClass "pre" "rounded p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ text "Hye I am code"
+
+    rec
+      mApiKey <- holdDyn Nothing $ fmap Just $ gotApiKey
+      gotApiKey <- (switchHold never =<<) $ dyn $ ffor mApiKey $ \case
+        Nothing -> do
+          text "Please enter your API Key"
+          apiKeyInput <- inputElement $ def
+                     & initialAttributes .~ ("class" =: "pl-4 pr-2 py-1 bg-transparent text-right" <> "placeholder" =: "Hydra Pay API Key")
           let
-            webSocketProtocol :: T.Text -> T.Text
-            webSocketProtocol "https:" = "wss:"
-            webSocketProtocol _ = "ws:"
+            pressedEnter = keypress Enter apiKeyInput
 
-          wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+          pure $ current (_inputElement_value apiKeyInput) <@ pressedEnter
 
-          hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
-          port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+        Just apiKey -> do
+          pure never
 
-          pure $ mconcat [ wsProtocol
-                         , "//"
-                         , hostname
-                         , ":"
-                         , port
-                         , "/hydra/api"
-                         ]
+          {-
+          (authEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Authenticate"
+          (statsEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Get Current Stats"
+          (buttonEl, _) <- elClass' "button" "rounded mt-4 p-4 text-center w-full bg-gray-800 text-white font-bold" $ text "Restart Devnet"
 
-        rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
-          & webSocketConfig_send .~ sendToHydraPay
+          lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
 
-        responses <- foldDyn (:) [] serverMsg
-        display responses
+          let
+            authenticate = Authenticate apiKey <$ domEvent Click authEl
+            restartDevnet = RestartDevnet <$ domEvent Click buttonEl
+            getStats = GetStats <$ domEvent Click statsEl
 
+            sendMsg =
+              mergeWith (<>) $ (fmap . fmap) pure $ [authenticate, restartDevnet, getStats]
+
+            sendToHydraPay =
+              attachWith (\tid msgs -> fmap (uncurry Tagged) $ zip [tid..] msgs) (current lastTagId) sendMsg
+
+            serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+
+          endpoint <- liftJSM $ do
+            let
+              webSocketProtocol :: T.Text -> T.Text
+              webSocketProtocol "https:" = "wss:"
+              webSocketProtocol _ = "ws:"
+
+            wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+
+            hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+            port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+
+            pure $ mconcat [ wsProtocol
+                           , "//"
+                           , hostname
+                           , ":"
+                           , port
+                           , "/hydra/api"
+                           ]
+
+           rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
+            & webSocketConfig_send .~ sendToHydraPay
+
+          responses <- foldDyn (:) [] serverMsg
+          display responses
+          pure never-}
     pure ()
 
 appView :: forall t m.
@@ -271,7 +349,7 @@ appView :: forall t m.
   , MonadHold t m
   ) => Dynamic t (Maybe T.Text) -> Dynamic t (Maybe T.Text) -> Dynamic t (Map Int DemoTx) -> RoutedT t (R FrontendRoute) m (Event t DemoTx)
 appView bobAddress aliceAddress latestTxs = do
-  fmap switchDyn $ elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" $ subRoute $ \case
+  fmap switchDyn $ subRoute $ \case
     FrontendRoute_Monitor -> monitorView >> pure never
     FrontendRoute_Setup -> do
       elClass "div" "text-3xl flex flex-col justify-center items-center" $ do

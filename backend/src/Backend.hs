@@ -74,8 +74,9 @@ backend = Backend
       runLogging $ do
         liftIO $ runHydraPay $ \state -> do
           hsi <- getHydraSharedInfo state
-          participants <- setupDemo state
+          -- participants <- setupDemo state
           let
+            participants = []
             cninf = _hydraCardanoNodeInfo hsi
             apiKey = _state_apiKey state
           liftIO . serve $ \case

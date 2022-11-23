@@ -286,8 +286,8 @@ getCardanoNodeState = do
   cfg <- liftIO readNodeConfig
   case cfg of
     CfgDevnet -> liftIO $ do
-      readCreateProcess (shell "rm -rf devnet") ""
-      readCreateProcess (shell "rm -rf demo-logs") ""
+      -- readCreateProcess (shell "rm -rf devnet") ""
+      -- readCreateProcess (shell "rm -rf demo-logs") ""
       liftIO $ flip runLoggingT (print . renderWithSeverity id) $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
       threadDelay (seconds 3)
