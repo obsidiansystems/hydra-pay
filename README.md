@@ -103,7 +103,7 @@ This request can now be sent through the websocket, at which point we should rec
 { "tagged_payload" : { "tag" : "ServerHello", "version" : "0.1.0" }, "tagged_id" : 0 }
 ```
 
-Remeber that all communication the Client makes with the Server must be tagged. This forms the request response part of the API.
+Remember that all communication the Client makes with the Server must be tagged. This forms the request response part of the API.
 
 ### Subscriptions
 
