@@ -990,9 +990,6 @@ handleTaggedMessage conn state (Tagged tid msg) = do
   msg <- handleClientMessage conn state msg
   pure $ Tagged tid msg
 
-versionStr :: Version
-versionStr = "0.1.0"
-
 handleClientMessage :: WS.Connection -> State -> ClientMsg -> IO (ServerMsg)
 handleClientMessage conn state = \case
   Authenticate token -> do

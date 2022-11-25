@@ -10,6 +10,7 @@ library
                , obelisk-frontend
                , obelisk-route
                , jsaddle
+               , aeson-pretty
                , reflex-dom-core
                , obelisk-executable-config-lookup
                , obelisk-generated-static

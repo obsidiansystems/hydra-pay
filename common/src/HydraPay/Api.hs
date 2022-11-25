@@ -149,6 +149,10 @@ instance ToJSON ClientMsg
 instance FromJSON ClientMsg
 
 type Version = T.Text
+
+versionStr :: Version
+versionStr = "0.1.0"
+
 data ServerMsg
   = ServerHello Version
   | OperationSuccess
