@@ -9,6 +9,7 @@ import Data.Time (UTCTime)
 import Data.Text (Text)
 import Hydra.Types
 import Hydra.ClientInput
+import Hydra.Snapshot (Snapshot)
 
 -- Copied and adapted from hydra-poc:hydra-node/src/hydra/ServerOutput.hs
 -- Anything that took effort was replaced by Value

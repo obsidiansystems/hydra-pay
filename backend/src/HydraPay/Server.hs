@@ -150,6 +150,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Except
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 import System.IO.Temp (withTempFile)
+import Hydra.Snapshot as Snapshot
 
 {-
 Architecture!
@@ -651,7 +652,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     let lovelaceUtxos = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
     -- FIXME: fails on empty lovelaceUtxos
     (toAddrProxy, _) <- addOrGetKeyInfo state toAddr
-    signedTxJsonStr <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
+    (txid, signedTxJsonStr) <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
     let jsonTx :: Aeson.Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . LBS.pack $ signedTxJsonStr
     let txCborHexStr = fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
 
@@ -661,11 +662,15 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
-        TxValid {} -> do
-          endTime <- liftIO $ getCurrentTime
-          pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
+        SnapshotConfirmed { snapshot = Snapshot { Snapshot.confirmedTransactions = confirmeds } } -> do
+          let confirmedIds = mapMaybe (parseMaybe (withObject "tx" (.: "id"))) confirmeds
+          if txid `elem` confirmedIds
+            then do
+              endTime <- liftIO $ getCurrentTime
+              pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
+            else pure Nothing
         ServerOutput.TxInvalid utxo tx validationError ->
-          pure . Just $ (Left (HydraPay.Api.TxInvalid utxo tx validationError))
+          pure $ Left (HydraPay.Api.TxInvalid utxo tx validationError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
         _ -> pure Nothing
 
 removeHead :: (MonadIO m) => State -> HeadName -> m ()

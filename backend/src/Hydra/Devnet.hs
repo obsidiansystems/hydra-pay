@@ -314,7 +314,7 @@ buildSignedTx :: CardanoNodeInfo -> SigningKey -> SomeTx -> IO (FilePath, TxId)
 buildSignedTx nodeInfo signingKey tx = do
   draftTx <- buildDraftTx nodeInfo tx
   signedTx <- signTx nodeInfo signingKey draftTx
-  txid <- txIdFromSignedTx nodeInfo signedTx
+  txid <- txIdFromSignedTx signedTx
   pure (signedTx,txid)
 
 -- | Convenience for getting faucet Output for seeding
@@ -365,7 +365,7 @@ seedAddressFromFaucet :: CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bo
 seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount isFuel = do
   draftTx <- buildSeedTxForAddress cninf faucetvk addr amount isFuel
   signedTx <- signTx cninf faucetsk draftTx
-  txin <- txInput 0 <$> txIdFromSignedTx cninf signedTx
+  txin <- txInput 0 <$> txIdFromSignedTx signedTx
   void $ submitTx cninf signedTx
   pure txin
 
@@ -513,8 +513,8 @@ signTx cninf sk draftFile = do
   _ <- readCreateProcess cp ""
   pure outFile
 
-txIdFromSignedTx :: CardanoNodeInfo -> SignedTx -> IO TxId
-txIdFromSignedTx cninf filename =
+txIdFromSignedTx :: SignedTx -> IO TxId
+txIdFromSignedTx filename =
   T.strip . T.pack <$> readCreateProcess cp ""
   where
     cp =
@@ -525,12 +525,10 @@ txIdFromSignedTx cninf filename =
             filename
           ]
       )
-        { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
-        }
 
 submitTx :: CardanoNodeInfo -> SignedTx -> IO TxId
 submitTx cninf signedFile = do
-  txid <- txInput 0 <$> txIdFromSignedTx cninf signedFile
+  txid <- txInput 0 <$> txIdFromSignedTx signedFile
   _ <- readCreateProcess cp ""
   pure txid
   where
@@ -546,7 +544,8 @@ submitTx cninf signedFile = do
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
         }
 
-buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO String
+-- | Return (transaction id, signed tx json text).
+buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO (T.Text, String)
 buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
   let fullAmount = sum txInAmounts
   txBodyPath <- snd <$> getTempPath
@@ -567,7 +566,15 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
                         , txBodyPath
                         ]))
     ""
-  readCreateProcess
+  txid <- readCreateProcess
+    (proc cardanoCliPath
+      [ "transaction"
+      , "txid"
+      , "--tx-body-file"
+      , txBodyPath
+      ])
+    ""
+  (T.strip . T.pack $ txid,) <$> readCreateProcess
     (proc cardanoCliPath
       [ "transaction"
       , "sign"

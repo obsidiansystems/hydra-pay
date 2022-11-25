@@ -71,7 +71,6 @@ instance ToJSON Party
 instance FromJSON Party
 
 type UTxOType tx = Value
-type Snapshot tx = Value
 type MultiSignature x = Value
 type PostChainTx tx = Value 
 type PostTxError tx = Value
