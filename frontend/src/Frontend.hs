@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# OPTIONS_GHC -Wno-unused-local-binds #-}
 {-# LANGUAGE TypeApplications #-}
@@ -106,88 +107,6 @@ frontend = Frontend
   , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-y-scroll overflow-x-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $ do
       elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" $
         monitorView
-      {-
-      elClass "div" "flex-shrink-0 px-8 py-4 text-xl font-semibold" $
-        routeLink (FrontendRoute_Setup :/ ()) $ el "h1" $ text "Hydra Pay"
-      elClass "div" "w-full h-full mt-10 flex-grow px-8 overflow-hidden" $ do
-        postBuild <- getPostBuild
-
-        gotAddrs <- fmap switchDyn $ prerender (pure never) $ do
-          rec
-            jsBuild <- getPostBuild
-            result <- getAndDecode $ "/demo-addresses" <$ leftmost [jsBuild]
-                                                                   --, () <$ failedToLoad]
-            let
-              -- If we failed it is likely the server just hot reloaded in development
-              -- and we just try again immediately
-              failedToLoad = fmapMaybe (preview _Nothing) result
-              addrsRecv = fmapMaybe (preview _Just) result
-          pure addrsRecv
-
-        rec
-          addrs <- holdDyn (Nothing :: Maybe [Address]) gotAddrs
-          nextId <- foldDyn (+) (0 :: Int) $ 1 <$ newTx
-
-          let
-            insertNewTx = (current $ Map.insert <$> nextId) <@> newTx
-
-          latestPopupTxs <- foldDyn ($) mempty $ mergeWith (.) $ [ insertNewTx
-                                                                 , removeStaleTxs
-                                                                 ]
-          latestTxs <- foldDyn ($) mempty $ mergeWith (.) $ [ insertNewTx
-                                                            ]
-          let
-            totalTxDisplayTime = 4
-            -- We assume the first and second index to be Bob and Alice respectively
-            bobAddress = ffor addrs $ join . fmap (^? ix 0)
-            aliceAddress = ffor addrs $ join . fmap (^? ix 1)
-
-            newTxPopup tx = do
-              transitionIn <- getPostBuild >>= delay 0.1
-              transitionOut <- tickLossyFromPostBuildTime totalTxDisplayTime
-              removeThisPopup <- tickLossyFromPostBuildTime $ totalTxDisplayTime + 2
-              visible <- holdDyn False $ mergeWith (&&) [True <$ transitionIn, False <$ transitionOut]
-              let
-                mkClasses b =
-                  mconcat [ "transition pointer-events-none duration-1000 px-8 py-4 rounded-lg bg-white mb-4 drop-shadow-lg "
-                          , bool "opacity-0" "opacity-100" b
-                          ]
-              elDynClass "div" (mkClasses <$> visible) $ do
-                elClass "div" "text-xs text-gray-500 mb-2" $ text "New Transaction"
-
-                elClass "div" "flex flex-row justify-between items-center" $ do
-                  elClass "div" "flex flex-col mr-16" $ do
-                    elClass "div" "text-gray-600" $ do
-                      text "To "
-                      dynText $ demoTx_to <$> tx
-                    elClass "div" "text-xl" $ do
-                      dynText $ T.pack . printf "%.2f" . lovelaceToAda . demoTx_amount <$> tx
-                      text "ADA"
-
-                  elClass "div" "flex flex-row text-gray-400" $ do
-                    elClass "div" "flex flex-col" $ do
-                      elClass "div" "text-xs" $ text "Time"
-                      elClass "div" "" $ do
-                        dynText $ showAsMs . demoTx_time <$> tx
-                        text "ms"
-              pure $ () <$ removeThisPopup
-
-          -- When we get a server response, go to open a channel
-          newTx <- appView bobAddress aliceAddress latestTxs
-
-          removeStaleTxs <- elClass "div" "pointer-events-none absolute top-0 right-0 p-4 h-full overflow-hidden leading-none" $ elClass "div" "flex flex-col-reverse" $ do
-            eventList <- listWithKey latestPopupTxs $ \txid tx -> do
-              removalEv <- newTxPopup tx
-              pure $ Map.delete txid <$ removalEv
-
-            pure $ switchDyn $ mergeWith (.) . Map.elems <$> eventList
-        subRoute_ $ \case
-          FrontendRoute_Monitor -> pure ()
-          _ -> do
-            setRoute $ FrontendRoute_OpenChannel :/ () <$ gotAddrs
-            setRoute $ FrontendRoute_Setup :/ () <$ postBuild
-        setRoute $ FrontendRoute_PaymentChannel :/ () <$ newTx
-        pure ()-}
   }
 
 data DemoTx = DemoTx
@@ -204,6 +123,192 @@ header :: DomBuilder t m => T.Text -> m ()
 header name = do
   elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text name
   elClass "div" "my-2 w-full h-px bg-gray-200" blank
+
+-- TODO(skylar): Use Requester from reflex
+requester :: (Reflex t, EventWriter t [ClientMsg] m, MonadHold t m) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> Event t ClientMsg -> m (Event t (Tagged ServerMsg))
+requester lastTagId serverMsg clientMsg = do
+  waitingTag <- holdDyn Nothing $ current (Just <$> lastTagId) <@ clientMsg
+
+  let
+    isWhatWeAreWaitingFor (Just nid) msg@(Tagged nid' _) | nid == nid' = Just msg
+    isWhatWeAreWaitingFor _ _ = Nothing
+
+    properServerMsg = attachWithMaybe isWhatWeAreWaitingFor (current waitingTag) serverMsg
+
+  tellEvent $ pure <$> clientMsg
+  pure $ properServerMsg
+
+headCreation ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+headCreation lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Head Creation"
+
+    elClass "p" "" $ do
+      text "To create a Head you will give it a friendly name and list the addresses that will become the participants."
+      text " Creating the head starts the Hydra network."
+
+  elClass "div" "p-4 bg-white rounded flex flex-col" $ do
+    let
+    (domEvent Click -> tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-end" $ do
+      req <- elClass "div" "flex flex-row justify-between mb-4" $ do
+        elClass "div" "flex flex-col" $ do
+          elClass "div" "font-semibold flex flex-row" $ do
+            elClass "div" "mr-2" $ text "Payload"
+            elClass "div" "text-green-400" $ text "Object"
+
+          name <- elClass "div" "ml-4 flex flex-row" $ do
+            elClass "div" "mr-2" $ text "name"
+            elClass "div" "font-semibold text-orange-400" $ text "String"
+            elClass "div" "mx-4" $ text ":"
+            elClass "div" "flex flex-col" $ do
+              ie <- inputElement $ def
+                & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Enter a name for your head")
+                & inputElementConfig_initialValue .~ "test"
+              pure $ _inputElement_value ie
+
+          participants <- elClass "div" "ml-4 flex flex-col" $ do
+            elClass "div" "flex flex-row" $ do
+              elClass "div" "mr-2" $ text "participants"
+              elClass "div" "font-semibold text-orange-400" $ text "[String]"
+              elClass "div" "mx-4" $ text ":"
+            elClass "div" "flex flex-col" $ do
+              ta <- textAreaElement $ def
+                & initialAttributes .~ ("class" =: "border px-2" <> "type" =: "number" <> "placeholder" =: "Enter addresses separated by a newline" <> "cols" =: "65")
+              pure $ fmap T.strip . T.lines <$> _textAreaElement_value ta
+          pure $ fmap CreateHead $ HeadCreate <$> name <*> participants
+
+      (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
+      pure (tryEl, req)
+
+    elClass "div" "" $ do
+      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+        rec
+          (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
+            elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
+              elClass "span" "text-sm material-symbols-rounded" $ dynText $ ffor showTagged $ \case
+                True -> "done"
+                False -> ""
+            elClass "div" "" $ text "Show Tagged"
+          showTagged <- toggle False $ domEvent Click taggedToggle
+
+        let
+          reqJson = ffor3 showTagged lastTagId request $ \tagged nid req ->
+            case tagged of
+              True -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ Tagged nid req
+              False -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ req
+
+        dynText reqJson
+
+    properServerMsg <- requester lastTagId serverMsg $ current request <@ tryButtonClick
+    response <- holdDyn Nothing $ Just <$> properServerMsg
+
+    dyn_ $ ffor response $ \case
+      Just (Tagged _ msg@(AuthResult False)) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $ do
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+          elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
+      Just (Tagged _ msg) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $ do
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+      Nothing -> blank
+
+    expectedResponse $ OperationSuccess
+
+theDevnet ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  )
+  => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+theDevnet lastTagId serverMsg = do
+  elClass "div" "p-4" $ do
+    elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "The Devnet"
+    elClass "div" "my-2 w-full h-px bg-gray-200" blank
+
+    elClass "p" "" $ do
+      text "When you run your Hydra Pay instance as a Devnet, you get access to this Live Documentation as well as special Devnet Requests that allow you to test features."
+      text " After you have authenticated, refer back to these devnet requests to help you Create and Test Heads."
+      el "br" blank
+      el "br" blank
+      text " For example, we are going to be creating and managing heads, it would be nice to have some addresses with funds to use, so we may request that from Hydra Pay."
+
+  elClass "div" "p-4 bg-white rounded flex flex-col" $ do
+    (domEvent Click -> tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-end" $ do
+      req <- elClass "div" "flex flex-row justify-between mb-4" $ do
+        elClass "div" "flex flex-col" $ do
+          elClass "div" "font-semibold flex flex-row" $ do
+            elClass "div" "mr-2" $ text "Payload"
+            elClass "div" "text-green-400" $ text "Object"
+
+          elClass "div" "ml-4 flex flex-row" $ do
+            elClass "div" "mr-2" $ text "contents"
+            elClass "div" "font-semibold text-orange-400" $ text "Number"
+            elClass "div" "mx-4" $ text ":"
+            elClass "div" "flex flex-col" $ do
+              ie <- inputElement $ def
+                & initialAttributes .~ ("class" =: "border px-2" <> "type" =: "number")
+                & inputElementConfig_initialValue .~ "1"
+              pure $ GetDevnetAddresses . maybe 1 id . readMaybe . T.unpack <$> _inputElement_value ie
+
+      (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
+      pure (tryEl, req)
+
+    elClass "div" "" $ do
+      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+        rec
+          (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
+            elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
+              elClass "span" "text-sm material-symbols-rounded" $ dynText $ ffor showTagged $ \case
+                True -> "done"
+                False -> ""
+            elClass "div" "" $ text "Show Tagged"
+          showTagged <- toggle False $ domEvent Click taggedToggle
+
+        let
+          reqJson = ffor3 showTagged lastTagId request $ \tagged nid req ->
+            case tagged of
+              True -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ Tagged nid req
+              False -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ req
+
+        dynText reqJson
+
+    properServerMsg <- requester lastTagId serverMsg $ current request <@ tryButtonClick
+    response <- holdDyn Nothing $ Just <$> properServerMsg
+
+    dyn_ $ ffor response $ \case
+      Just (Tagged _ msg@(AuthResult False)) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $ do
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+          elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
+      Just (Tagged _ msg) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $ do
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+      Nothing -> blank
+
+    responseVisualizer "Example Response" $ DevnetAddresses [ "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a"
+                                                            , "addr_test1vr6mp9zqpxk5nw7p3xm6kvnt2w6mgl9lhmzuvuez5v59hqgakn855"
+                                                            ]
+
 
 sayHello ::
   ( EventWriter t [ClientMsg] m
@@ -222,64 +327,74 @@ sayHello lastTagId serverMsg = do
       text " Lets say hello to the Hydra Pay instance, hit Try Request to send a ClientHello payload to Hydra Pay."
 
   let
-    authRequest = pure ClientHello
+    request = pure ClientHello
 
-  elClass "div" "p-4 bg-white rounded flex flex-col" $ do
+  elClass "div" "relative" $ do
+    --elClass "div" "rounded-lg absolute z-10 w-full h-full backdrop-blur pointer-events-auto flex justify-center items-center" $ do
+    --  text "Authenticate with Hydra Pay to use these"
+    elClass "div" "p-4 bg-white rounded flex flex-col" $ do
 
-    (tryButton, _) <- elClass "div" "flex flex-row justify-between items-end" $ do
-      elClass "div" "flex flex-row justify-between mb-4" $ do
-        elClass "div" "font-semibold flex flex-row" $ do
-          elClass "div" "mr-2" $ text "Payload"
-          elClass "div" "text-green-400" $ text "<Object>"
+      (domEvent Click -> tryButtonClick, _) <- elClass "div" "flex flex-row justify-between items-end" $ do
+        elClass "div" "flex flex-row justify-between mb-4" $ do
+          elClass "div" "font-semibold flex flex-row" $ do
+            elClass "div" "mr-2" $ text "Payload"
+            elClass "div" "text-green-400" $ text "Object"
 
-      elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
+        elClass' "div" "mb-4" $
+          elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
 
-    elClass "div" "" $ do
-      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
-        rec
-          (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
-            elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
-              elClass "span" "text-sm material-symbols-rounded" $ dynText $ ffor showTagged $ \case
-                True -> "done"
-                False -> ""
-            elClass "div" "" $ text "Show Tagged"
-          showTagged <- toggle False $ domEvent Click taggedToggle
+      elClass "div" "" $ do
+        elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+          rec
+            (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
+              elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
+                elClass "span" "text-sm material-symbols-rounded" $ dynText $ ffor showTagged $ \case
+                  True -> "done"
+                  False -> ""
+              elClass "div" "" $ text "Show Tagged"
+            showTagged <- toggle False $ domEvent Click taggedToggle
 
-        let
-          reqJson = ffor3 showTagged lastTagId authRequest $ \tagged nid req ->
-            case tagged of
-              True -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ Tagged nid req
-              False -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ req
+          let
+            reqJson = ffor3 showTagged lastTagId request $ \tagged nid req ->
+              case tagged of
+                True -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ Tagged nid req
+                False -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ req
 
-        dynText reqJson
+          dynText reqJson
 
-    response <- holdDyn Nothing $ Just <$> serverMsg
+      properServerMsg <- requester lastTagId serverMsg $ current request <@ tryButtonClick
+      response <- holdDyn Nothing $ Just <$> properServerMsg
 
-    dyn_ $ ffor response $ \case
-      Just (Tagged _ msg@(AuthResult False)) -> do
-        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
-        elClass "div" "" $ do
-          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
-            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+      dyn_ $ ffor response $ \case
+        Just (Tagged _ msg@(AuthResult False)) -> do
+          elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+          elClass "div" "" $ do
+            elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+              text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-          elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
-      Just (Tagged _ msg) -> do
-        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
-        elClass "div" "" $ do
-          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
-            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+            elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
+        Just (Tagged _ msg) -> do
+          elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+          elClass "div" "" $ do
+            elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+              text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-      Nothing -> blank
+        Nothing -> blank
 
-    -- Divider
-    elClass "div" "mt-6 w-full h-px bg-gray-200" blank
+      expectedResponse $ ServerHello versionStr
 
-    elClass "div" "font-semibold mt-4 mb-2" $ text "Expected Response"
-    elClass "div" "" $ do
-      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
-        text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ AuthResult True
+responseVisualizer :: DomBuilder t m => T.Text -> ServerMsg -> m ()
+responseVisualizer name msg = do
+  -- Divider
+  elClass "div" "mt-6 w-full h-px bg-gray-200" blank
 
-    tellEvent $ fmap pure $ current authRequest <@ domEvent Click tryButton
+  elClass "div" "font-semibold mt-4 mb-2" $ text name
+  elClass "div" "" $ do
+    elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
+      text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+expectedResponse :: DomBuilder t m => ServerMsg -> m ()
+expectedResponse = responseVisualizer "Expected Response"
 
 authentication ::
   ( EventWriter t [ClientMsg] m
@@ -302,20 +417,24 @@ authentication lastTagId serverMsg = do
       elClass "div" "flex flex-row justify-between" $ do
         elClass "div" "font-semibold flex flex-row" $ do
           elClass "div" "mr-2" $ text "Payload"
-          elClass "div" "text-green-400" $ text "<Object>"
+          elClass "div" "text-green-400" $ text "Object"
 
       elClass' "div" "" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
 
+    let
+      tryButtonClick = domEvent Click tryButton
 
     authRequest <- elClass "div" "ml-4 mb-4 flex flex-row" $ do
       elClass "div" "mr-2" $ text "contents"
-      elClass "div" "font-semibold text-orange-400" $ text "<String>"
+      elClass "div" "font-semibold text-orange-400" $ text "String"
       elClass "div" "mx-4" $ text ":"
       elClass "div" "flex flex-col" $ do
         ie <- inputElement $ def
-          & initialAttributes .~ ("class" =: "border px-2")
-          & inputElementConfig_initialValue .~ "Enter your api key"
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Enter your api key")
         pure $ Authenticate <$> _inputElement_value ie
+
+    properServerMsg <- requester lastTagId serverMsg $ current authRequest <@ tryButtonClick
+    response <- holdDyn Nothing $ Just <$> properServerMsg
 
     elClass "div" "" $ do
       elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
@@ -336,8 +455,6 @@ authentication lastTagId serverMsg = do
 
         dynText reqJson
 
-    response <- holdDyn Nothing $ Just <$> serverMsg
-
     dyn_ $ ffor response $ \case
       Just (Tagged _ msg@(AuthResult False)) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
@@ -354,15 +471,12 @@ authentication lastTagId serverMsg = do
 
       Nothing -> blank
 
-    -- Divider
-    elClass "div" "mt-6 w-full h-px bg-gray-200" blank
+    expectedResponse $ AuthResult True
 
-    elClass "div" "font-semibold mt-4 mb-2" $ text "Expected Response"
-    elClass "div" "" $ do
-      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
-        text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ AuthResult True
+  elClass "p" "p-4"$ do
+    elClass "span" "text-gray-600 font-semibold" $ do
+      text "Ensure you have authenticated before trying the requests below"
 
-    tellEvent $ fmap pure $ current authRequest <@ domEvent Click tryButton
 
 monitorView ::
   ( PostBuild t m
@@ -425,6 +539,10 @@ monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto round
             text "The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api."
             text "Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
             text "In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
+            el "br" blank
+            el "br" blank
+            text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
+            text " this makes it easy to ensure you are sending the right information to Hydra Pay."
 
           -- Header
           elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Tagging"
@@ -434,13 +552,13 @@ monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto round
             text "All communication the Client does with the Server through the WebSocket must be Tagged."
             text " To Tag a message, we need the unique request-id, if we were sending this as the first message to our Server we may use 0 as the request-id."
             text " Remember that all communication the Client makes with the Server must be tagged. This forms the request response part of the API."
-            el "br" blank
-            el "br" blank
-            text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
-            text " this makes it easy to ensure you are sending the right information to Hydra Pay."
 
         authentication lastTagId serverMsg
         sayHello lastTagId serverMsg
+
+        theDevnet lastTagId serverMsg
+
+        headCreation lastTagId serverMsg
 
 
     elClass "div" "" blank

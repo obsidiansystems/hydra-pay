@@ -286,8 +286,8 @@ getCardanoNodeState = do
   cfg <- liftIO readNodeConfig
   case cfg of
     CfgDevnet -> liftIO $ do
-      -- readCreateProcess (shell "rm -rf devnet") ""
-      -- readCreateProcess (shell "rm -rf demo-logs") ""
+      readCreateProcess (shell "rm -rf devnet") ""
+      readCreateProcess (shell "rm -rf demo-logs") ""
       liftIO $ flip runLoggingT (print . renderWithSeverity id) $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
       threadDelay (seconds 3)
@@ -301,6 +301,7 @@ getCardanoNodeState = do
                 { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
                 }) ""
       hydraSharedInfo <- withLogging getDevnetHydraSharedInfo
+      withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
       pure $ CardanoNodeState (Just handles) hydraSharedInfo CfgDevnet
 
     CfgPreview pcfg -> liftIO $

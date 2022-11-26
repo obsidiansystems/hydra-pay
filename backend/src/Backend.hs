@@ -46,6 +46,7 @@ import Data.Text.Prettyprint.Doc (Doc)
 setupDemo :: State -> IO [(KeyPair, Address)]
 setupDemo state = do
   cns <- readMVar (_state_cardanoNodeState state)
+  hydraSharedInfo <- getHydraSharedInfo state
   case cardanoNodeState_nodeType cns of
     CfgDevnet -> do
       prefix <- liftIO getTempPath'
@@ -53,10 +54,11 @@ setupDemo state = do
       one <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey oneKs
       twoKs <- withLogging $ generateCardanoKeys $ prefix <> "two"
       two <- liftIO $ getCardanoAddress cardanoDevnetNodeInfo $ _verificationKey twoKs
-      withLogging $ do
-        seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
-        seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
-      -- seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
+
+      withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
+      --withLogging $ do
+      --  seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys one (ada 10000) False
+      --  seedAddressFromFaucetAndWait cardanoDevnetNodeInfo devnetFaucetKeys two (ada 10000) False
       pure [(oneKs, one), (twoKs, two)]
 
     CfgPreview pcfg -> do
