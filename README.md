@@ -23,7 +23,32 @@ Hydra Pay is currently under construction, detailed steps about running and depl
 
 We plan to support docker, and nix out of the box for those who want to deploy and run their own Hydra Pay service, no knowledge of Obelisk, Haskell or any other underlying technology will be necessary.
 
-The client library will be javascript and typescript and will make interacting with Hydra Heads through the Hydra Pay service a breeze.
+To deploy hydra-pay locally you can build and deploy the app as described below.
+
+Build Hydra Pay:
+
+```bash
+nix-build -A exe --no-out-link
+```
+
+Copy the result to a new directory, add configuration, and run!
+
+```bash
+mkdir test-app
+ln -s $(nix-build -A exe --no-out-link)/* test-app/
+cp -r config test-app
+(cd test-app && ./backend)
+```
+
+Visit the live documentation and confirm your key and requests presented work as expected.
+
+### API Key
+
+You must provide an API Key in config/backend/api-key a default key of KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM= is provided. DO NOT USE THIS KEY IN PRODUCTION.
+
+### Live Documentation
+
+Once you have hydra pay running visit [localhost:8000](http://localhost:8000) to see the Live Documentation which gives you a realtime way to test and learn about the Hydra Pay API and Best Practices.
 
 ## 👩🏿‍💻 Hacking on Hydra Pay
 Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansystems/obelisk#installing-obelisk) so to contribute you must have Obelisk installed.
