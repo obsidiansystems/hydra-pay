@@ -71,12 +71,9 @@ library
     HydraPay
     HydraPay.Server
     HydraPay.Network
-    HydraPay.Client
   other-modules:
     Paths
     Hydra.Devnet
-    HydraPay.WebSocketDemo
-    HydraPay.SubmitTxDirectTest
     CardanoNodeInfo
     
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

@@ -52,6 +52,7 @@ import Control.Exception
 import qualified Network.WebSockets as WS
 
 import Common.Helpers
+import HydraPay.Api (versionStr)
 
 import Control.Concurrent
 import Data.Time (getCurrentTime, diffUTCTime)

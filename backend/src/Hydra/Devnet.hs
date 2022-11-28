@@ -26,7 +26,6 @@ module Hydra.Devnet
   , seedTestAddresses
   , getTestAddressKeys
   , devnetMagic
-  , minTxLovelace
   , addressesPath
   , getTempPath
   , getTempPath'
@@ -273,9 +272,6 @@ txInExists cninf txin = do
         }
 txInput :: Int -> TxId -> TxIn
 txInput index txid = txid <> "#" <> (T.pack . show) index
-
-minTxLovelace :: Int
-minTxLovelace = 857690
 
 queryAddressUTXOs :: MonadIO m => CardanoNodeInfo -> Address -> m WholeUTXO
 queryAddressUTXOs cninf addr = liftIO $ do

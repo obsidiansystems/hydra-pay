@@ -34,7 +34,6 @@ library
   exposed-modules:
     Common.Api
     Common.Route
-    Common.DemoApi
     Common.Helpers
 
     Hydra.Types
