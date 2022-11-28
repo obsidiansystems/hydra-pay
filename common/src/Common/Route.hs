@@ -29,10 +29,6 @@ data BackendRoute :: * -> * where
   BackendRoute_Missing :: BackendRoute ()
   BackendRoute_Api :: BackendRoute ()
   BackendRoute_HydraPay :: BackendRoute (R HydraPayRoute)
-
-  BackendRoute_DemoAddresses :: BackendRoute ()
-  BackendRoute_DemoTestWithdrawal :: BackendRoute ()
-  BackendRoute_DemoApi :: BackendRoute ()
   -- You can define any routes that will be handled specially by the backend here.
   -- i.e. These do not serve the frontend, but do something different, such as serving static files.
 
@@ -50,14 +46,6 @@ data FrontendRoute :: * -> * where
   -- This is for managing Hydra Pay
   FrontendRoute_Monitor :: FrontendRoute ()
 
-  -- These are for the demo
-  FrontendRoute_Setup :: FrontendRoute ()
-  FrontendRoute_OpenChannel :: FrontendRoute ()
-  FrontendRoute_PaymentChannel :: FrontendRoute ()
-  FrontendRoute_OpeningChannel :: FrontendRoute ()
-  FrontendRoute_SendFunds :: FrontendRoute ()
-  FrontendRoute_ClosingChannel :: FrontendRoute ()
-
   -- This type is used to define frontend routes, i.e. ones for which the backend will serve the frontend.
 
 fullRouteEncoder
@@ -67,19 +55,10 @@ fullRouteEncoder = mkFullRouteEncoder
   (\case
       BackendRoute_Missing -> PathSegment "missing" $ unitEncoder mempty
       BackendRoute_Api -> PathSegment "api" $ unitEncoder mempty
-      BackendRoute_DemoAddresses -> PathSegment "demo-addresses" $ unitEncoder mempty
       BackendRoute_HydraPay -> PathSegment "hydra" hydraPayRouteEncoder
-      BackendRoute_DemoTestWithdrawal -> PathSegment "demo-test" $ unitEncoder mempty
-      BackendRoute_DemoApi -> PathSegment "demo-api" $ unitEncoder mempty
   )
   (\case
       FrontendRoute_Monitor -> PathEnd $ unitEncoder mempty
-      FrontendRoute_Setup -> PathSegment "setup" $ unitEncoder mempty
-      FrontendRoute_OpenChannel -> PathSegment "open" $ unitEncoder mempty
-      FrontendRoute_OpeningChannel -> PathSegment "opening" $ unitEncoder mempty
-      FrontendRoute_PaymentChannel -> PathSegment "channel" $ unitEncoder mempty
-      FrontendRoute_SendFunds -> PathSegment "send" $ unitEncoder mempty
-      FrontendRoute_ClosingChannel -> PathSegment "closing" $ unitEncoder mempty
   )
 
 concat <$> mapM deriveRouteComponent
