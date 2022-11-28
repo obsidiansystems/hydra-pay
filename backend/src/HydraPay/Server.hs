@@ -13,15 +13,12 @@ module HydraPay.Server where
 
 import Control.Exception
 import Snap.Core
-import Data.CaseInsensitive
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
 
 import Data.Int
 
 import Prelude hiding ((.))
-import Control.Lens hiding ((.=))
-import Control.Lens.TH
 import Control.Category ((.))
 import System.Process
 import GHC.Generics
@@ -30,7 +27,6 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Bool
-import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Set as Set
 import Data.Set (Set)
@@ -41,15 +37,11 @@ import Data.Maybe
 import Data.String.Interpolate ( i, iii )
 import System.IO (IOMode(WriteMode), openFile, Handle)
 import Network.WebSockets.Client
-import qualified Network.WebSockets.Connection as WS
 
 import Control.Monad.Reader
 import Control.Monad.Fail
-import Control.Monad.Trans.Maybe
 import Control.Applicative
-import Control.Exception
 
-import qualified Network.WebSockets as WS
 
 import Common.Helpers
 import HydraPay.Api (versionStr)
@@ -72,14 +64,10 @@ import HydraPay.Api
 
 import Data.Traversable
 
-import Control.Monad
 
 import Hydra.Types
 import Hydra.Devnet
 import Hydra.ClientInput
-
-import HydraPay.Api
-
 import qualified Hydra.Types as HT
 import CardanoNodeInfo
 import Hydra.ServerOutput as ServerOutput
@@ -88,67 +76,10 @@ import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
-import Control.Monad.IO.Class
 import Control.Monad.Except
-
 import Text.Read (readMaybe)
 import Prelude hiding ((.))
-import Control.Lens hiding ((.=))
-import Control.Lens.TH
-import Control.Category ((.))
-import System.Process
-import GHC.Generics
-import qualified Data.ByteString.Lazy.Char8 as LBS
-import qualified Data.Text as T
-import Data.Bool
-import Data.List (intercalate)
-import Data.Map (Map)
-import qualified Data.Set as Set
-import Data.Set (Set)
-import qualified Data.Map as Map
-import Data.Aeson ((.:))
-import Data.Aeson as Aeson
-import Data.Maybe
-import Data.String.Interpolate ( i, iii )
-import System.IO (IOMode(WriteMode), openFile, hClose, Handle)
-import Network.WebSockets.Client
-import qualified Network.WebSockets.Connection as WS
-
-import Common.Helpers
-
-import Control.Concurrent
-import Data.Time (getCurrentTime, diffUTCTime)
-import Data.Time.Clock.Compat (nominalDiffTimeToSeconds)
-import Data.Fixed
-
-import Data.Foldable
-
-import Data.Text.Prettyprint.Doc
-import Control.Monad.Log
-import System.Directory
-
-import HydraPay.Api
-
-import Data.Traversable
-
-import Control.Monad
-
-import Hydra.Types
-import Hydra.Devnet
-import Hydra.ClientInput
-
-import HydraPay.Api
-
-import qualified Hydra.Types as HT
-import CardanoNodeInfo
-import Hydra.ServerOutput as ServerOutput
-import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
-import Control.Monad.STM (atomically)
-import Control.Concurrent.STM.TChan (readTChan, writeTChan)
-import Control.Monad.Loops (untilJust, iterateUntilM)
-import Data.Aeson.Types (parseMaybe)
-import Control.Monad.IO.Class
-import Control.Monad.Except
+import System.IO (hClose)
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 import System.IO.Temp (withTempFile)
 import Hydra.Snapshot as Snapshot
