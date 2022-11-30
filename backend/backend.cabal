@@ -71,6 +71,7 @@ library
     HydraPay
     HydraPay.Server
     HydraPay.Network
+    HydraPay.Logging
   other-modules:
     Paths
     Hydra.Devnet

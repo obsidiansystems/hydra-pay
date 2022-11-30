@@ -45,6 +45,7 @@ import Control.Applicative
 
 import Common.Helpers
 import HydraPay.Api (versionStr)
+import HydraPay.Logging
 
 import Control.Concurrent
 import Data.Time (getCurrentTime, diffUTCTime)
@@ -111,10 +112,6 @@ getKeyPath = do
   pure path
   where
     path = "keys"
-
-withLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
-withLogging = flip runLoggingT (print . renderWithSeverity id)
-
 
 getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
 getDevnetHydraSharedInfo = do
