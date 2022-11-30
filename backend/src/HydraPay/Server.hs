@@ -547,7 +547,8 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   statusBTChan <- liftIO newBroadcastTChanIO
   let hydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
   liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name hydraHead
-  _ <- startNetwork state hydraHead
+  network <- startNetwork state hydraHead
+  liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
   pure hydraHead
 
 data HydraTxError =
