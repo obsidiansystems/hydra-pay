@@ -12,7 +12,7 @@ module HydraPay.Server where
 
 
 import Control.Exception
-import Snap.Core
+import Snap.Core hiding (path)
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
 
@@ -214,13 +214,13 @@ getHydraSharedInfo = liftIO .
 stateCardanoNodeInfo :: MonadIO m => State -> m CardanoNodeInfo
 stateCardanoNodeInfo = fmap _hydraCardanoNodeInfo . getHydraSharedInfo
 
-getCardanoNodeState :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m CardanoNodeState
+getCardanoNodeState :: (MonadIO m) => m CardanoNodeState
 getCardanoNodeState = do
   cfg <- liftIO readNodeConfig
   case cfg of
     CfgDevnet -> liftIO $ do
-      readCreateProcess (shell "rm -rf devnet") ""
-      readCreateProcess (shell "rm -rf demo-logs") ""
+      _ <- readCreateProcess (shell "rm -rf devnet") ""
+      _ <- readCreateProcess (shell "rm -rf demo-logs") ""
       liftIO $ flip runLoggingT (print . renderWithSeverity id) $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
       threadDelay (seconds 3)
@@ -270,41 +270,41 @@ websocketApiHandler state = do
   runWebSocketsSnap $ \pendingConn -> do
     authVar <- newMVar False
     conn <- WS.acceptRequest pendingConn
-    WS.forkPingThread conn 30
-    WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
-    forever $ do
-      mClientMsg <- Aeson.decode <$> WS.receiveData conn
-      isAuthenticated <- readMVar authVar
-      case (isAuthenticated, mClientMsg) of
-        -- Handle authentication
-        (False, Just (Tagged t (Authenticate token))) -> do
-          let apiKey = _state_apiKey state
-              sentKey = T.encodeUtf8 token
+    WS.withPingThread conn 30 (pure ()) $ do
+      WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
+      forever $ do
+        mClientMsg <- Aeson.decode <$> WS.receiveData conn
+        isAuthenticated <- readMVar authVar
+        case (isAuthenticated, mClientMsg) of
+          -- Handle authentication
+          (False, Just (Tagged t (Authenticate token))) -> do
+            let apiKey = _state_apiKey state
+                sentKey = T.encodeUtf8 token
 
-              authResult = apiKey == sentKey
+                authResult = apiKey == sentKey
 
-          modifyMVar_ authVar (pure . const authResult)
-          WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
+            modifyMVar_ authVar (pure . const authResult)
+            WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
 
-        -- Turn away requests that aren't authenticated
-        (False, Just (Tagged t clientMsg)) -> do
-          WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
+          -- Turn away requests that aren't authenticated
+          (False, Just (Tagged t _)) -> do
+            WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
 
-        -- When authenticated just process as normal
-        (True, Just clientMsg) -> do
-          msg <- handleTaggedMessage conn state clientMsg
-          WS.sendTextData conn . Aeson.encode $ msg
+          -- When authenticated just process as normal
+          (True, Just clientMsg) -> do
+            msg <- handleTaggedMessage conn state clientMsg
+            WS.sendTextData conn . Aeson.encode $ msg
 
-        (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+          (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
 
 seedDemoAddressPreview :: PreviewNodeConfig -> Lovelace -> KeyPair -> IO TxIn
-seedDemoAddressPreview cfg amount kp = flip runLoggingT (print . renderWithSeverity id) $ do
+seedDemoAddressPreview cfg lovelaceAmount kp = flip runLoggingT (print . renderWithSeverity id) $ do
     addr <- liftIO $ getCardanoAddress (_previewNodeInfo cfg) (_verificationKey kp)
-    seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr amount False
+    seedAddressFromFaucetAndWait (_previewNodeInfo cfg) (_previewFaucet $ cfg) addr lovelaceAmount False
 
 seedDemoAddressesPreview :: PreviewNodeConfig -> Lovelace -> IO ()
-seedDemoAddressesPreview cfg amount =
-  forM_ (_previewParticipants cfg) $ seedDemoAddressPreview cfg amount
+seedDemoAddressesPreview cfg lovelaceAmount =
+  forM_ (_previewParticipants cfg) $ seedDemoAddressPreview cfg lovelaceAmount
 
 deseedDemoAddressesPreview :: PreviewNodeConfig -> IO ()
 deseedDemoAddressesPreview cfg =
@@ -357,23 +357,20 @@ getProxyFuel :: (MonadIO m) => State -> Address -> m Lovelace
 getProxyFuel state addr = do
   (proxyAddr, _) <- addOrGetKeyInfo state addr
   hydraInfo <- getHydraSharedInfo state
-  utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) addr
+  utxos <- queryAddressUTXOs (_hydraCardanoNodeInfo hydraInfo) proxyAddr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
 buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
-buildAddTx txType state fromAddr amount = do
+buildAddTx tType state fromAddr lovelaceAmount = do
   cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
   utxos <- queryAddressUTXOs cardanoNodeInfo fromAddr
   let
-    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    txInLovelaceAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
 
-  let
-    fullAmount = toInteger $ sum txInAmounts
-    txInCount = toInteger $ Map.size txInAmounts
   txBodyPath <- liftIO $ snd <$> getTempPath
   _ <- liftIO $ readCreateProcess (proc cardanoCliPath
                        (filter (/= "") $ [ "transaction"
@@ -381,12 +378,12 @@ buildAddTx txType state fromAddr amount = do
                         , "--babbage-era"
                         , "--cardano-mode"
                         ]
-                        <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
+                        <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInLovelaceAmounts)
                         <>
                         [ "--tx-out"
-                        , [i|#{toAddr}+#{amount}|]
+                        , [i|#{toAddr}+#{lovelaceAmount}|]
                         ]
-                        <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] (isFuelType txType)
+                        <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] (isFuelType tType)
                         <>
                         [ "--change-address"
                         , T.unpack fromAddr
@@ -468,7 +465,6 @@ withdraw state (WithdrawRequest addr maybeAmount) = do
   let
     notFuel = filterOutFuel utxos
     txInAmounts = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
-    total = sum txInAmounts
   let signingKey = _signingKey $ _cardanoKeys keyInfo
   result <- liftIO $ transferAmount nodeInfo signingKey txInAmounts addr True maybeAmount
   pure $ maybe (Left InsufficientFunds) Right result
@@ -507,16 +503,16 @@ sendToHeadAndWaitFor ci fso state headName = do
       pure $ statusResult
 
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
-commitToHead state (HeadCommit name addr amount) = do
+commitToHead state (HeadCommit name addr lovelaceAmount) = do
   withNode state name addr $ \node proxyAddr -> do
 
     let
-      rightAmount (TxInInfo _ _ val) =
-        Map.lookup "lovelace" val == Just (fromIntegral amount)
+      rightLovelaceAmount (TxInInfo _ _ val) =
+        Map.lookup "lovelace" val == Just (fromIntegral lovelaceAmount)
 
     cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
-    -- Get the first UTXO that has the correct amount as we MUST commit 1 or no UTXOs
-    proxyFunds <- Map.take 1 . Map.filter rightAmount . filterOutFuel <$> queryAddressUTXOs cardanoNodeInfo proxyAddr
+    -- Get the first UTXO that has the correct lovelaceAmount as we MUST commit 1 or no UTXOs
+    proxyFunds <- Map.take 1 . Map.filter rightLovelaceAmount . filterOutFuel <$> queryAddressUTXOs cardanoNodeInfo proxyAddr
 
     case Map.null proxyFunds of
       True -> pure $ Left NoValidUTXOToCommit
@@ -526,10 +522,10 @@ commitToHead state (HeadCommit name addr amount) = do
           CommandFailed {} -> Just $ Left NodeCommandFailed
           _ -> Nothing)
         where
-          sendToNodeAndListen node ci fso = do
+          sendToNodeAndListen n ci fso = do
             let
-              sendMsg = _node_send_msg node
-              getChan = _node_get_listen_chan node
+              sendMsg = _node_send_msg n
+              getChan = _node_get_listen_chan n
 
             liftIO $ do
               channel <- getChan
@@ -546,15 +542,13 @@ commitToHead state (HeadCommit name addr amount) = do
 createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
 createHead state (HeadCreate name participants) = runExceptT $ do
   when (null participants) $ throwError NotEnoughParticipants
-  -- FIXME(parenthetical): I think there are concurrency issues here?
-  -- What if createHead is called twice quickly?
   headExists <- isJust <$> lookupHead state name
   when headExists $ throwError $ HeadExists name
   statusBTChan <- liftIO newBroadcastTChanIO
-  let head = Head name (Set.fromList participants) Status_Pending statusBTChan
-  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name head
-  startNetwork state head
-  pure head
+  let hydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
+  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name hydraHead
+  _ <- startNetwork state hydraHead
+  pure hydraHead
 
 data HydraTxError =
   HydraTxNotSeen
@@ -576,7 +570,7 @@ getNodeUtxos node proxyAddr = do
 
 
 submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError Pico)
-submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
+submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
   withNode state name addr $ \node proxyAddr -> do
     c <- liftIO $ _node_get_listen_chan node
     senderUtxos :: Map TxIn TxInInfo <- getNodeUtxos node proxyAddr
@@ -584,7 +578,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
     let lovelaceUtxos = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
     -- FIXME: fails on empty lovelaceUtxos
     (toAddrProxy, _) <- addOrGetKeyInfo state toAddr
-    (txid, signedTxJsonStr) <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos amount
+    (txid, signedTxJsonStr) <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos lovelaceAmount
     let jsonTx :: Aeson.Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . LBS.pack $ signedTxJsonStr
     let txCborHexStr = fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
 
@@ -601,8 +595,8 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr amount) = do
               endTime <- liftIO $ getCurrentTime
               pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
             else pure Nothing
-        ServerOutput.TxInvalid utxo tx validationError ->
-          pure $ Left (HydraPay.Api.TxInvalid utxo tx validationError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
+        ServerOutput.TxInvalid theUtxo tx valError ->
+          pure $ Left (HydraPay.Api.TxInvalid theUtxo tx valError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
         _ -> pure Nothing
 
 removeHead :: (MonadIO m) => State -> HeadName -> m ()
@@ -639,17 +633,15 @@ addOrGetKeyInfo state addr = do
                         $ _verificationKey . _cardanoKeys $ keyInfo
         let info = (proxyAddress, keyInfo)
         pure $ (Map.insert addr info old, info)
-  where
-    path = _state_keyPath state
 
 getHeadStatus :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 getHeadStatus state name = liftIO $ do
   mHead <- lookupHead state name
   case mHead of
     Nothing -> pure $ Left HeadDoesn'tExist
-    Just (Head name _ status _) -> do
-      running <- isJust <$> getNetwork state name
-      pure $ Right $ HeadStatus name running status
+    Just (Head hname _ status _) -> do
+      running <- isJust <$> getNetwork state hname
+      pure $ Right $ HeadStatus hname running status
 
 
 -- | Wait for a head to change to or past a state. Returns 'Nothing'
@@ -658,7 +650,6 @@ waitForHeadStatus :: (MonadIO m) => State -> HeadName -> Status -> m (Maybe Stat
 waitForHeadStatus state name status = runMaybeT $ do
   hd <- MaybeT $ lookupHead state name
   c <- liftIO . atomically $ dupTChan $ _head_status_bchan hd
-  hd <- MaybeT $ lookupHead state name
   if _head_status hd >= status
     then pure $ _head_status hd
     else untilJust $ do
@@ -680,29 +671,29 @@ startNetwork state (Head name participants _ statusBTChan) = do
       let numNodes = length nodes
       readyCounterChan <- liftIO $ newChan
       network <- fmap Network . forM nodes $ \(processHndl, nodeInfo, ports) -> do
-        let port =  _apiPort $ nodeInfo
+        let thePort =  _apiPort $ nodeInfo
         bRcvChan <- liftIO newBroadcastTChanIO
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ do
           -- FIXME: Instead of threadDelay retry connecting to the WS port
           threadDelay 3000000
-          putStrLn $ [i|Connecting to WS port #{port}|]
-          runClient "127.0.0.1" port "/" $ \conn -> do
-            putStrLn [i|Connected to node on port #{port}|]
+          putStrLn $ [i|Connecting to WS port #{thePort}|]
+          runClient "127.0.0.1" thePort "/" $ \conn -> do
+            putStrLn [i|Connected to node on port #{thePort}|]
             -- Fork off "message send" thread
             void $ forkIO $ forever $ do
               toSnd :: ClientInput <- liftIO $ readChan sndChan
-              putStrLn $ [i|Sending to WS port #{port}: #{show toSnd}|]
+              putStrLn $ [i|Sending to WS port #{thePort}: #{show toSnd}|]
               WS.sendTextData conn $ Aeson.encode toSnd
             let getParsedMsg = do
                 msgLBS :: LBS.ByteString <- WS.receiveData conn
                 let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
                                     <> LBS.unpack msgLBS)
                           $ decode' msgLBS
-                putStrLn $ "Monitor:" <> show port <> ": " <> show msg
+                putStrLn $ "Monitor:" <> show thePort <> ": " <> show msg
                 pure msg
             -- Wait until we have seen all other nodes connect to this one
-            flip (iterateUntilM (== (numNodes - 1))) 0 $ \n -> do
+            _ <- flip (iterateUntilM (== (numNodes - 1))) 0 $ \n -> do
               msg <- getParsedMsg
               -- TODO: Maybe best to actually check which peer rather
               -- than blindly count?
@@ -740,7 +731,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
                   case Map.lookup name subsPerHead of
                     Nothing -> pure ()
                     Just subs -> do
-                      for_ subs $ \conn -> WS.sendTextData conn . Aeson.encode $ HeadStatusChanged name status
+                      for_ subs $ \subConn -> WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status
                   pure ()
                 Nothing -> pure ()
               atomically $ writeTChan bRcvChan msg
@@ -785,15 +776,15 @@ startHydraNetwork :: (MonadIO m)
 startHydraNetwork sharedInfo actors getPorts = do
   liftIO $ createDirectoryIfMissing True "demo-logs"
   nodes :: (Map Address (HydraNodeInfo, [Int])) <- liftIO . fmap Map.fromList . mapM node $ zip [1 ..] (Map.toList actors)
-  liftIO $ sequence . flip Map.mapWithKey nodes $ \name (node, ports) -> do
+  liftIO $ sequence . flip Map.mapWithKey nodes $ \name (theNode, ports) -> do
     logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode
     errHndl <- openFile [iii|demo-logs/hydra-node-#{name}.error.log|] WriteMode
-    let cp = (mkHydraNodeCP sharedInfo node (filter ((/= _nodeId node) . _nodeId) (fmap fst $ Map.elems nodes)))
+    let cp = (mkHydraNodeCP sharedInfo theNode (filter ((/= _nodeId theNode) . _nodeId) (fmap fst $ Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
              }
-    (_,_,_,handle) <- createProcess cp
-    pure (handle, node, ports)
+    (_,_,_,resultHandle) <- createProcess cp
+    pure (resultHandle, theNode, ports)
   where
     node :: forall a. (Int, (a, HydraKeyInfo)) -> IO (a, (HydraNodeInfo, [Int]))
     node (n, (name, keys)) = do
@@ -850,7 +841,7 @@ sharedArgs hsi =
   ] <> cardanoNodeArgs (_hydraCardanoNodeInfo hsi)
 
 nodeArgs :: HydraNodeInfo -> [String]
-nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
+nodeArgs (HydraNodeInfo nodeId p apiPort monitoringPort
            (HydraKeyInfo
             (KeyPair cskPath _cvkPath)
             (KeyPair hskPath _hvkPath))
@@ -858,7 +849,7 @@ nodeArgs (HydraNodeInfo nodeId port apiPort monitoringPort
   [ "--node-id"
   , show nodeId
   , "--port"
-  , show port
+  , show p
   , "--api-port"
   , show apiPort
   , "--monitoring-port"
@@ -924,9 +915,9 @@ signAndSubmitTx cninfo sk tx = do
       submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
 
 handleTaggedMessage :: WS.Connection -> State -> Tagged ClientMsg -> IO (Tagged ServerMsg)
-handleTaggedMessage conn state (Tagged tid msg) = do
-  msg <- handleClientMessage conn state msg
-  pure $ Tagged tid msg
+handleTaggedMessage conn state (Tagged tid clientMsg) = do
+  serverMsg <- handleClientMessage conn state clientMsg
+  pure $ Tagged tid serverMsg
 
 handleClientMessage :: WS.Connection -> State -> ClientMsg -> IO (ServerMsg)
 handleClientMessage conn state = \case
@@ -971,13 +962,13 @@ handleClientMessage conn state = \case
         for_ heads $ terminateHead state
 
         -- Create a new devnet and update the MVar
-        modifyMVar_ (_state_cardanoNodeState state) $ \cns -> do
-          teardownDevnet cns
+        modifyMVar_ (_state_cardanoNodeState state) $ \oldCns -> do
+          teardownDevnet oldCns
           withLogging getCardanoNodeState
     pure DevnetRestarted
 
-  GetDevnetAddresses amount -> do
-    mAddrs <- getDevnetAddresses [1 .. fromIntegral amount]
+  GetDevnetAddresses lovelaceAmount -> do
+    mAddrs <- getDevnetAddresses [1 .. fromIntegral lovelaceAmount]
     case mAddrs of
       Just addrs ->
         pure $ DevnetAddresses addrs
@@ -992,9 +983,9 @@ handleClientMessage conn state = \case
 
   ClientHello -> pure $ ServerHello versionStr
 
-  Withdraw address -> do
+  Withdraw addr -> do
     -- Withdraw everything minus fees
-    result <- withdraw state $ WithdrawRequest address Nothing
+    result <- withdraw state $ WithdrawRequest addr Nothing
     case result of
       Right txid -> do
         cardanoNodeInfo <- stateCardanoNodeInfo state
@@ -1002,8 +993,8 @@ handleClientMessage conn state = \case
       _ -> pure ()
     pure $ either ServerError (const OperationSuccess) result
 
-  GetAddTx txtype addr amount -> do
-    result <- buildAddTx txtype state addr amount
+  GetAddTx txtype addr lovelaceAmount -> do
+    result <- buildAddTx txtype state addr lovelaceAmount
     pure $ either ServerError FundsTx result
 
   CheckFuel addr -> do
@@ -1024,7 +1015,7 @@ handleClientMessage conn state = \case
     pure $ either ServerError (const OperationSuccess) result
 
   CloseHead name -> do
-    sendToHeadAndWaitFor Close (\case
+    _ <- sendToHeadAndWaitFor Close (\case
       HeadIsFinalized {} -> True
       _ -> False) state name
     pure $ OperationSuccess
@@ -1038,8 +1029,6 @@ handleClientMessage conn state = \case
   TearDownHead name -> do
     removeHead state name
     pure $ OperationSuccess
-
-  _ -> pure $ UnhandledMessage
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a
@@ -1086,22 +1075,22 @@ runHydraPayClient apiKey action = do
       action
 
 requestResponse :: ClientMsg -> HydraPayClient ServerMsg
-requestResponse msg = HydraPayClient . MaybeT . ReaderT $ \(ClientState conn inbox otherInbox nid) -> do
+requestResponse clientMsg = HydraPayClient . MaybeT . ReaderT $ \(ClientState conn inbox _ nid) -> do
   n <- modifyMVar nid $ \x -> pure (x + 1, x)
-  readChan <- atomically $ dupTChan inbox
-  WS.sendTextData conn . Aeson.encode $ Tagged n msg
-  Just <$> waitForResponse n readChan
+  readChannel <- atomically $ dupTChan inbox
+  WS.sendTextData conn . Aeson.encode $ Tagged n clientMsg
+  Just <$> waitForResponse n readChannel
   where
     waitForResponse n chan = do
       msg <- atomically $ readTChan chan
       case msg of
-        TaggedMsg (Tagged n' msg) | n == n' -> pure msg
+        TaggedMsg (Tagged gotN resultMsg) | n == gotN -> pure resultMsg
         _ -> waitForResponse n chan
 
 waitForHeadOpen :: HeadName -> HydraPayClient ()
-waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ box nid) -> do
-  readChan <- atomically $ dupTChan box
-  checkForOpenStatus readChan
+waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ box _) -> do
+  readChannel <- atomically $ dupTChan box
+  checkForOpenStatus readChannel
   Just <$> pure ()
   where
     checkForOpenStatus box = do
@@ -1109,6 +1098,3 @@ waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ bo
       case msg of
         HeadStatusChanged name Status_Open | name == hname -> pure ()
         _ -> checkForOpenStatus box
-
-getAddFundsTx :: Address -> Lovelace -> IO (Maybe Tx)
-getAddFundsTx addr amount = pure Nothing

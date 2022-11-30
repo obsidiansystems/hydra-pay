@@ -1,6 +1,6 @@
 module Hydra.Snapshot where
 import GHC.Natural (Natural)
-import Hydra.Types (UTxOType, WholeUTXO)
+import Hydra.Types (WholeUTXO)
 import GHC.Generics (Generic)
 import Data.Aeson.Types
 

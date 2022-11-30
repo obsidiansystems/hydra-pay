@@ -439,14 +439,14 @@ monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto round
 
     wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
 
-    hostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
-    port <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+    theHostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+    thePort <- fromJSValUnchecked =<< jsg "location" ^. js "port"
 
     pure $ mconcat [ wsProtocol
                    , "//"
-                   , hostname
+                   , theHostname
                    , ":"
-                   , port
+                   , thePort
                    , "/hydra/api"
                    ]
   rec

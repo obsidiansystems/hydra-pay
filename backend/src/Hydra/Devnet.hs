@@ -113,7 +113,7 @@ seedTestAddresses cninf faucetKeys amount = do
 -- TODO: delete this function in favor of keys-as-values
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
-  contents <- flip zip [1..] . T.lines <$> T.readFile path
+  contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile path
   pure $ fmap mkKeypair . lookup addr $ contents
   where
     mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
@@ -351,15 +351,15 @@ transferAll cninf signingKey fromAddr destAddr = do
   
 
 seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m TxIn
-seedAddressFromFaucetAndWait cninf faucetKeys addr amount isFuel = do
-  txin <- liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount isFuel
+seedAddressFromFaucetAndWait cninf faucetKeys addr amount makeFuel = do
+  txin <- liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount makeFuel
   waitForTxIn cninf txin
   pure txin
 
 -- | Send an amount in lovelace to the named actor
 seedAddressFromFaucet :: CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> IO TxIn
-seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount isFuel = do
-  draftTx <- buildSeedTxForAddress cninf faucetvk addr amount isFuel
+seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount makeFuel = do
+  draftTx <- buildSeedTxForAddress cninf faucetvk addr amount makeFuel
   signedTx <- signTx cninf faucetsk draftTx
   txin <- txInput 0 <$> txIdFromSignedTx signedTx
   void $ submitTx cninf signedTx
@@ -476,7 +476,7 @@ buildRawTx cninf txins outAmounts invalidAfter fee = do
   pure outFile
 
 buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
-buildSeedTxForAddress cninf faucetvk addr amount isFuel = do
+buildSeedTxForAddress cninf faucetvk addr amount makeFuel = do
   faucetAddr <- getCardanoAddress cninf faucetvk
   hash <- getFirstTxIn cninf faucetAddr
   buildDraftTx cninf $ SomeTx
@@ -484,7 +484,7 @@ buildSeedTxForAddress cninf faucetvk addr amount isFuel = do
         _tx_outAddr = addr,
         _tx_outAmount = amount,
         _tx_changeAddr = faucetAddr,
-        _tx_outDatumHash = fuelMarkerDatumHash <$ guard isFuel
+        _tx_outDatumHash = fuelMarkerDatumHash <$ guard makeFuel
       }
 
 -- | Sign a transaction and a path containing it.
@@ -589,6 +589,6 @@ getDevnetAddresses is = do
   pure $ for is (flip lookup addrs)
 
 getDevnetAddress :: Int -> IO (Maybe Address)
-getDevnetAddress i = do
-  addrs <- getDevnetAddresses [i]
+getDevnetAddress addrIndex = do
+  addrs <- getDevnetAddresses [addrIndex]
   pure $ join $ headMay <$> addrs

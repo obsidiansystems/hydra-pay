@@ -14,7 +14,6 @@ module Common.Route where
 
 -- You will probably want these imports for composing Encoders.
 import Prelude hiding (id, (.))
-import Control.Category
 
 import Data.Text (Text)
 import Data.Functor.Identity
@@ -22,7 +21,7 @@ import Data.Functor.Identity
 import Obelisk.Route
 import Obelisk.Route.TH
 
-import Control.Monad.Error
+import Control.Monad.Except
 
 data BackendRoute :: * -> * where
   -- | Used to handle unparseable routes.
