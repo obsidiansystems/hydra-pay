@@ -12,20 +12,21 @@ where
 
 import Common.Route
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Log
-import Data.Text.Prettyprint.Doc (Doc)
 import HydraPay
+import HydraPay.Logging
 import Obelisk.Backend
 import Obelisk.Route
 import Prelude hiding (filter)
-
-runLogging :: LoggingT (WithSeverity (Doc ann)) IO a -> IO a
-runLogging = flip runLoggingT (print . renderWithSeverity id)
+import Data.Text as T
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
-      runLogging $ do
+      -- Greet the user
+      putStrLn hydraPayAsciiLogo
+      putStrLn hydraPayAsciiSubhead
+
+      withLogging $ do
         liftIO $ runHydraPay $ \state -> do
           liftIO . serve $ \case
             BackendRoute_HydraPay :/ hpr -> case hpr of
