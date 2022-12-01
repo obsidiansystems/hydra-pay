@@ -33,7 +33,7 @@ import Common.Route
 import Control.Lens
 import Control.Monad.Fix
 
-import Language.Javascript.JSaddle (jsg, js, liftJSM, fromJSValUnchecked)
+import Language.Javascript.JSaddle (MonadJSM, jsg, js, js1, liftJSM, fromJSValUnchecked)
 import Data.Bool (bool)
 
 default (T.Text)
@@ -197,6 +197,8 @@ theDevnet ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
+  , MonadJSM (Performable m)
+  , PerformEvent t m
   )
   => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 theDevnet lastTagId serverMsg = do
@@ -258,10 +260,28 @@ theDevnet lastTagId serverMsg = do
       Just (Tagged _ msg@(AuthResult False)) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $ do
-          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
           elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
+
+      Just (Tagged _ msg@(DevnetAddresses addrs)) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $
+          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            (copyButton, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
+              elClass "div" "p-2 rounded active:bg-white/30 hover:bg-gray-400/30 bg-black/30 flex justify-center items-center text-center" $ do
+                elClass "span" "text-3xl material-symbols-rounded" $ text "content_copy"
+
+            let
+              copyToClipboard = do
+                _ <- liftJSM $ jsg "navigator" ^. js "clipboard" . js1 "writeText" (T.intercalate "\n" addrs)
+                pure ()
+
+            performEvent_ $ copyToClipboard <$ domEvent Click copyButton
+
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
       Just (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $
