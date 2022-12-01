@@ -88,6 +88,12 @@ requester lastTagId serverMsg clientMsg = do
   tellEvent $ pure <$> clientMsg
   pure properServerMsg
 
+
+data ResponseStatus
+  = Standby
+  | WaitingOnResponse
+  | GotResponse (Tagged ServerMsg)
+
 headCreation ::
   ( EventWriter t [ClientMsg] m
   , DomBuilder t m
@@ -102,10 +108,13 @@ headCreation lastTagId serverMsg = do
     elClass "p" "" $ do
       text "To create a Head you will give it a friendly name and list the addresses that will become the participants."
       text " Creating the head starts the Hydra network."
+      el "br" blank
+      el "br" blank
+      elClass "span" "italic" $ text " This request may take some time as Hydra Pay waits for all Hydra Nodes to respond"
 
   elClass "div" "p-4 bg-white rounded flex flex-col" $ do
     let
-    (domEvent Click -> tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-end" $ do
+    (tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-start" $ do
       req <- elClass "div" "flex flex-row justify-between mb-4" $
         elClass "div" "flex flex-col" $ do
         elClass "div" "font-semibold flex flex-row" $ do
@@ -134,7 +143,7 @@ headCreation lastTagId serverMsg = do
         pure $ fmap CreateHead $ HeadCreate <$> name <*> participants
 
       (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
-      pure (tryEl, req)
+      pure (domEvent Click tryEl, req)
 
     elClass "div" "" $
       elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
@@ -153,24 +162,32 @@ headCreation lastTagId serverMsg = do
 
       dynText reqJson
 
-    properServerMsg <- requester lastTagId serverMsg $ current request <@ tryButtonClick
-    response <- holdDyn Nothing $ Just <$> properServerMsg
+    let
+      fireRequest = current request <@ tryButtonClick
+
+    properServerMsg <- requester lastTagId serverMsg fireRequest
+    response <- holdDyn Standby $ mergeWith const $ [WaitingOnResponse <$ fireRequest, GotResponse <$> properServerMsg]
 
     dyn_ $ ffor response $ \case
-      Just (Tagged _ msg@(AuthResult False)) -> do
+      GotResponse (Tagged _ msg@(AuthResult False)) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $ do
           elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
           elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in config/backend/api-key"
-      Just (Tagged _ msg) -> do
+      GotResponse (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $
           elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
           text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-      Nothing -> blank
+      WaitingOnResponse -> do
+        elClass "div" "font-semibold mt-4" $ text "Waiting for Response..."
+        elClass "div" "" $
+          elClass "pre" "animate-pulse relative rounded-lg px-4 py-8 border bg-gray-900 text-green-500" blank
+
+      Standby -> blank
 
     expectedResponse OperationSuccess
 
@@ -195,7 +212,7 @@ theDevnet lastTagId serverMsg = do
       text " For example, we are going to be creating and managing heads, it would be nice to have some addresses with funds to use, so we may request that from Hydra Pay."
 
   elClass "div" "p-4 bg-white rounded flex flex-col" $ do
-    (domEvent Click -> tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-end" $ do
+    (domEvent Click -> tryButtonClick, request) <- elClass "div" "flex flex-row justify-between items-start" $ do
       req <- elClass "div" "flex flex-row justify-between mb-4" $
         elClass "div" "flex flex-col" $ do
         elClass "div" "font-semibold flex flex-row" $ do
