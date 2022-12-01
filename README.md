@@ -1,4 +1,4 @@
-# <p align="center">Hydra Pay</p>
+# <p align="center">Hydra for Payments (Hydra Pay)</p>
 
 ## :dango: Introduction
 
@@ -357,7 +357,7 @@ Example Response:
 
 Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
 
-Instead of participating directly in a Head, any participant will actually be mapped to a "Proxy Address" this is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head.
+Instead of participating directly in a Head, any participant will actually be mapped to a "Proxy Address". This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head.
 
 We have a couple important reasons for using this Proxy Address mapping:
 
