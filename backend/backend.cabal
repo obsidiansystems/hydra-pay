@@ -55,6 +55,8 @@ library
                , time-compat
                , transformers
                , obelisk-executable-config-lookup
+               , cryptonite
+               , base64-bytestring
 
   default-extensions:
     OverloadedStrings

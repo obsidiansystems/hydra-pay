@@ -10,6 +10,8 @@
 
 module HydraPay.Server where
 
+import Crypto.Random
+import qualified Data.ByteString.Base64 as Base64
 
 import Control.Exception
 import Snap.Core hiding (path)
@@ -183,8 +185,15 @@ runHydraPay action = do
     MaybeT $ getConfig "backend/api-key"
 
   key <- case result of
-    Nothing -> error "No API Key found in config/backend/api-key"
-    Just key -> pure key
+    Nothing -> do
+      -- Generate a key if we don't have one
+      withLogging $ logInfo "No API Key found, generating..."
+      newKey <- Base64.encode <$> getRandomBytes 32
+      BS.writeFile "config/backend/api-key" newKey
+      withLogging $ logInfo "API Key is available in config/backend/api-key"
+      pure newKey
+    Just key -> do
+      pure key
 
   addrs <- liftIO $ newMVar mempty
   subs <- liftIO $ newMVar mempty

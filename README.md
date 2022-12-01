@@ -62,7 +62,9 @@ Visit the live documentation and confirm your key and requests presented work as
 
 ### API Key
 
-You must provide an API Key in config/backend/api-key a default key of KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM= is provided. DO NOT USE THIS KEY IN PRODUCTION.
+Your API Key should be provided in config/backend/api-key if no key is provided we generate a random one the aformentioned file. 
+
+DO NOT USE THIS KEY IN PRODUCTION.
 
 ### Live Documentation
 
