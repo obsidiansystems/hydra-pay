@@ -218,7 +218,7 @@ getCardanoNodeState = do
     CfgDevnet -> liftIO $ do
       _ <- readCreateProcess (shell "rm -rf devnet") ""
       _ <- readCreateProcess (shell "rm -rf demo-logs") ""
-      liftIO $ flip runLoggingT (print . renderWithSeverity id) $ prepareDevnet
+      withLogging $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
       threadDelay (seconds 3)
       _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
@@ -289,7 +289,7 @@ websocketApiHandler state = do
 
           -- When authenticated just process as normal
           (True, Just clientMsg) -> do
-            msg <- handleTaggedMessage conn state clientMsg
+            msg <- withLogging $ handleTaggedMessage conn state clientMsg
             WS.sendTextData conn . Aeson.encode $ msg
 
           (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
@@ -536,7 +536,7 @@ commitToHead state (HeadCommit name addr lovelaceAmount) = do
               waitForCloseHandler
 
 -- | Create a head by starting a Hydra network.
-createHead :: MonadIO m => State -> HeadCreate -> m (Either HydraPayError Head)
+createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> HeadCreate -> m (Either HydraPayError Head)
 createHead state (HeadCreate name participants) = runExceptT $ do
   when (null participants) $ throwError NotEnoughParticipants
   headExists <- isJust <$> lookupHead state name
@@ -657,7 +657,7 @@ waitForHeadStatus state name status = runMaybeT $ do
         else pure $ Nothing
 
 -- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
-startNetwork :: MonadIO m => State -> Head -> m Network
+startNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> Head -> m Network
 startNetwork state (Head name participants _ statusBTChan) = do
   mNetwork <- getNetwork state name
   case mNetwork of
@@ -672,23 +672,23 @@ startNetwork state (Head name participants _ statusBTChan) = do
         let thePort =  _apiPort $ nodeInfo
         bRcvChan <- liftIO newBroadcastTChanIO
         sndChan <- liftIO newChan
-        monitor <- liftIO $ forkIO $ do
+        monitor <- liftIO $ forkIO $ withLogging $ do
           -- FIXME: Instead of threadDelay retry connecting to the WS port
-          threadDelay 3000000
-          putStrLn $ [i|Connecting to WS port #{thePort}|]
-          runClient "127.0.0.1" thePort "/" $ \conn -> do
-            putStrLn [i|Connected to node on port #{thePort}|]
+          liftIO $ threadDelay 3000000
+          logInfo $ [i|Connecting to WS port #{thePort}|]
+          liftIO $ runClient "127.0.0.1" thePort "/" $ \conn -> withLogging $ do
+            logInfo [i|Connected to node on port #{thePort}|]
             -- Fork off "message send" thread
-            void $ forkIO $ forever $ do
+            liftIO $ void $ forkIO $ withLogging $ forever $ do
               toSnd :: ClientInput <- liftIO $ readChan sndChan
-              putStrLn $ [i|Sending to WS port #{thePort}: #{show toSnd}|]
-              WS.sendTextData conn $ Aeson.encode toSnd
+              logInfo $ [i|Sending to WS port #{thePort}: #{show toSnd}|]
+              liftIO $ WS.sendTextData conn $ Aeson.encode toSnd
             let getParsedMsg = do
-                msgLBS :: LBS.ByteString <- WS.receiveData conn
+                msgLBS :: LBS.ByteString <- liftIO $ WS.receiveData conn
                 let msg = fromMaybe (error $ "FIXME: Cardanode Node message we could not parse!?\n"
                                     <> LBS.unpack msgLBS)
                           $ decode' msgLBS
-                putStrLn $ "Monitor:" <> show thePort <> ": " <> show msg
+                logInfo $ pretty $ "Monitor:" <> show thePort <> ": " <> show msg
                 pure msg
             -- Wait until we have seen all other nodes connect to this one
             _ <- flip (iterateUntilM (== (numNodes - 1))) 0 $ \n -> do
@@ -698,7 +698,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
               pure $ case msg of
                 PeerConnected _ -> n + 1
                 _ -> n
-            writeChan readyCounterChan ()
+            liftIO $ writeChan readyCounterChan ()
             -- Start accepting messages
             forever $ do
               msg <- getParsedMsg
@@ -725,14 +725,14 @@ startNetwork state (Head name participants _ statusBTChan) = do
                     atomically $ writeTChan statusBTChan status
                     pure . Map.adjust (\h -> h { _head_status = status }) name $ current
 
-                  subsPerHead <- readMVar (_state_subscribers state)
+                  subsPerHead <- liftIO $ readMVar (_state_subscribers state)
                   case Map.lookup name subsPerHead of
                     Nothing -> pure ()
-                    Just subs -> do
+                    Just subs -> liftIO $ do
                       for_ subs $ \subConn -> WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status
                   pure ()
                 Nothing -> pure ()
-              atomically $ writeTChan bRcvChan msg
+              liftIO $ atomically $ writeTChan bRcvChan msg
         pure $ Node
           { _node_handle = processHndl
           , _node_info = nodeInfo
@@ -741,15 +741,15 @@ startNetwork state (Head name participants _ statusBTChan) = do
           , _node_get_listen_chan = atomically $ dupTChan bRcvChan
           , _node_ports = ports
           }
-      liftIO $ putStrLn [i|---- Waiting for #{numNodes} nodes to get ready |]
+      logInfo [i|---- Waiting for #{numNodes} nodes to get ready |]
       let countReadies n = do
             if n == numNodes
-              then putStrLn [i|---- All nodes ready|]
+              then logInfo [i|---- All nodes ready|]
               else do
-                readChan readyCounterChan
-                putStrLn [i|---- #{n + 1} nodes ready of #{numNodes}|]
+                liftIO $ readChan readyCounterChan
+                logInfo [i|---- #{n + 1} nodes ready of #{numNodes}|]
                 countReadies (n + 1)
-      liftIO $ countReadies 0
+      countReadies 0
 
       -- Add the network to the running networks mvar
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
@@ -912,12 +912,12 @@ signAndSubmitTx cninfo sk tx = do
       _ <- readCreateProcess cp ""
       submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
 
-handleTaggedMessage :: WS.Connection -> State -> Tagged ClientMsg -> IO (Tagged ServerMsg)
+handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
 handleTaggedMessage conn state (Tagged tid clientMsg) = do
   serverMsg <- handleClientMessage conn state clientMsg
   pure $ Tagged tid serverMsg
 
-handleClientMessage :: WS.Connection -> State -> ClientMsg -> IO (ServerMsg)
+handleClientMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> ClientMsg -> m (ServerMsg)
 handleClientMessage conn state = \case
   Authenticate token -> do
     let apiKey = _state_apiKey state
@@ -941,8 +941,8 @@ handleClientMessage conn state = \case
     L1Balance <$> l1Balance state addr False
 
   GetStats -> do
-    numHeads <- toInteger . Map.size <$> readMVar (_state_heads state)
-    networks <- readMVar (_state_networks state)
+    numHeads <- toInteger . Map.size <$> (liftIO $ readMVar (_state_heads state))
+    networks <- liftIO $ readMVar (_state_networks state)
 
     let
       numNodes :: Integer
@@ -951,22 +951,22 @@ handleClientMessage conn state = \case
     pure $ CurrentStats $ HydraPayStats numHeads numNodes
 
   RestartDevnet -> do
-    cns <- readMVar (_state_cardanoNodeState state)
+    cns <- liftIO $ readMVar (_state_cardanoNodeState state)
     case cardanoNodeState_nodeType cns of
       CfgPreview _ -> pure ()
       CfgDevnet -> do
-        heads <- Map.keys <$> readMVar (_state_heads state)
+        heads <- Map.keys <$> (liftIO $ readMVar (_state_heads state))
         -- Terminate all the heads!
         for_ heads $ terminateHead state
 
         -- Create a new devnet and update the MVar
-        modifyMVar_ (_state_cardanoNodeState state) $ \oldCns -> do
+        liftIO $ modifyMVar_ (_state_cardanoNodeState state) $ \oldCns -> do
           teardownDevnet oldCns
           withLogging getCardanoNodeState
     pure DevnetRestarted
 
   GetDevnetAddresses lovelaceAmount -> do
-    mAddrs <- getDevnetAddresses [1 .. fromIntegral lovelaceAmount]
+    mAddrs <- liftIO $ getDevnetAddresses [1 .. fromIntegral lovelaceAmount]
     case mAddrs of
       Just addrs ->
         pure $ DevnetAddresses addrs
@@ -976,7 +976,7 @@ handleClientMessage conn state = \case
         "Unable to open seeded address file, restart devnet or wait for seeding to complete"
 
   SubscribeTo name -> do
-    modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
+    liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
     pure $ SubscriptionStarted name
 
   ClientHello -> pure $ ServerHello versionStr
@@ -987,7 +987,7 @@ handleClientMessage conn state = \case
     case result of
       Right txid -> do
         cardanoNodeInfo <- stateCardanoNodeInfo state
-        withLogging $ waitForTxIn cardanoNodeInfo $ txInput 0 txid
+        waitForTxIn cardanoNodeInfo $ txInput 0 txid
       _ -> pure ()
     pure $ either ServerError (const OperationSuccess) result
 

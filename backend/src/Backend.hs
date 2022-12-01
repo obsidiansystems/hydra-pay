@@ -17,12 +17,12 @@ import HydraPay.Logging
 import Obelisk.Backend
 import Obelisk.Route
 import Prelude hiding (filter)
-import Data.Text as T
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
       -- Greet the user
+      putStrLn hydraAsciiLogo
       putStrLn hydraPayAsciiLogo
       putStrLn hydraPayAsciiSubhead
 

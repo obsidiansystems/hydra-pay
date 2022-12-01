@@ -92,7 +92,8 @@ devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
   output <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./config/backend/prepare-devnet.sh") ""
-  when (null output) $ logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  when (not . null $ output) $ logInfo $ pretty output
+  pure ()
 
 addressesPath :: FilePath
 addressesPath = "devnet/addresses"
@@ -190,7 +191,7 @@ generateCardanoKeys path = do
                          , [i|#{path}.cardano.sk|]
                          ])
     ""
-  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  when (not . null $ output) $ logWarning $ pretty output
   pure $ mkKeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
 
 -- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
@@ -205,7 +206,7 @@ generateHydraKeys path = do
                          , [i|#{path}.hydra|]
                          ])
     ""
-  logMessage $ WithSeverity Informational $ pretty $ T.pack output
+  when (not . null $ output) $ logInfo $ pretty output
   pure $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
 
 -- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
@@ -222,7 +223,7 @@ getReferenceScripts scriptPath sk = do
 -- TODO: Make this generic over node and signing key?
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m HydraScriptTxId
 publishReferenceScripts sk = do
-  logMessage $ WithSeverity Informational "Publishing reference scripts ('νInitial' & 'νCommit')..."
+  logInfo $ "Publishing reference scripts ('νInitial' & 'νCommit')..."
   fmap (T.strip . T.pack) $ liftIO $ readCreateProcess cp ""
   where
     cp = proc hydraNodePath [ "publish-scripts"
@@ -237,7 +238,7 @@ publishReferenceScripts sk = do
 
 waitForTxIn :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> TxIn -> m ()
 waitForTxIn cninf txin = do
-  logMessage $ WithSeverity Informational $ "Waiting for utxo " <> pretty txin <> ".."
+  logInfo $ "Waiting for utxo " <> pretty txin <> ".."
   liftIO waitFn
   where
     waitFn = do
