@@ -163,7 +163,7 @@ headCreation lastTagId serverMsg = do
           elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-          elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
+          elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in config/backend/api-key"
       Just (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $
@@ -473,8 +473,8 @@ monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto round
         elClass "div" "my-2 w-full h-px bg-gray-200" blank
         elClass "p" "" $ do
           text "The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api."
-          text "Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
-          text "In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
+          text " Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
+          text " In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
           el "br" blank
           el "br" blank
           text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
