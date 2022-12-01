@@ -19,3 +19,4 @@ static.out
 /credentials/
 /db/
 /tmp/
+/config/backend/api-key
