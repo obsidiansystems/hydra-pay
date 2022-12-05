@@ -91,7 +91,7 @@ devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/
 
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
-  _ <- liftIO $ readCreateProcess (shell "[ -d devnet ] || prepare-devnet.sh") ""
+  _ <- liftIO $ readCreateProcess (shell [i| [ -d devnet ] || #{livedocDevnetScriptPath}|]) ""
   logInfo "Prepared Devnet, running..."
   pure ()
 
