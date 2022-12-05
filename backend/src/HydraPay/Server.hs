@@ -197,6 +197,7 @@ runHydraPay cfg action = do
       -- Generate a key if we don't have one
       withLogging $ logInfo "No API Key found, generating..."
       newKey <- Base64.encode <$> getRandomBytes 32
+      createDirectoryIfMissing True "config/backend"
       BS.writeFile "config/backend/api-key" newKey
       withLogging $ logInfo "API Key is available in config/backend/api-key"
       pure newKey
