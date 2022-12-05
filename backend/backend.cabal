@@ -95,3 +95,4 @@ executable backend
                , common
                , frontend
                , obelisk-backend
+               , snap-server

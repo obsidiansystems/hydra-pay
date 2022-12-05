@@ -35,18 +35,10 @@ data HydraNodeParams = HydraNodeParams
   }
   deriving (Show,Read)
 
-ignoredOptionsParser :: Parser a -> Parser a
-ignoredOptionsParser dontignore =
-  (\_ a -> a)
-  <$> ((\_ _ -> ())
-      <$> switch ( long "quiet" <> short 'q' <> help "Whether to be quiet" )
-      <*> optional (strOption (long "port" <> help "Port to listen on")))
-  <*> dontignore
-
 -- | Unless specified otherwise the default is 'LiveDocMode'.
 hydraPayConfigParser :: Parser HydraPayConfig
 hydraPayConfigParser =
-  ignoredOptionsParser $ HydraPayConfig
+  HydraPayConfig
   <$> (fromMaybe LiveDocMode <$> optional netConfigParser)
 
 netConfigParser :: Parser HydraPayMode
@@ -68,7 +60,6 @@ nodeParamsParser =
    <$> strOption (long "hydra-scripts-tx-id")
    <*> strOption (long "hydra-ledger-protocol-parameters")
    <*> strOption (long "hydra-ledger-genesis"))
-
 
 getHydraCLIConfig :: IO HydraPayConfig
 getHydraCLIConfig = execParser (info (hydraPayConfigParser <**> helper) fullDesc)
