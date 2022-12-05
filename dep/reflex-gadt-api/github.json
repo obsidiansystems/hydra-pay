@@ -1,8 +1,8 @@
 {
   "owner": "reflex-frp",
   "repo": "reflex-gadt-api",
-  "branch": "develop",
+  "branch": "release/0.2.2.1",
   "private": false,
-  "rev": "69aca72b57a74fbf0d06a1b2ac1d247ce9aa207f",
-  "sha256": "116c6lna8pkas95lclm4halagc4f6rxv5hmf7rnl10lxqi9m48qw"
+  "rev": "c5c84a5878e64eb91f919bfc0bbfa863d078302d",
+  "sha256": "0mqxdv45b0qq6p5ji2z9h93354gd546d9b1z429jn134yvzg78vc"
 }
