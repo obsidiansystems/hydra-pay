@@ -57,6 +57,7 @@ library
                , obelisk-executable-config-lookup
                , cryptonite
                , base64-bytestring
+               , optparse-applicative
 
   default-extensions:
     OverloadedStrings
@@ -70,6 +71,7 @@ library
 
   exposed-modules:
     Backend
+    Config
     HydraPay
     HydraPay.Server
     HydraPay.Network
@@ -77,6 +79,7 @@ library
   other-modules:
     Paths
     Hydra.Devnet
+    HydraPay.DB
     CardanoNodeInfo
     
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
