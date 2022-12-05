@@ -223,7 +223,7 @@ getReferenceScripts scriptPath sk = do
       liftIO $ T.writeFile scriptPath scripts
       pure scripts
 
--- TODO: Make this generic over node and signing key?
+-- TODO: Make this generic over Cardano node socket path/network id?
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m HydraScriptTxId
 publishReferenceScripts sk = do
   logInfo $ "Publishing reference scripts ('νInitial' & 'νCommit')..."
