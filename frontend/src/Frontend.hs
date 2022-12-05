@@ -62,13 +62,6 @@ frontend = Frontend
       elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" monitorView
   }
 
-data DemoTx = DemoTx
-  { demoTx_to :: T.Text
-  , demoTx_amount :: Lovelace
-  , demoTx_time :: Pico
-  }
-  deriving (Eq, Show)
-
 header :: DomBuilder t m => T.Text -> m ()
 header name = do
   elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text name
