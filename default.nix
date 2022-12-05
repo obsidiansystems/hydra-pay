@@ -25,18 +25,17 @@ with obelisk;
 let
   foldExtensions = lib.foldr lib.composeExtensions (_: _: {});
   deps = obelisk.nixpkgs.thunkSet ./dep;
-  # deps' = obelisk.nixpkgs.thunkSet ./cardano-overlays/cardano-packages/dep;
   hydra-poc = import deps.hydra-poc {};
   cardano-node = import deps.cardano-node {};  
 
   pkgs = obelisk.nixpkgs;
-  # cardano-libs-overlay = import ./cardano-libs.nix { inherit deps; hydra-poc = deps.hydra-poc; lib = pkgs.lib; };
+  livedoc-devnet-script = pkgs.runCommand "livedoc-devnet-script" { } ''
+    cp -r ${./livedoc-devnet} $out
+  '';
 in
 project ./. ({ pkgs, ... }: let
   haskellLib = pkgs.haskell.lib;
 
-  # cardanoPackages = import ./cardano-overlays/cardano-packages;
-  # cardanoOverlays = import ./cardano-overlays { inherit haskellLib pkgs lib; };
 in
 {
   android.applicationId = "systems.obsidian.obelisk.examples.minimal";
@@ -83,6 +82,7 @@ in
           hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools
           pkgs.jq
           pkgs.coreutils
+          livedoc-devnet-script
         ];
       });
     })
