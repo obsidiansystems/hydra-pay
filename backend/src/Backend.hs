@@ -22,12 +22,14 @@ import Config
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
+      -- Parse command line arguments
+      cfg <- getHydraCLIConfig
+
       -- Greet the user
       putStrLn hydraAsciiLogo
       putStrLn hydraPayAsciiLogo
       putStrLn hydraPayAsciiSubhead
 
-      cfg <- getHydraCLIConfig
       withLogging $ do
         liftIO $ runHydraPay cfg $ \state -> do
           liftIO . serve $ \case
