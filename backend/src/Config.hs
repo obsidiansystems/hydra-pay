@@ -40,7 +40,7 @@ ignoredOptionsParser dontignore =
   (\_ a -> a)
   <$> ((\_ _ -> ())
       <$> switch ( long "quiet" <> short 'q' <> help "Whether to be quiet" )
-      <*> strOption (long "port" <> help "Port to listen on"))
+      <*> optional (strOption (long "port" <> help "Port to listen on")))
   <*> dontignore
 
 -- | Unless specified otherwise the default is 'LiveDocMode'.
