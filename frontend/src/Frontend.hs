@@ -253,7 +253,61 @@ requester lastTagId serverMsg clientMsg = do
   tellEvent $ pure <$> clientMsg
   pure properServerMsg
 
-initHead ::   ( EventWriter t [ClientMsg] m
+commitToHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+commitToHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Committing to a Head"
+
+    elClass "p" "" $ do
+      text "Once a Head is initialized each Participant must commit funds to be used within it."
+      text " The participant committing to the Head must have an ouptut that matches the amount you put"
+      elClass "span" "italic" $ text " exactly."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are you Initializing?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      addr <- elClass "div" "ml-4 flex flex-row mb-4" $ do
+        elClass "div" "mr-2" $ text "address"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Committer address")
+        pure $ _inputElement_value ie
+      amount <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "lovelace"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
+          & inputElementConfig_initialValue .~ "3000000"
+        pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
+      pure $ fmap CommitHead $ HeadCommit <$> name <*> addr <*> amount
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
+
+  pure ()
+
+initHead ::
+  ( EventWriter t [ClientMsg] m
   , DomBuilder t m
   , PostBuild t m
   , MonadFix m
@@ -270,7 +324,7 @@ initHead lastTagId serverMsg = do
   let
     input = payloadInput $ do
       name <- elClass "div" "ml-4 flex flex-row" $ do
-        elClass "div" "mr-2" $ text "contents"
+        elClass "div" "mr-2" $ text "head name"
         elClass "div" "font-semibold text-orange-400" $ text "String"
         elClass "div" "mx-4" $ text ":"
         elClass "div" "flex flex-col" $ do
@@ -278,13 +332,6 @@ initHead lastTagId serverMsg = do
             & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are you Initializing?")
             & inputElementConfig_initialValue .~ "test"
           pure $ _inputElement_value ie
-      addr <- elClass "div" "ml-4 flex flex-row mb-4" $ do
-        elClass "div" "mr-2" $ text "address"
-        elClass "div" "font-semibold text-orange-400" $ text "String"
-        elClass "div" "mx-4" $ text ":"
-        ie <- inputElement $ def
-          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Initializer address")
-        pure $ _inputElement_value ie
       contestationPeriod <- elClass "div" "ml-4 flex flex-row" $ do
         elClass "div" "mr-2" $ text "contestation period (seconds)"
         elClass "div" "font-semibold text-orange-400" $ text "Number"
@@ -293,7 +340,7 @@ initHead lastTagId serverMsg = do
           & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Time in seconds")
           & inputElementConfig_initialValue .~ "3"
         pure $ maybe 3 id . readMaybe . T.unpack <$> _inputElement_value ie
-      pure $ fmap InitHead $ HeadInit <$> name <*> addr <*> contestationPeriod
+      pure $ fmap InitHead $ HeadInit <$> name <*> contestationPeriod
 
   trySection lastTagId serverMsg $
     TrySectionConfig
@@ -924,4 +971,6 @@ monitorView lastTagId serverMsg = do
     fundingProxyAddresses lastTagId serverMsg
 
     initHead lastTagId serverMsg
+
+    commitToHead lastTagId serverMsg
   pure ()

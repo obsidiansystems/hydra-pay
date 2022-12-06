@@ -36,7 +36,6 @@ instance FromJSON HeadCreate
 
 data HeadInit = HeadInit
   { headInit_name :: HeadName
-  , headInit_participant :: Address
   , headInit_contestation :: Integer
   }
   deriving (Eq, Show, Generic)

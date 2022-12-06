@@ -9,7 +9,7 @@ This will cover:
 * Spinning up a network (This includes starting and managing Hydra Nodes)
 * An API to make the common operations simple to execute:
   * Initialization
-  * Commiting
+  * Committing
   * Transactions
   * Querying
   * Closing

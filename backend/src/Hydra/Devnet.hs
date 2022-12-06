@@ -289,7 +289,7 @@ queryAddressUTXOs cninf addr = liftIO $ do
                              ]
             <> cardanoNodeArgs cninf)
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
-  str <- readCreateProcess queryProc ""
+  (_, str, _) <- readCreateProcessWithExitCode queryProc ""
   pure $ fromMaybe mempty $ decode $ BS.pack str
 
 

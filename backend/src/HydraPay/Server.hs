@@ -455,11 +455,17 @@ withAnyNode state name f = do
       Nothing -> pure $ Left NotAParticipant
       Just node -> f node
 
-initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
-initHead state (HeadInit name _ con) = do
-  (fmap.fmap) (const ()) $ sendToHeadAndWaitFor (Init $ fromIntegral con) (\case
+initHead :: MonadIO m => State -> HeadInit -> m (Either T.Text ())
+initHead state (HeadInit name con) = do
+  result <- sendToHeadAndWaitForOutput (Init $ fromIntegral con) (\case
     ReadyToCommit {} -> True
+    PostTxOnChainFailed {} -> True
     _ -> False) state name
+
+  case result of
+    Right (ReadyToCommit {}) -> pure $ Right ()
+    Right (PostTxOnChainFailed {}) -> pure $ Left "Failed to submit tx, check participants fuel"
+    Left err -> pure $ Left $ tShow err
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -520,6 +526,27 @@ sendToHeadAndWaitFor ci fso state headName = do
       statusResult <- getHeadStatus state headName
       pure $ statusResult
 
+sendToHeadAndWaitForOutput :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError (ServerOutput Value))
+sendToHeadAndWaitForOutput ci fso state headName = do
+  mNetwork <- getNetwork state headName
+  case mNetwork of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just network -> do
+      -- TODO: Round robin to prevent exhausting gas of the first participant!
+      let firstNode = head $ Map.elems $ _network_nodes network
+          sendMsg = _node_send_msg firstNode
+          getChan = _node_get_listen_chan firstNode
+      liftIO $ do
+        channel <- getChan
+        sendMsg ci
+        let
+          waitForCloseHandler = do
+            output <- atomically $ readTChan channel
+            case (fso output) of
+              True  -> pure $ Right output
+              _ -> waitForCloseHandler
+        waitForCloseHandler
+
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr lovelaceAmount) = do
   withNode state name addr $ \node proxyAddr -> do
@@ -537,6 +564,7 @@ commitToHead state (HeadCommit name addr lovelaceAmount) = do
       False -> do
         sendToNodeAndListen node (Commit proxyFunds) $ (\case
           Committed {} -> Just $ Right ()
+          PostTxOnChainFailed {} -> Just $ Left NodeCommandFailed
           CommandFailed {} -> Just $ Left NodeCommandFailed
           _ -> Nothing)
         where
@@ -1043,7 +1071,7 @@ handleClientMessage conn state = \case
 
   InitHead hi -> do
     result <- initHead state hi
-    pure $ either ServerError (const OperationSuccess) result
+    pure $ either ApiError (const OperationSuccess) result
 
   CommitHead hc -> do
     result <- commitToHead state hc
