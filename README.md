@@ -6,7 +6,7 @@ The **Hydra Pay** project will provide an open-source library and framework for 
 
 This will cover:
 
-* Spinning up a network (This includes starting and managing hydra nodes)
+* Spinning up a network (This includes starting and managing Hydra Nodes)
 * An API to make the common operations simple to execute:
   * Initialization
   * Commiting
@@ -263,13 +263,13 @@ Expected Response:
 
 ### 🦾 Proxy Addresses
 
-Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
+Hydra Pay simplifies the creation and management of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
 
 Instead of participating directly in a Head, any participant will actually be mapped to a "Proxy Address". This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head.
 
 We have a couple important reasons for using this Proxy Address mapping:
 
-- More security: Participants no longer need to provide their private keys to the hydra-node acting on their behalf. This means that developers won't need to ask potential participants for their seed phrase just to be able to join a Head. This keeps in line with the security principle of Hydra: The only funds you can lose are those you commit.
+- More security: Participants no longer need to provide their private keys to the Hydra Node acting on their behalf. This means that developers won't need to ask potential participants for their seed phrase just to be able to join a Head. This keeps in line with the security principle of Hydra: The only funds you can lose are those you commit.
 
 - More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
 
