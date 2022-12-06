@@ -1165,7 +1165,8 @@ handleClientMessage conn state = \case
 
   TearDownHead name -> do
     removeHead state name
-    pure $ OperationSuccess
+    broadcastToSubscribers state name $ HeadRemoved name
+    pure $ HeadRemoved name
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a

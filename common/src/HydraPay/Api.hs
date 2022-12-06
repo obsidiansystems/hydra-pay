@@ -182,6 +182,7 @@ data ServerMsg
   | L1Balance Lovelace
   | HeadBalance Lovelace
   | BalanceChange HeadName (Map Address Lovelace)
+  | HeadRemoved HeadName
   | ApiError T.Text
   deriving (Eq, Show, Generic)
 

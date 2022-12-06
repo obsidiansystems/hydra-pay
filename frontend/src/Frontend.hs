@@ -163,14 +163,18 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
 
         dynText reqJson
 
-    properServerMsg <- requester lastTagId serverMsg $ current request <@ tryButtonClick
-    response <- holdDyn Nothing $ Just <$> properServerMsg
+    let
+      fireRequest = current request <@ tryButtonClick
+
+    properServerMsg <- requester lastTagId serverMsg fireRequest
+
+    response <- holdDyn Standby $ mergeWith const $ [WaitingOnResponse <$ fireRequest, GotResponse <$> properServerMsg]
 
     dyn_ $ ffor response $ \case
-      Just (Tagged _ msg) -> do
+      GotResponse (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $ do
-          elClass "pre" "overflow-y-hidden overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+          elClass "pre" "overflow-y-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
           case genErrorText msg of
@@ -179,9 +183,87 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
 
         extraStuff request msg
 
-      Nothing -> blank
+      WaitingOnResponse -> do
+        elClass "div" "font-semibold mt-4" $ text "Waiting for Response..."
+        elClass "div" "" $
+          elClass "pre" "animate-pulse relative rounded-lg px-4 py-8 border bg-gray-900 text-green-500" blank
+
+      Standby -> blank
+
     example
   pure ()
+
+removeHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  , MonadJSM (Performable m)
+  , PerformEvent t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+removeHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Removing a Head"
+
+    elClass "p" "" $ do
+      text "Once your Head is finalized, and your DApp no longer needs access to the Head information, you can remove the Head from Hydra Pay."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head would you like close?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      pure $ TearDownHead <$> name
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse $ HeadRemoved "test")
+    (const Nothing)
+    noExtra
+
+closeHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  , MonadJSM (Performable m)
+  , PerformEvent t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+closeHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Closing a Head"
+
+    elClass "p" "" $ do
+      text "After you have done all the transactions you needed to in the Hydra Head, you can close it and when Hydra Pay detects the Fanout period has occurred, it will Fanout your Head for you Automatically."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head would you like close?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      pure $ CloseHead <$> name
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
 
 activeHeads ::
   ( PostBuild t m
@@ -209,6 +291,7 @@ activeHeads authenticated lastTagId subscriptions responses = do
                         , (\(hname, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_balances =
                                                                                      Map.union balances (headStatus_balances hstatus)
                                                                                  }) hname) <$> balanceChange
+                        , Map.delete <$> headGone
                         ]
         _ <- listWithKey heads (headStatusWidget subscribed)
         pure ()
@@ -273,6 +356,7 @@ activeHeads authenticated lastTagId subscriptions responses = do
     startedSubscription = fmapMaybe (preview _SubscriptionStarted) untagged
     statusChange = fmapMaybe (preview _HeadStatusChanged) subscriptions
     balanceChange = fmapMaybe (preview _BalanceChange) subscriptions
+    headGone = fmapMaybe (preview _HeadRemoved) subscriptions
 
     prettyStatus = \case
       Status_Pending -> "Pending"
@@ -363,7 +447,7 @@ sendFundsInHead lastTagId serverMsg = do
   trySection lastTagId serverMsg $
     TrySectionConfig
     input
-    (expectedResponse OperationSuccess)
+    (exampleResponse $ TxConfirmed 0.001)
     (const Nothing)
     noExtra
 
@@ -1086,4 +1170,8 @@ monitorView lastTagId serverMsg = do
     commitToHead lastTagId serverMsg
 
     sendFundsInHead lastTagId serverMsg
+
+    closeHead lastTagId serverMsg
+
+    removeHead lastTagId serverMsg
   pure ()
