@@ -11,6 +11,7 @@ where
 
 import Prelude hiding (filter)
 
+import Text.Printf (printf)
 import Data.Foldable
 
 import Data.Map (Map)
@@ -62,7 +63,6 @@ frontend = Frontend
       elAttr "link" ("rel" =: "preconnect" <> "href" =: "https://fonts.gstatic.com") blank
       elAttr "link" ("href"=:"https://fonts.googleapis.com/css2?family=Inria+Sans:wght@300&family=Inter:wght@100;200;300;400;500;600;700;800;900&family=Krona+One&family=Rajdhani:wght@300;400;500;600;700&display=swap" <> "rel"=:"stylesheet") blank
       elAttr "link" ("rel"=:"stylesheet" <> "href"=:"https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@48,400,0,0") blank
-      -- elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
 
       -- Highlight JS for syntax highlighting
@@ -194,36 +194,62 @@ activeHeads authenticated lastTagId subscriptions responses = do
         subscribed <- foldDyn ($)  (mempty :: Set T.Text) $ Set.insert <$> startedSubscription
         heads <- foldDyn ($) (mempty :: Map T.Text HeadStatus) $
           mergeWith (.) [ uncurry Map.insert <$> gotHeadInfo
-                        , (\(hname, status) -> Map.adjust (\hstatus -> hstatus { headStatus_status = status}) hname) <$> statusChange
+                        , (\(hname, status, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_status = status
+                                                                                         , headStatus_balances =
+                                                                                            Map.union balances (headStatus_balances hstatus)
+                                                                                         }
+                                                                    ) hname) <$> statusChange
+                        , (\(hname, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_balances =
+                                                                                     Map.union balances (headStatus_balances hstatus)
+                                                                                 }) hname) <$> balanceChange
                         ]
         _ <- listWithKey heads (headStatusWidget subscribed)
         pure ()
   where
-    headStatusWidget subs name status = do
-      elClass "div" "w-full rounded-lg p-4 mb-4 shadow-md bg-white flex flex-row" $ do
-        elClass "div" "leading-none pr-4 border-r-2 overflow-hidden" $ do
-          elClass "span" "text-xs text-gray-400" $ text "HEAD"
-          elClass "div" "text-2xl w-full font-semibold overflow-hidden truncate" $ text name
-        elClass "div" "pl-4 flex flex-col flex-grow flex-shrink-0" $ do
-          elClass "div" "flex flex-row justify-between items-center" $ do
-            elClass "span" "text-gray-400 mr-16" $ text "Status"
-            elClass "span" "text-green-500" $ dynText $ prettyStatus . headStatus_status <$> status
-          elClass "div" "flex flex-row justify-between items-center" $ do
-            elClass "span" "text-gray-400 mr-16" $ text "Network Running"
-            elClass "span" "text-green-500" $ dynText $ tShow . headStatus_running <$> status
-          elClass "div" "flex flex-row justify-between items-center" $ do
-            elClass "span" "text-gray-400 mr-16" $ text "Subscribed"
+    headStatusWidget subs name hstatus = do
+      elClass "div" "w-full rounded-lg p-4 mb-4 shadow-md bg-white flex flex-col" $ do
+        elClass "div" "flex flex-row" $ do
+          elClass "div" "leading-none pr-4 border-r-2 overflow-hidden" $ do
+            elClass "span" "text-xs text-gray-400" $ text "HEAD"
+            elClass "div" "text-2xl w-full font-semibold overflow-hidden truncate" $ text name
+          elClass "div" "pl-4 flex flex-col flex-grow flex-shrink-0" $ do
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Status"
+              elClass "span" "text-green-500" $ dynText $ prettyStatus . headStatus_status <$> hstatus
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Network Running"
+              elClass "span" "text-green-500" $ dynText $ tShow . headStatus_running <$> hstatus
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Subscribed"
 
-            let
-              mkClasses = bool "text-red-500" "text-green-500"
-              isSubbedToHead = Set.member name <$> subs
-            elDynClass "span" (mkClasses <$> isSubbedToHead ) $ dynText $ tShow <$> isSubbedToHead
+              let
+                mkClasses = bool "text-red-500" "text-green-500"
+                isSubbedToHead = Set.member name <$> subs
+              elDynClass "span" (mkClasses <$> isSubbedToHead) $ dynText $ tShow <$> isSubbedToHead
+
+        dyn_ $ ffor (Map.null . headStatus_balances <$> hstatus) $ \case
+          True -> blank
+          False -> do
+            elClass "div" "flex flex-col mt-6" $ do
+              elClass "div" "mt-4 w-full h-px bg-gray-200" blank
+              elClass "span" "mt-2 text-xs text-gray-400" $ text "BALANCES"
+              elClass "div" "mt-1 w-full h-px bg-gray-200" blank
+              _ <- listWithKey (headStatus_balances <$> hstatus) $ \addr lovelace -> do
+                elClass "div" "flex flex-row justify-between mb-2 items-baseline" $ do
+                  elClass "div" "font-semibold text-gray-600" $ do
+                    text $ T.take 12 addr
+                    text $ "..."
+                    text $ T.takeEnd 8 addr
+                  elClass "div" "font-bold text-lg text-green-700" $ dynText $ T.pack . printf "%.2f" . lovelaceToAda <$> lovelace
+              pure ()
+
 
     untagged = tagged_payload <$> responses
 
     gotHeadInfo = fmap (\hs -> (headStatus_name hs, hs)) $ fmapMaybe (preview _HeadInfo) untagged
     startedSubscription = fmapMaybe (preview _SubscriptionStarted) untagged
     statusChange = fmapMaybe (preview _HeadStatusChanged) subscriptions
+    balanceChange = fmapMaybe (preview _BalanceChange) subscriptions
 
     prettyStatus = \case
       Status_Pending -> "Pending"
