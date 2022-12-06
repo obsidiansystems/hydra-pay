@@ -353,22 +353,36 @@ headBalance state name addr = do
 
 headAllBalances :: (MonadIO m) => State -> HeadName -> m (Either HydraPayError (Map Address Lovelace))
 headAllBalances state headname = do
-  withAnyNode state headname $ \node -> do
-    liftIO $ _node_send_msg node $ GetUTxO
-    c <- liftIO $ _node_get_listen_chan node
-    result <- untilJust $ do
-      x <- liftIO . atomically $ readTChan c
-      pure $ case x of
-        GetUTxOResponse utxoz -> Just $ wholeUtxoToBalanceMap utxoz
-        CommandFailed {} -> Just mempty
-        _ -> Nothing
+  mHead <- lookupHead state headname
+  case mHead of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just (Head _ participants _ _) -> do
+      withAnyNode state headname $ \node -> do
+        liftIO $ _node_send_msg node $ GetUTxO
+        c <- liftIO $ _node_get_listen_chan node
+        result <- untilJust $ do
+          x <- liftIO . atomically $ readTChan c
+          case x of
+            GetUTxOResponse utxoz ->
+              Just <$> reverseMapProxyBalances state participants (wholeUtxoToBalanceMap utxoz)
+            CommandFailed {} -> pure $ Just mempty
+            _ -> pure Nothing
 
-    pure $ Right result
+        pure $ Right result
 
 -- | Take all the UTxOs and organize them into a map of lovelace balances: Map Address Lovelace
 wholeUtxoToBalanceMap :: WholeUTXO -> Map Address Lovelace
 wholeUtxoToBalanceMap =
-  mconcat . fmap singletonFromTxInfo . Map.elems
+   foldr (\utxo allutxos -> Map.unionWith (+) utxo allutxos) mempty . fmap singletonFromTxInfo . Map.elems
+
+reverseMapProxyBalances :: MonadIO m => State -> Set Address -> Map Address Lovelace -> m (Map Address Lovelace)
+reverseMapProxyBalances state participants headBalance = do
+  reverseMap :: Map Address Address <- fmap mconcat $ for (Set.toList participants) $ \paddr -> do
+    (proxyAddr, _) <- addOrGetKeyInfo state paddr
+    pure $ Map.singleton proxyAddr paddr
+
+  pure $ Map.mapKeys (\proxyKey-> maybe proxyKey id $ Map.lookup proxyKey reverseMap) headBalance
+
 
 singletonFromTxInfo :: TxInInfo -> Map Address Lovelace
 singletonFromTxInfo (TxInInfo addr _ value) =
@@ -732,7 +746,7 @@ getHeadStatus state name = liftIO $ do
         Status_Open -> do
           headAllBalances state name
         _ -> do
-          pure $ Right mempty
+          pure $ Right $ Map.fromList $ fmap (,0) $ Set.toList participants
 
       pure $ HeadStatus hname running status <$> balances
 
@@ -825,9 +839,13 @@ startNetwork state (Head name participants _ statusBTChan) = do
                   case Map.lookup name subsPerHead of
                     Nothing -> pure ()
                     Just subs -> liftIO $ do
-                      for_ subs $ \subConn ->
-                        WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status $
-                          maybe mempty wholeUtxoToBalanceMap mbalance
+                      for_ subs $ \subConn -> do
+                        mappedBalance <- case mbalance of
+                          Just balance -> do
+                            reverseMapProxyBalances state participants $ wholeUtxoToBalanceMap balance
+                          Nothing -> do
+                            pure $ Map.fromList $ fmap (,0) $ Set.toList participants
+                        WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status mappedBalance
                   pure ()
                 (Nothing, _) -> pure ()
               liftIO $ atomically $ writeTChan bRcvChan msg

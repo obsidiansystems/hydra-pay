@@ -126,6 +126,11 @@ data TrySectionConfig t m = TrySectionConfig
   , trySection_extraStuff :: Dynamic t ClientMsg -> ServerMsg -> m ()
   }
 
+copyToClipboard :: MonadJSM m => T.Text -> m ()
+copyToClipboard payload = do
+  _ <- liftJSM $ jsg "navigator" ^. js "clipboard" . js1 "writeText" payload
+  pure ()
+
 trySection ::
   ( EventWriter t [ClientMsg] m
   , DomBuilder t m
@@ -181,6 +186,8 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
 activeHeads ::
   ( PostBuild t m
   , DomBuilder t m
+  , PerformEvent t m
+  , MonadJSM (Performable m)
   , MonadHold t m
   , MonadFix m
   ) => Dynamic t Bool -> Dynamic t Int64 -> Event t (ServerMsg) -> Event t (Tagged ServerMsg) -> m ()
@@ -207,8 +214,11 @@ activeHeads authenticated lastTagId subscriptions responses = do
         pure ()
   where
     headStatusWidget subs name hstatus = do
-      elClass "div" "w-full rounded-lg p-4 mb-4 shadow-md bg-white flex flex-col" $ do
-        elClass "div" "flex flex-row" $ do
+      let
+        isOpen = (== Status_Open) . headStatus_status <$> hstatus
+
+      elClass "div" "w-full rounded-lg mb-4 shadow-md bg-white flex flex-col" $ do
+        elClass "div" "flex p-4 flex-row" $ do
           elClass "div" "leading-none pr-4 border-r-2 overflow-hidden" $ do
             elClass "span" "text-xs text-gray-400" $ text "HEAD"
             elClass "div" "text-2xl w-full font-semibold overflow-hidden truncate" $ text name
@@ -230,17 +240,30 @@ activeHeads authenticated lastTagId subscriptions responses = do
         dyn_ $ ffor (Map.null . headStatus_balances <$> hstatus) $ \case
           True -> blank
           False -> do
-            elClass "div" "flex flex-col mt-6" $ do
-              elClass "div" "mt-4 w-full h-px bg-gray-200" blank
-              elClass "span" "mt-2 text-xs text-gray-400" $ text "BALANCES"
-              elClass "div" "mt-1 w-full h-px bg-gray-200" blank
+            elClass "div" "flex flex-col mt-2" $ do
+              elClass "div" "px-4 pt-4" $ do
+                elClass "div" "w-full h-px bg-gray-200" blank
+                elClass "span" "mt-2 text-sm text-gray-400 font-semibold" $ dynText $ ffor isOpen $ \case
+                  True -> "LIVE BALANCES"
+                  False -> "PARTICIPANTS"
+                elClass "div" "mt-1 w-full h-px bg-gray-200" blank
               _ <- listWithKey (headStatus_balances <$> hstatus) $ \addr lovelace -> do
-                elClass "div" "flex flex-row justify-between mb-2 items-baseline" $ do
+                (addrButton, _) <- elClass' "button" "rounded-lg mx-2 px-2 py-1 mb-2 hover:bg-gray-200 active:bg-gray-400 flex flex-row justify-between items-baseline" $ do
                   elClass "div" "font-semibold text-gray-600" $ do
                     text $ T.take 12 addr
-                    text $ "..."
+                    text "..."
                     text $ T.takeEnd 8 addr
-                  elClass "div" "font-bold text-lg text-green-700" $ dynText $ T.pack . printf "%.2f" . lovelaceToAda <$> lovelace
+
+                  elClass "div" "flex flex-row items-baseline" $ do
+                    let
+                      mkAdaClasses b =
+                        mconcat
+                          [ "font-bold text-lg text-green-700 "
+                          , bool "hidden" "" b
+                          ]
+                    elDynClass "div" (mkAdaClasses <$> isOpen) $ dynText $ T.pack . printf "%.2f" . lovelaceToAda <$> lovelace
+                    elClass "span" "ml-2 text-lg material-symbols-rounded" $ text "content_copy"
+                performEvent_ $ copyToClipboard addr <$ domEvent Click addrButton
               pure ()
 
 
@@ -278,6 +301,73 @@ requester lastTagId serverMsg clientMsg = do
 
   tellEvent $ pure <$> clientMsg
   pure properServerMsg
+
+sendFundsInHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+sendFundsInHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Transactions in a Head"
+
+    elClass "p" "" $ do
+      text "Once a Head is Open (All participants have commited UTxOs), you are free to move funds around withing the head by creating transactions."
+      text " You will get BalanceChanged payloads if you are subscribed to the Head, we are using this payload in the Live Documentation to live update the balance of all participants in the Head in the \"Your Heads\" section"
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are sending funds in?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      toAddr <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "to"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the sender?")
+          pure $ _inputElement_value ie
+      fromAddr <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "from"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the recipient?")
+          pure $ _inputElement_value ie
+
+      amount <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "lovelace"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
+          & inputElementConfig_initialValue .~ "3000000"
+        pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
+
+      let
+        mkSubmitHeadTx hname to from lovelace =
+          SubmitHeadTx from (HeadSubmitTx hname to lovelace)
+
+      pure $ mkSubmitHeadTx <$> name <*> toAddr <*> fromAddr <*> amount
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
+
+  pure ()
 
 commitToHead ::
   ( EventWriter t [ClientMsg] m
@@ -319,7 +409,7 @@ commitToHead lastTagId serverMsg = do
         elClass "div" "mx-4" $ text ":"
         ie <- inputElement $ def
           & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
-          & inputElementConfig_initialValue .~ "3000000"
+          & inputElementConfig_initialValue .~ "100000000"
         pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
       pure $ fmap CommitHead $ HeadCommit <$> name <*> addr <*> amount
 
@@ -440,7 +530,7 @@ fundingProxyAddresses lastTagId serverMsg = do
         elClass "div" "mx-4" $ text ":"
         ie <- inputElement $ def
           & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
-          & inputElementConfig_initialValue .~ "3000000"
+          & inputElementConfig_initialValue .~ "100000000"
         pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
 
       pure $ GetAddTx <$> txType <*> addr <*> amount
@@ -739,11 +829,6 @@ theDevnet lastTagId serverMsg = do
           elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in configs/backend/api-key"
 
       Just (Tagged _ msg@(DevnetAddresses addrs)) -> do
-        let
-          copyToClipboard payload = do
-            _ <- liftJSM $ jsg "navigator" ^. js "clipboard" . js1 "writeText" payload
-            pure ()
-
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $
           elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
@@ -999,4 +1084,6 @@ monitorView lastTagId serverMsg = do
     initHead lastTagId serverMsg
 
     commitToHead lastTagId serverMsg
+
+    sendFundsInHead lastTagId serverMsg
   pure ()
