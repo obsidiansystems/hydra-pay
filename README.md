@@ -6,7 +6,7 @@ The **Hydra Pay** project will provide an open-source library and framework for 
 
 This will cover:
 
-* Spinning up a network (This includes starting and managing hydra nodes)
+* Spinning up a network (This includes starting and managing Hydra Nodes)
 * An API to make the common operations simple to execute:
   * Initialization
   * Commiting
@@ -24,14 +24,14 @@ This will cover:
 2. Set up nix caches
     1. If you are running NixOS, add this to `/etc/nixos/configuration.nix`:
         ```nix
-        nix.binaryCaches = [ "s3://obsidian-open-source" ];
-        nix.binaryCachePublicKeys = [ "obsidian-open-source:KP1UbL7OIibSjFo9/2tiHCYLm/gJMfy8Tim7+7P4o0I=" ];
+        nix.binaryCaches = [ "https://nixcache.reflex-frp.org" ];
+        nix.binaryCachePublicKeys = [ "ryantrinkle.com-1:JJiAKaRv9mWgpVAz8dwewnZe0AzzEAzPkagE9SP5NWI=" ];
         ```
         and rebuild your NixOS configuration (e.g. `sudo nixos-rebuild switch`).
     2. If you are using another operating system or Linux distribution, ensure that these lines are present in your Nix configuration file (`/etc/nix/nix.conf` on most systems; [see full list](https://nixos.org/nix/manual/#sec-conf-file)):
         ```nix
-        binary-caches = https://cache.nixos.org s3://obsidian-open-source
-        binary-cache-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= obsidian-open-source:KP1UbL7OIibSjFo9/2tiHCYLm/gJMfy8Tim7+7P4o0I=
+        binary-caches = https://cache.nixos.org https://nixcache.reflex-frp.org
+        binary-cache-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ryantrinkle.com-1:JJiAKaRv9mWgpVAz8dwewnZe0AzzEAzPkagE9SP5NWI=
         binary-caches-parallel-connections = 40
         ```
 
@@ -75,7 +75,7 @@ Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansyste
 
 Once you have Obelisk installed hacking on Hydra Pay is as easy as running `ob run` in the root directory.
 
-Some visual UI like the demo can then be viewed in Chrome at `http://localhost:8000/`.
+The live demo can then be viewed in Chrome at `http://localhost:8000/`.
 
 ## :construction: Under Construction
 
@@ -104,6 +104,8 @@ Foundational:
 - [x] Authentication support
 - [x] Tested on Preview
 - [x] Tested over https and wss
+- [x] Live Documentation
+- [x] Full lifecycle guide
 - [ ] Deployment Guide
 - [ ] Docker Deployment Guide
 - [ ] Best Practices
@@ -158,6 +160,24 @@ Information might include a Head changing state, an error or failure, a restart 
 
 This allows Light Wallet and DApp developers to have their implementation react and respond to these issues in a timely and automatic way.
 
+Example Subscription:
+
+``` json
+{
+    "contents": "test",
+    "tag": "SubscribeTo"
+}
+```
+
+Example Response:
+``` json
+{
+    "contents": "test",
+    "tag": "SubscriptionStarted"
+}
+```
+
+
 ### Authentication
 
 When you launch or deploy a Hydra Pay instance you will need to provide an API Key to authenticate against, this is a secret that should be only known to your DApp/LightWallet and your Hydra Pay instance. 
@@ -192,22 +212,7 @@ This will use the API Key you set up when you deployed the Server.
 
 Example Response:
 ``` json
-{ "tag": "AuthenticationResult", "contents": true }
-```
-
-#### Subscribe to Head
-
-Subscribing to a Head means you are interested in getting timely information about this Head's operation, including state changes, errors, and status updates like snapshot confirmation, node status and restarts. You will recieve *un-tagged* requests on the websocket where you subscribed.
-
-This makes it easier to implement logic where you wait for say a head to close and fanout, without having to poll the socket.
-
-```json
-{ "tag": "SubscribeTo", "contents": "test" }
-```
-
-Example Response:
-``` json
-{ "tag": "SubscriptionStarted", "contents": "test" }
+{ "tag": "AuthResult", "contents": true }
 ```
 
 #### Head Creation
@@ -218,23 +223,18 @@ Creating the head starts the Hydra network.
 Example payload:
 ``` json
 {
-  "headCreate_name": "test",
-  "headCreate_participants": [
-    "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
-  ],
+    "contents": {
+        "headCreate_participants": ["addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"],
+        "headCreate_name": "test"
+    },
+    "tag": "CreateHead"
 }
 ```
 
-#### Head Status
-
-Get the status of the Head on-chain and the status of the network of hydra-nodes.
-
-Example Response:
+Expected Response:
 ``` json
 {
-  "headStatus_name": "test",
-  "headStatus_running": true,
-  "headStatus_status": "Status_Open"
+    "tag": "OperationSuccess"
 }
 ```
 
@@ -245,10 +245,35 @@ Post the inital state of your Head on chain, and start waiting for Commitments f
 Example Payload:
 ``` json
 {
-  "headInit_name": "test",
-  "headInit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
+    "contents": {
+        "headInit_name": "test",
+        "headInit_contestation": 3
+    },
+    "tag": "InitHead"
 }
 ```
+
+Expected Response:
+
+``` json
+{
+    "tag": "OperationSuccess"
+}
+```
+
+### 🦾 Proxy Addresses
+
+Hydra Pay simplifies the creation and management of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
+
+Instead of participating directly in a Head, any participant will actually be mapped to a "Proxy Address". This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head.
+
+We have a couple important reasons for using this Proxy Address mapping:
+
+- More security: Participants no longer need to provide their private keys to the Hydra Node acting on their behalf. This means that developers won't need to ask potential participants for their seed phrase just to be able to join a Head. This keeps in line with the security principle of Hydra: The only funds you can lose are those you commit.
+
+- More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
+
+The proxy address scheme will be updated/deprecated based on future changes to Hydra Pay like the upcoming [Commit from External Wallet](https://github.com/orgs/input-output-hk/projects/21/views/7) on the Hydra roadmap. 
 
 #### Head Commit
 
@@ -257,34 +282,77 @@ Commit the funds at your Proxy Address to the named Head.
 Example Payload:
 ``` json
 {
-  "headCommit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "headCommit_name": "test"
+    "contents": {
+        "headCommit_name": "test",
+        "headCommit_participant": "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a",
+        "headCommit_amount": 100000000
+    },
+    "tag": "CommitHead"
 }
 ```
+
+Expected Response:
+``` json
+{
+    "tag": "OperationSuccess"
+}
+```
+
 
 #### Add Funds
 
 Get a CIP-30 compatible CBOR transaction that will fund your Proxy Address.
 
+Example Payload:
+``` json
+{
+    "contents": [
+        "Funds",
+        "",
+        100000000
+    ],
+    "tag": "GetAddTx"
+}
+```
+
 Example Response:
 ``` json
 {
-  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
-  "type": "TxBodyBabbage",
-  "description": ""
+    "contents": {
+        "type": "Unwitnessed Tx BabbageEra",
+        "cborHex": "Ledger Cddl Format",
+        "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
+    },
+    "tag": "FundsTx"
 }
 ```
 
 #### Add Fuel
 
-Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address. 
+Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address.
+
+Example Payload:
+``` json
+{
+    "contents": [
+        "Fuel",
+        "",
+        100000000
+    ],
+    "tag": "GetAddTx"
+}
+```
+
 
 Example Response:
 ``` json
 {
-  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
-  "type": "TxBodyBabbage",
-  "description": ""
+    "contents": {
+        "type": "Unwitnessed Tx BabbageEra",
+        "cborHex": "Ledger Cddl Format",
+        "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
+    },
+    "tag": "FundsTx"
 }
 ```
 
@@ -295,34 +363,34 @@ Send funds from your Proxy Address to another participant identified by their L1
 Example Payload:
 ``` json
 {
-  "headSubmitTx_name": "test",
-  "headSubmitTx_toAddr": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "amount": 1000000
+    "contents": [
+        "",
+        {
+            "headSubmitTx_name": "test",
+            "headSubmitTx_toAddr": "",
+            "amount": 3000000
+        }
+    ],
+    "tag": "SubmitHeadTx"
 }
-```
-
-#### Query Head Balance
-
-Get the amount of Lovelace available on the head at your (Proxy) Address.
-``` json
-{ "tag" : "GetHeadBalance", "head": "test", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
-```
-
-Example Response:
-``` json
-10000000
 ```
 
 #### Close
 
 Close the head.
 
+Example Payload:
+``` json
+{
+    "contents": "test",
+    "tag": "CloseHead"
+}
+```
+
 Example Response:
 ``` json
 {
-  "headStatus_name": "test",
-  "headStatus_running": true,
-  "headStatus_status": "Status_Closed"
+    "tag": "OperationSuccess"
 }
 ```
 
@@ -332,42 +400,19 @@ Example Response:
 Withdraw funds from your Proxy Address to your main address.
 
 Example Payload:
-
 ``` json
 {
-  "withdraw_address": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "withdraw_amount": "5000000"
+  "tag": "Withdraw"
+  "contents": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
 }
-```
-
-
-#### Query L1 Balance
-
-Get the amount of Lovelace available on the head at your (Proxy) Address on L1.
-
-``` json
-{ "tag" : "GetL1Balance", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
 ``` json
-10000000
+{
+    "tag": "OperationSuccess"
+}
 ```
-
-
-## 🦾 Proxy Addresses
-
-Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
-
-Instead of participating directly in a Head, any participant will actually be mapped to a "Proxy Address". This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head.
-
-We have a couple important reasons for using this Proxy Address mapping:
-
-- More security: Participants no longer need to provide their private keys to the hydra-node acting on their behalf. This means that developers won't need to ask potential participants for their seed phrase just to be able to join a Head. This keeps in line with the security principle of Hydra: The only funds you can lose are those you commit.
-
-- More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
-
-The proxy address scheme will be updated/deprecated based on future changes to Hydra Pay like the upcoming [Incremental De/Commit](https://github.com/orgs/input-output-hk/projects/21) on the Hydra roadmap. 
 
 ## 🤔 FAQ
 
