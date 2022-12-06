@@ -111,11 +111,14 @@ seedTestAddresses cninf faucetKeys amount = do
   where
     path = addressesPath
 
--- TODO: delete this function in favor of keys-as-values
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
-  contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile path
-  pure $ fmap mkKeypair . lookup addr $ contents
+  exists <- doesFileExist path
+  case exists of
+    False -> pure Nothing
+    True -> do
+      contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile path
+      pure $ fmap mkKeypair . lookup addr $ contents
   where
     mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
       where
@@ -286,7 +289,7 @@ queryAddressUTXOs cninf addr = liftIO $ do
                              ]
             <> cardanoNodeArgs cninf)
         { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
-  str <- readCreateProcess queryProc ""
+  (_, str, _) <- readCreateProcessWithExitCode queryProc ""
   pure $ fromMaybe mempty $ decode $ BS.pack str
 
 

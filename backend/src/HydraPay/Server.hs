@@ -10,6 +10,8 @@
 
 module HydraPay.Server where
 
+import System.Exit (ExitCode(..))
+
 import Crypto.Random
 import qualified Data.ByteString.Base64 as Base64
 
@@ -42,8 +44,6 @@ import Network.WebSockets.Client
 
 import Control.Monad.Reader
 import Control.Monad.Fail
-import Control.Applicative
-
 
 import Common.Helpers
 import HydraPay.Api (versionStr)
@@ -176,6 +176,13 @@ data Node = Node
 newtype Network = Network
   { _network_nodes :: Map Address Node
   }
+
+runningDevnet :: MonadIO m => State -> m Bool
+runningDevnet state = do
+  nodeConfig <- liftIO $ fmap cardanoNodeState_nodeType $ readMVar $ _state_cardanoNodeState state
+  pure $ case nodeConfig of
+    CfgDevnet -> True
+    _ -> False
 
 runHydraPay :: (State -> IO a)
   -> IO a
@@ -344,6 +351,46 @@ headBalance state name addr = do
       fullAmount = toInteger $ sum txInAmounts
     pure (Right fullAmount)
 
+headAllBalances :: (MonadIO m) => State -> HeadName -> m (Either HydraPayError (Map Address Lovelace))
+headAllBalances state headname = do
+  mHead <- lookupHead state headname
+  case mHead of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just (Head _ participants _ _) -> do
+      withAnyNode state headname $ \node -> do
+        liftIO $ _node_send_msg node $ GetUTxO
+        c <- liftIO $ _node_get_listen_chan node
+        result <- untilJust $ do
+          x <- liftIO . atomically $ readTChan c
+          case x of
+            GetUTxOResponse utxoz ->
+              Just <$> reverseMapProxyBalances state participants (wholeUtxoToBalanceMap utxoz)
+            CommandFailed {} -> pure $ Just mempty
+            _ -> pure Nothing
+
+        pure $ Right result
+
+-- | Take all the UTxOs and organize them into a map of lovelace balances: Map Address Lovelace
+wholeUtxoToBalanceMap :: WholeUTXO -> Map Address Lovelace
+wholeUtxoToBalanceMap =
+   foldr (\utxo allutxos -> Map.unionWith (+) utxo allutxos) mempty . fmap singletonFromTxInfo . Map.elems
+
+reverseMapProxyBalances :: MonadIO m => State -> Set Address -> Map Address Lovelace -> m (Map Address Lovelace)
+reverseMapProxyBalances state participants headBalance = do
+  reverseMap :: Map Address Address <- fmap mconcat $ for (Set.toList participants) $ \paddr -> do
+    (proxyAddr, _) <- addOrGetKeyInfo state paddr
+    pure $ Map.singleton proxyAddr paddr
+
+  pure $ Map.mapKeys (\proxyKey-> maybe proxyKey id $ Map.lookup proxyKey reverseMap) headBalance
+
+
+singletonFromTxInfo :: TxInInfo -> Map Address Lovelace
+singletonFromTxInfo (TxInInfo addr _ value) =
+  Map.singleton addr $ fromIntegral lovelace
+  where
+    lovelace = maybe 0 id . Map.lookup "lovelace" $ value
+
+
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
 l1Balance state addr includeFuel = do
   hydraInfo <- getHydraSharedInfo state
@@ -369,7 +416,7 @@ getProxyFuel state addr = do
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
-buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
+buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either T.Text Tx)
 buildAddTx tType state fromAddr lovelaceAmount = do
   cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
   utxos <- queryAddressUTXOs cardanoNodeInfo fromAddr
@@ -378,7 +425,7 @@ buildAddTx tType state fromAddr lovelaceAmount = do
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
 
   txBodyPath <- liftIO $ snd <$> getTempPath
-  _ <- liftIO $ readCreateProcess (proc cardanoCliPath
+  (exitCode, output, errorOutput) <- liftIO $ readCreateProcessWithExitCode (proc cardanoCliPath
                        (filter (/= "") $ [ "transaction"
                         , "build"
                         , "--babbage-era"
@@ -402,10 +449,15 @@ buildAddTx tType state fromAddr lovelaceAmount = do
                         ])) { env = Just [( "CARDANO_NODE_SOCKET_PATH"
                                           , _nodeSocket cardanoNodeInfo)] }
     ""
-  txResult <- liftIO $ readFile txBodyPath
-  case Aeson.decode $ LBS.pack txResult of
-    Just tx -> pure $ Right tx
-    Nothing -> pure $ Left FailedToBuildFundsTx
+
+  case exitCode of
+    ExitSuccess -> do
+      txResult <- liftIO $ readFile txBodyPath
+      case Aeson.decode $ LBS.pack txResult of
+        Just tx -> pure $ Right tx
+        Nothing -> pure $ Left $ "Failed to read tx file at " <> T.pack txBodyPath
+    _ -> pure $ Left $ "Cardano CLI: " <> T.pack errorOutput
+
 
 -- TODO: HydraPayError is too flat
 -- TODO: Add a reader data type for State
@@ -443,11 +495,17 @@ withAnyNode state name f = do
       Nothing -> pure $ Left NotAParticipant
       Just node -> f node
 
-initHead :: MonadIO m => State -> HeadInit -> m (Either HydraPayError ())
-initHead state (HeadInit name _ con) = do
-  (fmap.fmap) (const ()) $ sendToHeadAndWaitFor (Init $ fromIntegral con) (\case
+initHead :: MonadIO m => State -> HeadInit -> m (Either T.Text ())
+initHead state (HeadInit name con) = do
+  result <- sendToHeadAndWaitForOutput (Init $ fromIntegral con) (\case
     ReadyToCommit {} -> True
+    PostTxOnChainFailed {} -> True
     _ -> False) state name
+
+  case result of
+    Right (ReadyToCommit {}) -> pure $ Right ()
+    Right (PostTxOnChainFailed {}) -> pure $ Left "Failed to submit tx, check participants fuel"
+    Left err -> pure $ Left $ tShow err
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -508,6 +566,27 @@ sendToHeadAndWaitFor ci fso state headName = do
       statusResult <- getHeadStatus state headName
       pure $ statusResult
 
+sendToHeadAndWaitForOutput :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError (ServerOutput Value))
+sendToHeadAndWaitForOutput ci fso state headName = do
+  mNetwork <- getNetwork state headName
+  case mNetwork of
+    Nothing -> pure $ Left HeadDoesn'tExist
+    Just network -> do
+      -- TODO: Round robin to prevent exhausting gas of the first participant!
+      let firstNode = head $ Map.elems $ _network_nodes network
+          sendMsg = _node_send_msg firstNode
+          getChan = _node_get_listen_chan firstNode
+      liftIO $ do
+        channel <- getChan
+        sendMsg ci
+        let
+          waitForCloseHandler = do
+            output <- atomically $ readTChan channel
+            case (fso output) of
+              True  -> pure $ Right output
+              _ -> waitForCloseHandler
+        waitForCloseHandler
+
 commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
 commitToHead state (HeadCommit name addr lovelaceAmount) = do
   withNode state name addr $ \node proxyAddr -> do
@@ -525,6 +604,7 @@ commitToHead state (HeadCommit name addr lovelaceAmount) = do
       False -> do
         sendToNodeAndListen node (Commit proxyFunds) $ (\case
           Committed {} -> Just $ Right ()
+          PostTxOnChainFailed {} -> Just $ Left NodeCommandFailed
           CommandFailed {} -> Just $ Left NodeCommandFailed
           _ -> Nothing)
         where
@@ -573,6 +653,7 @@ getNodeUtxos node proxyAddr = do
     case x of
       GetUTxOResponse utxoz -> do
         pure $ Just (filterUtxos proxyAddr utxoz)
+      CommandFailed {} -> pure $ Just mempty
       _ -> pure Nothing
 
 
@@ -605,6 +686,16 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
         ServerOutput.TxInvalid theUtxo tx valError ->
           pure $ Left (HydraPay.Api.TxInvalid theUtxo tx valError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
         _ -> pure Nothing
+
+-- | Send a Server Message to all subscribers of a particular Head
+broadcastToSubscribers :: MonadIO m => State -> HeadName -> ServerMsg -> m ()
+broadcastToSubscribers state hname msg = do
+  subsPerHead <- liftIO $ readMVar (_state_subscribers state)
+  case Map.lookup hname subsPerHead of
+    Nothing -> pure ()
+    Just subs -> liftIO $ do
+      for_ subs $ \subConn ->
+        WS.sendTextData subConn . Aeson.encode $ msg
 
 removeHead :: (MonadIO m) => State -> HeadName -> m ()
 removeHead state name = do
@@ -646,9 +737,18 @@ getHeadStatus state name = liftIO $ do
   mHead <- lookupHead state name
   case mHead of
     Nothing -> pure $ Left HeadDoesn'tExist
-    Just (Head hname _ status _) -> do
+    Just (Head hname participants status _) -> do
       running <- isJust <$> getNetwork state hname
-      pure $ Right $ HeadStatus hname running status
+
+      -- Balances only really exist/are relevant during the Open phase
+      -- don't even query them otherwise
+      balances <- case status of
+        Status_Open -> do
+          headAllBalances state name
+        _ -> do
+          pure $ Right $ Map.fromList $ fmap (,0) $ Set.toList participants
+
+      pure $ HeadStatus hname running status <$> balances
 
 
 -- | Wait for a head to change to or past a state. Returns 'Nothing'
@@ -711,17 +811,18 @@ startNetwork state (Head name participants _ statusBTChan) = do
             -- Start accepting messages
             forever $ do
               msg <- getParsedMsg
+              -- Process state changes and balance changes
               let handleMsg = \case
-                    ReadyToCommit {} -> Just Status_Init
-                    Committed {} -> Just Status_Committing
-                    HeadIsOpen {} -> Just Status_Open
-                    HeadIsClosed {} -> Just Status_Closed
-                    ReadyToFanout {} -> Just Status_Fanout
-                    HeadIsAborted {} -> Nothing
-                    HeadIsFinalized {} -> Just Status_Finalized
-                    _ -> Nothing
+                    ReadyToCommit {} -> (Just Status_Init, Nothing)
+                    Committed {} -> (Just Status_Committing, Nothing)
+                    HeadIsOpen utxoz -> (Just Status_Open, Just utxoz)
+                    HeadIsClosed {} -> (Just Status_Closed, Nothing)
+                    ReadyToFanout {} -> (Just Status_Fanout, Nothing)
+                    HeadIsAborted {} -> (Nothing, Nothing)
+                    HeadIsFinalized utxoz -> (Just Status_Finalized, Just utxoz)
+                    _ -> (Nothing, Nothing)
               case handleMsg msg of
-                Just status -> do
+                (Just status, mbalance) -> do
                   liftIO $ modifyMVar_ (_state_heads state) $ \current -> do
                     case _head_status <$> Map.lookup name current of
                       Just currentStatus -> do
@@ -738,9 +839,15 @@ startNetwork state (Head name participants _ statusBTChan) = do
                   case Map.lookup name subsPerHead of
                     Nothing -> pure ()
                     Just subs -> liftIO $ do
-                      for_ subs $ \subConn -> WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status
+                      for_ subs $ \subConn -> do
+                        mappedBalance <- case mbalance of
+                          Just balance -> do
+                            reverseMapProxyBalances state participants $ wholeUtxoToBalanceMap balance
+                          Nothing -> do
+                            pure $ Map.fromList $ fmap (,0) $ Set.toList participants
+                        WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status mappedBalance
                   pure ()
-                Nothing -> pure ()
+                (Nothing, _) -> pure ()
               liftIO $ atomically $ writeTChan bRcvChan msg
         pure $ Node
           { _node_handle = processHndl
@@ -940,11 +1047,18 @@ handleClientMessage conn state = \case
       Left err -> ServerError err
       Right balance -> HeadBalance balance
 
-  SubmitHeadTx addr hstx -> do
+  SubmitHeadTx addr hstx@(HeadSubmitTx hname _ _) -> do
     result <- submitTxOnHead state addr hstx
-    pure $ case result of
-      Left err -> ServerError err
-      Right pico -> TxConfirmed pico
+    case result of
+      Left err -> pure $ ServerError err
+      Right pico -> do
+        ebs <- headAllBalances state hname
+        case ebs of
+          Left _ ->
+            logWarning $ "Failed to get Whole UTxO for head : " <> pretty hname <> " even though the a transaction successfully submitted..."
+          Right bs ->
+            broadcastToSubscribers state hname $ BalanceChange hname bs
+        pure $ TxConfirmed pico
 
   GetL1Balance addr -> do
     L1Balance <$> l1Balance state addr False
@@ -988,6 +1102,19 @@ handleClientMessage conn state = \case
     liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
     pure $ SubscriptionStarted name
 
+  LiveDocEzSubmitTx tx address -> do
+    isDevnet <- runningDevnet state
+    case isDevnet of
+      False -> pure $ ApiError "This endpoint is only available when Hydra Pay is running a Devnet"
+      True -> do
+        mKeys <- liftIO $ getTestAddressKeys address
+        case mKeys of
+          Nothing -> pure $ ApiError "Address is not a Devnet test address"
+          Just (KeyPair sk _) -> do
+            cardanoNodeInfo <- stateCardanoNodeInfo state
+            liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
+            pure OperationSuccess
+
   ClientHello -> pure $ ServerHello versionStr
 
   Withdraw addr -> do
@@ -1002,20 +1129,23 @@ handleClientMessage conn state = \case
 
   GetAddTx txtype addr lovelaceAmount -> do
     result <- buildAddTx txtype state addr lovelaceAmount
-    pure $ either ServerError FundsTx result
+    pure $ either ApiError FundsTx result
 
   CheckFuel addr -> do
     -- Calc the fuel amount
     fuel <- getProxyFuel state addr
     pure $ FuelAmount fuel
 
-  CreateHead hc -> do
+  CreateHead hc@(HeadCreate name _) -> do
     result <- createHead state hc
-    pure $ either ServerError (const OperationSuccess) result
+    case result of
+      Left err -> pure $ ServerError err
+      Right _ ->
+        either ServerError HeadInfo <$> getHeadStatus state name
 
   InitHead hi -> do
     result <- initHead state hi
-    pure $ either ServerError (const OperationSuccess) result
+    pure $ either ApiError (const OperationSuccess) result
 
   CommitHead hc -> do
     result <- commitToHead state hc
@@ -1035,7 +1165,8 @@ handleClientMessage conn state = \case
 
   TearDownHead name -> do
     removeHead state name
-    pure $ OperationSuccess
+    broadcastToSubscribers state name $ HeadRemoved name
+    pure $ HeadRemoved name
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a
@@ -1049,17 +1180,10 @@ newtype HydraPayClient a = HydraPayClient
 
 data ClientState = ClientState
   { clientState_connection :: WS.Connection
-  , clientState_inbox :: TChan Msg
+  , clientState_inbox :: TChan ApiMsg
   , clientState_msgs :: TChan ServerMsg
   , clientState_nextId :: MVar Int64
   }
-
-data Msg
-  = TaggedMsg (Tagged ServerMsg)
-  | PlainMsg ServerMsg
-
-instance FromJSON Msg where
-  parseJSON v = (TaggedMsg <$> parseJSON v) <|> (PlainMsg <$> parseJSON v)
 
 runHydraPayClient :: BS.ByteString -> HydraPayClient a -> IO (Maybe a)
 runHydraPayClient apiKey action = do
@@ -1069,7 +1193,7 @@ runHydraPayClient apiKey action = do
   WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
     -- We have a read thread that is centralized so we don't miss any messages
     _ <- forkIO $ forever $ do
-      mMsg :: Maybe Msg <- Aeson.decode <$> WS.receiveData conn
+      mMsg :: Maybe ApiMsg <- Aeson.decode <$> WS.receiveData conn
       case mMsg of
         Just (PlainMsg p) -> do
           atomically $ writeTChan msgsChannel p
@@ -1103,5 +1227,5 @@ waitForHeadOpen hname = HydraPayClient . MaybeT . ReaderT $ \(ClientState _ _ bo
     checkForOpenStatus box = do
       msg <- atomically $ readTChan box
       case msg of
-        HeadStatusChanged name Status_Open | name == hname -> pure ()
+        HeadStatusChanged name Status_Open _ | name == hname -> pure ()
         _ -> checkForOpenStatus box

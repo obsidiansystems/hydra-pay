@@ -11,10 +11,21 @@ where
 
 import Prelude hiding (filter)
 
+import Text.Printf (printf)
+import Data.Foldable
+
+import Data.Map (Map)
+import qualified Data.Map as Map
+
+import Data.Set (Set)
+import qualified Data.Set as Set
+
 import Data.Int
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Aeson.Encode.Pretty as Aeson
+
+import Control.Monad (join, (<=<))
 
 import Hydra.Types
 import HydraPay.Api
@@ -29,6 +40,7 @@ import Obelisk.Route
 
 import Reflex.Dom.Core
 import Common.Route
+import Common.Helpers
 
 import Control.Lens
 import Control.Monad.Fix
@@ -51,23 +63,309 @@ frontend = Frontend
       elAttr "link" ("rel" =: "preconnect" <> "href" =: "https://fonts.gstatic.com") blank
       elAttr "link" ("href"=:"https://fonts.googleapis.com/css2?family=Inria+Sans:wght@300&family=Inter:wght@100;200;300;400;500;600;700;800;900&family=Krona+One&family=Rajdhani:wght@300;400;500;600;700&display=swap" <> "rel"=:"stylesheet") blank
       elAttr "link" ("rel"=:"stylesheet" <> "href"=:"https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@48,400,0,0") blank
-      -- elAttr "link" ("href" =: $(static "main.css") <> "type" =: "text/css" <> "rel" =: "stylesheet") blank
       elAttr "script" ("src"=:"https://cdn.tailwindcss.com") blank
 
       -- Highlight JS for syntax highlighting
       elAttr "link" ("rel" =: "stylesheet" <> "href" =: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/styles/default.min.css") blank
       elAttr "script" ("src" =: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/highlight.min.js") blank
 
-  , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-y-scroll overflow-x-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $
-      elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto p-4 rounded flex flex-col" monitorView
+  , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $ do
+      prerender_ (text "Loading Live Documentation") $ do
+        endpoint <- liftJSM $ do
+          let
+            webSocketProtocol :: T.Text -> T.Text
+            webSocketProtocol "https:" = "wss:"
+            webSocketProtocol _ = "ws:"
+
+          wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+
+          theHostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
+          thePort <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+
+          pure $ mconcat [ wsProtocol
+                       , "//"
+                       , theHostname
+                       , ":"
+                       , thePort
+                       , "/hydra/api"
+                       ]
+        rec
+          lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
+
+          authenticated <- holdDyn False authResponse
+          let
+            sendToHydraPay =
+              attachWith (\tid msgs -> uncurry Tagged <$> zip [tid..] msgs) (current lastTagId) sendMsg
+
+            serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+
+            subscriptions = fmapMaybe (preview _PlainMsg) serverMsg
+            responses = fmapMaybe (preview _TaggedMsg) serverMsg
+
+            authResponse = fmapMaybe (preview (_AuthResult) . tagged_payload) responses
+
+          rws :: RawWebSocket t (Maybe ApiMsg) <- jsonWebSocket endpoint $ def
+            & webSocketConfig_send .~ sendToHydraPay
+
+          (_, sendMsg :: Event t [ClientMsg]) <- runEventWriterT $ elClass "div" "w-full h-full flex flex-row text-gray-700" $ do
+            activeHeads authenticated lastTagId subscriptions responses
+            monitorView lastTagId responses
+            elClass "div" "flex-grow" $ elClass "div" "max-w-lg" blank
+        pure ()
   }
 
-data DemoTx = DemoTx
-  { demoTx_to :: T.Text
-  , demoTx_amount :: Lovelace
-  , demoTx_time :: Pico
+data ResponseStatus
+  = Standby
+  | WaitingOnResponse
+  | GotResponse (Tagged ServerMsg)
+
+data TrySectionConfig t m = TrySectionConfig
+  { trySection_payloadInput :: m (Dynamic t ClientMsg)
+  , trySection_example :: m ()
+  , trySection_genHelpfulErrorText :: ServerMsg -> Maybe T.Text
+  , trySection_extraStuff :: Dynamic t ClientMsg -> ServerMsg -> m ()
   }
-  deriving (Eq, Show)
+
+copyToClipboard :: MonadJSM m => T.Text -> m ()
+copyToClipboard payload = do
+  _ <- liftJSM $ jsg "navigator" ^. js "clipboard" . js1 "writeText" payload
+  pure ()
+
+trySection ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> TrySectionConfig t m ->  m ()
+trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorText extraStuff) = do
+  elClass "div" "p-4 bg-white rounded flex flex-col" $ do
+    (tryButtonClick, request) <- elClass "div" "flex flex-row justify-between mb-4" $ do
+      req <- payloadInput
+      (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
+      pure (domEvent Click tryEl, req)
+
+    elClass "div" "" $ do
+      elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+        rec
+          (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
+            elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
+              elClass "span" "text-sm material-symbols-rounded" $ dynText $ ffor showTagged $ \case
+                True -> "done"
+                False -> ""
+            elClass "div" "" $ text "Show Tagged"
+          showTagged <- toggle False $ domEvent Click taggedToggle
+
+        let
+          reqJson = ffor3 showTagged lastTagId request $ \tagged nid req ->
+            case tagged of
+              True -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ Tagged nid req
+              False -> decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ req
+
+        dynText reqJson
+
+    let
+      fireRequest = current request <@ tryButtonClick
+
+    properServerMsg <- requester lastTagId serverMsg fireRequest
+
+    response <- holdDyn Standby $ mergeWith const $ [WaitingOnResponse <$ fireRequest, GotResponse <$> properServerMsg]
+
+    dyn_ $ ffor response $ \case
+      GotResponse (Tagged _ msg) -> do
+        elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
+        elClass "div" "" $ do
+          elClass "pre" "overflow-y-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+            text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+
+          case genErrorText msg of
+            Just errMsg -> elClass "div" "text-sm font-semibold text-red-400" $ text errMsg
+            Nothing -> blank
+
+        extraStuff request msg
+
+      WaitingOnResponse -> do
+        elClass "div" "font-semibold mt-4" $ text "Waiting for Response..."
+        elClass "div" "" $
+          elClass "pre" "animate-pulse relative rounded-lg px-4 py-8 border bg-gray-900 text-green-500" blank
+
+      Standby -> blank
+
+    example
+  pure ()
+
+removeHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  , MonadJSM (Performable m)
+  , PerformEvent t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+removeHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Removing a Head"
+
+    elClass "p" "" $ do
+      text "Once your Head is finalized, and your DApp no longer needs access to the Head information, you can remove the Head from Hydra Pay."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head would you like close?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      pure $ TearDownHead <$> name
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse $ HeadRemoved "test")
+    (const Nothing)
+    noExtra
+
+closeHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  , MonadJSM (Performable m)
+  , PerformEvent t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+closeHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Closing a Head"
+
+    elClass "p" "" $ do
+      text "After you have done all the transactions you needed to in the Hydra Head, you can close it and when Hydra Pay detects the Fanout period has occurred, it will Fanout your Head for you Automatically."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head would you like close?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      pure $ CloseHead <$> name
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
+
+activeHeads ::
+  ( PostBuild t m
+  , DomBuilder t m
+  , PerformEvent t m
+  , MonadJSM (Performable m)
+  , MonadHold t m
+  , MonadFix m
+  ) => Dynamic t Bool -> Dynamic t Int64 -> Event t (ServerMsg) -> Event t (Tagged ServerMsg) -> m ()
+activeHeads authenticated lastTagId subscriptions responses = do
+  elClass "div" "flex-grow p-4" $ elClass "div" "max-w-lg" $ do
+    header "Your Heads"
+
+    dyn_ $ ffor authenticated $ \case
+      False -> elClass "span" "text-gray-400" $ text "Authenticate to monitor heads"
+      True -> do
+        subscribed <- foldDyn ($)  (mempty :: Set T.Text) $ Set.insert <$> startedSubscription
+        heads <- foldDyn ($) (mempty :: Map T.Text HeadStatus) $
+          mergeWith (.) [ uncurry Map.insert <$> gotHeadInfo
+                        , (\(hname, status, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_status = status
+                                                                                         , headStatus_balances =
+                                                                                            Map.union balances (headStatus_balances hstatus)
+                                                                                         }
+                                                                    ) hname) <$> statusChange
+                        , (\(hname, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_balances =
+                                                                                     Map.union balances (headStatus_balances hstatus)
+                                                                                 }) hname) <$> balanceChange
+                        , Map.delete <$> headGone
+                        ]
+        _ <- listWithKey heads (headStatusWidget subscribed)
+        pure ()
+  where
+    headStatusWidget subs name hstatus = do
+      let
+        isOpen = (== Status_Open) . headStatus_status <$> hstatus
+
+      elClass "div" "w-full rounded-lg mb-4 shadow-md bg-white flex flex-col" $ do
+        elClass "div" "flex p-4 flex-row" $ do
+          elClass "div" "leading-none pr-4 border-r-2 overflow-hidden" $ do
+            elClass "span" "text-xs text-gray-400" $ text "HEAD"
+            elClass "div" "text-2xl w-full font-semibold overflow-hidden truncate" $ text name
+          elClass "div" "pl-4 flex flex-col flex-grow flex-shrink-0" $ do
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Status"
+              elClass "span" "text-green-500" $ dynText $ prettyStatus . headStatus_status <$> hstatus
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Network Running"
+              elClass "span" "text-green-500" $ dynText $ tShow . headStatus_running <$> hstatus
+            elClass "div" "flex flex-row justify-between items-center" $ do
+              elClass "span" "text-gray-400 mr-16" $ text "Subscribed"
+
+              let
+                mkClasses = bool "text-red-500" "text-green-500"
+                isSubbedToHead = Set.member name <$> subs
+              elDynClass "span" (mkClasses <$> isSubbedToHead) $ dynText $ tShow <$> isSubbedToHead
+
+        dyn_ $ ffor (Map.null . headStatus_balances <$> hstatus) $ \case
+          True -> blank
+          False -> do
+            elClass "div" "flex flex-col mt-2" $ do
+              elClass "div" "px-4 pt-4" $ do
+                elClass "div" "w-full h-px bg-gray-200" blank
+                elClass "span" "mt-2 text-sm text-gray-400 font-semibold" $ dynText $ ffor isOpen $ \case
+                  True -> "LIVE BALANCES"
+                  False -> "PARTICIPANTS"
+                elClass "div" "mt-1 w-full h-px bg-gray-200" blank
+              _ <- listWithKey (headStatus_balances <$> hstatus) $ \addr lovelace -> do
+                (addrButton, _) <- elClass' "button" "rounded-lg mx-2 px-2 py-1 mb-2 hover:bg-gray-200 active:bg-gray-400 flex flex-row justify-between items-baseline" $ do
+                  elClass "div" "font-semibold text-gray-600" $ do
+                    text $ T.take 12 addr
+                    text "..."
+                    text $ T.takeEnd 8 addr
+
+                  elClass "div" "flex flex-row items-baseline" $ do
+                    let
+                      mkAdaClasses b =
+                        mconcat
+                          [ "font-bold text-lg text-green-700 "
+                          , bool "hidden" "" b
+                          ]
+                    elDynClass "div" (mkAdaClasses <$> isOpen) $ dynText $ T.pack . printf "%.2f" . lovelaceToAda <$> lovelace
+                    elClass "span" "ml-2 text-lg material-symbols-rounded" $ text "content_copy"
+                performEvent_ $ copyToClipboard addr <$ domEvent Click addrButton
+              pure ()
+
+
+    untagged = tagged_payload <$> responses
+
+    gotHeadInfo = fmap (\hs -> (headStatus_name hs, hs)) $ fmapMaybe (preview _HeadInfo) untagged
+    startedSubscription = fmapMaybe (preview _SubscriptionStarted) untagged
+    statusChange = fmapMaybe (preview _HeadStatusChanged) subscriptions
+    balanceChange = fmapMaybe (preview _BalanceChange) subscriptions
+    headGone = fmapMaybe (preview _HeadRemoved) subscriptions
+
+    prettyStatus = \case
+      Status_Pending -> "Pending"
+      Status_Init -> "Initialized"
+      Status_Committing -> "Waiting for Commits"
+      Status_Open -> "Open"
+      Status_Closed -> "Closed"
+      Status_Fanout -> "Fanning Out"
+      Status_Finalized -> "Finalized"
 
 header :: DomBuilder t m => T.Text -> m ()
 header name = do
@@ -88,11 +386,360 @@ requester lastTagId serverMsg clientMsg = do
   tellEvent $ pure <$> clientMsg
   pure properServerMsg
 
+sendFundsInHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+sendFundsInHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Transactions in a Head"
 
-data ResponseStatus
-  = Standby
-  | WaitingOnResponse
-  | GotResponse (Tagged ServerMsg)
+    elClass "p" "" $ do
+      text "Once a Head is Open (All participants have commited UTxOs), you are free to move funds around withing the head by creating transactions."
+      text " You will get BalanceChanged payloads if you are subscribed to the Head, we are using this payload in the Live Documentation to live update the balance of all participants in the Head in the \"Your Heads\" section"
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are sending funds in?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      toAddr <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "to"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the sender?")
+          pure $ _inputElement_value ie
+      fromAddr <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "from"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the recipient?")
+          pure $ _inputElement_value ie
+
+      amount <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "lovelace"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
+          & inputElementConfig_initialValue .~ "3000000"
+        pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
+
+      let
+        mkSubmitHeadTx hname to from lovelace =
+          SubmitHeadTx from (HeadSubmitTx hname to lovelace)
+
+      pure $ mkSubmitHeadTx <$> name <*> toAddr <*> fromAddr <*> amount
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (exampleResponse $ TxConfirmed 0.001)
+    (const Nothing)
+    noExtra
+
+  pure ()
+
+commitToHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+commitToHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Committing to a Head"
+
+    elClass "p" "" $ do
+      text "Once a Head is initialized each Participant must commit funds to be used within it."
+      text " The participant committing to the Head must have an ouptut that matches the amount you put"
+      elClass "span" "italic" $ text " exactly."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are you Initializing?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      addr <- elClass "div" "ml-4 flex flex-row mb-4" $ do
+        elClass "div" "mr-2" $ text "address"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Committer address")
+        pure $ _inputElement_value ie
+      amount <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "lovelace"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
+          & inputElementConfig_initialValue .~ "100000000"
+        pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
+      pure $ fmap CommitHead $ HeadCommit <$> name <*> addr <*> amount
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
+
+  pure ()
+
+initHead ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+initHead lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Initializing The Head"
+
+    elClass "p" "" $ do
+      text "The next step, once we have fuel and funds for all our participants, is to initialize a Head."
+      text " This creates an L1 transaction (using fuel given to a Proxy Address) that places the initial head state on chain."
+
+  let
+    input = payloadInput $ do
+      name <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "head name"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        elClass "div" "flex flex-col" $ do
+          ie <- inputElement $ def
+            & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which Head are you Initializing?")
+            & inputElementConfig_initialValue .~ "test"
+          pure $ _inputElement_value ie
+      contestationPeriod <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "contestation period (seconds)"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Time in seconds")
+          & inputElementConfig_initialValue .~ "3"
+        pure $ maybe 3 id . readMaybe . T.unpack <$> _inputElement_value ie
+      pure $ fmap InitHead $ HeadInit <$> name <*> contestationPeriod
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (expectedResponse OperationSuccess)
+    (const Nothing)
+    noExtra
+
+  pure ()
+
+fundingProxyAddresses ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+fundingProxyAddresses lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Proxy Addresses"
+
+    elClass "p" "" $ do
+      text "Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers."
+      text " One way we aid feature creation is through our Proxy Address structure."
+      el "br" blank
+      el "br" blank
+      text "Instead of participating directly in a Head, any participant will actually be mapped to a \"Proxy Address\"."
+      text " This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head."
+
+  elClass "div" "px-4 pb-4" $ do
+    header "Funding Proxy Addresses | Funds & Fuel"
+
+    elClass "p" "" $ do
+      text "To participate in a Hydra Pay managed Head you need to transfer funds to your Proxy Address, you must transfer both Funds and Fuel."
+      el "br" blank
+      el "br" blank
+      hintText $ text "Hydra Pay manages its own devnet, so we can conveniently allow you to submit transactions for testing purposes, give it a try!"
+
+  let
+    input = payloadInput $ do
+      rec
+        txType <- holdDyn Funds changeType
+        changeType <- elClass "div" "ml-4 flex flex-row items-center mb-2" $ do
+          elClass "div" "mr-2" $ text "tx type"
+          elClass "div" "font-semibold text-orange-400" $ text "String"
+          elClass "div" "mx-4" $ text ":"
+          elClass "div" "flex flex-row items-stretch rounded-lg border-green-600 border-2" $ do
+            let
+              mkClasses b =
+                mconcat [ "text-white flex-grow-0 px-4 py-1 text-center font-bold "
+                        , bool "text-green-600" "text-white bg-green-400" b
+                        ]
+
+              currentlyFunds = (Funds ==) <$> txType
+              currentlyFuel = (Fuel ==) <$> txType
+
+            (fundsButton, _) <- elDynClass' "button" (mkClasses <$> currentlyFunds) $ text "Funds"
+            elClass "div" "w-px bg-green-600" blank
+            (fuelButton, _) <- elDynClass' "button" (mkClasses <$> currentlyFuel) $ text "Fuel"
+            pure $ leftmost [Funds <$ domEvent Click fundsButton, Fuel <$ domEvent Click fuelButton]
+      addr <- elClass "div" "ml-4 flex flex-row mb-4" $ do
+        elClass "div" "mr-2" $ text "address"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which address will you add funds from")
+        pure $ _inputElement_value ie
+      amount <- elClass "div" "ml-4 flex flex-row" $ do
+        elClass "div" "mr-2" $ text "lovelace"
+        elClass "div" "font-semibold text-orange-400" $ text "Number"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Amount in lovelace")
+          & inputElementConfig_initialValue .~ "100000000"
+        pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
+
+      pure $ GetAddTx <$> txType <*> addr <*> amount
+
+  let
+    submitTxButton req = \case
+      FundsTx tx -> elClass "div" "mt-4" $ do
+        rec
+          let
+            submit = current (LiveDocEzSubmitTx tx <$> properReq) <@ clickedSubmit
+            submitFailureMessage = ffor (tagged_payload <$> properServerMsg) $ \case
+              OperationSuccess -> Nothing
+              ApiError err -> Just err
+              ServerError err -> Just $ tShow err
+              _ -> Just "An Unknown Error Occured"
+
+          submitStatus <- holdDyn TxNotSubmitted $ leftmost [TxDone <$ properServerMsg, TxSubmitting <$ submit]
+          errorMsg <- holdDyn Nothing submitFailureMessage
+          clickedSubmit <- elClass "div" "" $ do
+            evEv <- dyn $ ffor submitStatus $ \case
+              TxSubmitting -> do
+                elClass "div" "text-green-600 font-semibold" $ text "Submitting Transaction on Devnet..."
+                pure never
+              TxNotSubmitted -> do
+                (submitButton, _) <- elClass' "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Submit Tx"
+                pure $ domEvent Click submitButton
+              TxDone -> do
+                dyn_ $ ffor errorMsg $ \case
+                  Nothing -> elClass "div" "text-green-600 font-semibold" $ text "Tx Submitted"
+                  Just msg -> elClass "div" "text-sm font-semibold text-red-400" $ do
+                    text "Tx Failed: "
+                    text msg
+
+                    text " generate a new tx if you have submitted one recently, or restart hydra-pay"
+                pure never
+
+            switchHold never evEv
+          properServerMsg <- requester lastTagId serverMsg submit
+        pure ()
+
+      _ -> blank
+      where
+        properReq = ffor req $ \case
+          GetAddTx _ addr _ -> addr
+          _ -> ""
+  
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (exampleResponse $ FundsTx $ Tx
+    "Unwitnessed Tx BabbageEra"
+    "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
+    "Ledger Cddl Format"
+    )
+    (const Nothing)
+    submitTxButton
+
+  pure ()
+
+data SubmitStatus
+  = TxNotSubmitted
+  | TxSubmitting
+  | TxDone
+
+payloadInput :: DomBuilder t m => m a -> m a
+payloadInput input = do
+  elClass "div" "flex flex-row justify-between mb-4" $
+    elClass "div" "flex flex-col" $ do
+    elClass "div" "font-semibold flex flex-row" $ do
+      elClass "div" "mr-2" $ text "Payload"
+      elClass "div" "text-green-400" $ text "Object"
+    input
+
+hintText :: DomBuilder t m => m a -> m a
+hintText action = do
+  elClass "span" "text-gray-400 font-semibold italic" action
+
+subscribeTo ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+subscribeTo lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Subscribing to State Changes"
+
+    elClass "p" "" $ do
+      text "A lot of the time the logic for your DApp or Light Wallet will include waiting for certain state changes to take place."
+      text " To be convenient for developers and to avoid unecessary complications and resource usage of polling, you can subscribe to state changes of certain heads"
+      text " For example if you create a head you should subscribe to it."
+      el "br" blank
+      el "br" blank
+      hintText $ text "When you subscribe to updates for a head in the live documentation, we will automatically update the view in \"Your Heads\""
+
+  let
+    input = do
+      elClass "div" "flex flex-row justify-between mb-4" $
+        elClass "div" "flex flex-col" $ do
+        elClass "div" "font-semibold flex flex-row" $ do
+          elClass "div" "mr-2" $ text "Payload"
+          elClass "div" "text-green-400" $ text "Object"
+
+        name <- elClass "div" "ml-4 flex flex-row" $ do
+          elClass "div" "mr-2" $ text "contents"
+          elClass "div" "font-semibold text-orange-400" $ text "String"
+          elClass "div" "mx-4" $ text ":"
+          elClass "div" "flex flex-col" $ do
+            ie <- inputElement $ def
+              & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which head would you like to monitor?")
+              & inputElementConfig_initialValue .~ "test"
+            pure $ _inputElement_value ie
+
+        pure $ SubscribeTo <$> name
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (exampleResponse $ SubscriptionStarted "test")
+    (const Nothing)
+    noExtra
+
+noExtra :: Monad m => a -> b -> m ()
+noExtra _ _ = blank
 
 headCreation ::
   ( EventWriter t [ClientMsg] m
@@ -273,14 +920,17 @@ theDevnet lastTagId serverMsg = do
               elClass "div" "p-2 rounded active:bg-white/30 hover:bg-gray-400/30 bg-black/30 flex justify-center items-center text-center" $ do
                 elClass "span" "text-3xl material-symbols-rounded" $ text "content_copy"
 
-            let
-              copyToClipboard = do
-                _ <- liftJSM $ jsg "navigator" ^. js "clipboard" . js1 "writeText" (T.intercalate "\n" addrs)
-                pure ()
-
-            performEvent_ $ copyToClipboard <$ domEvent Click copyButton
+            performEvent_ $ copyToClipboard (T.intercalate "\n" addrs) <$ domEvent Click copyButton
 
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
+        elClass "div" "mt-4" $ do
+          for_ (zip [1..] addrs) $ \(n :: Integer, addr) -> do
+            (addrButton, _) <- elClass' "button" "w-full hover:bg-gray-200 active:bg-gray-700 active:text-white mb-2 px-2 py-1 border rounded-md font-semibold text-md flex flex-row items-center justify-between" $ do
+              elClass "div" "" $ do
+                elClass "span" "font-bold mr-2" $ text $ tShow n
+                text addr
+              elClass "span" "text-2xl material-symbols-rounded" $ text "content_copy"
+            performEvent_ $ copyToClipboard addr <$ domEvent Click addrButton
 
       Just (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
@@ -373,11 +1023,14 @@ responseVisualizer name msg = do
 
   elClass "div" "font-semibold mt-4 mb-2" $ text name
   elClass "div" "" $
-    elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
+    elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
     text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
 expectedResponse :: DomBuilder t m => ServerMsg -> m ()
 expectedResponse = responseVisualizer "Expected Response"
+
+exampleResponse :: DomBuilder t m => ServerMsg -> m ()
+exampleResponse = responseVisualizer "Example Response"
 
 authentication ::
   ( EventWriter t [ClientMsg] m
@@ -460,80 +1113,65 @@ authentication lastTagId serverMsg = do
     elClass "span" "text-gray-600 font-semibold" $ do
     text "Ensure you have authenticated before trying the requests below"
 
-
 monitorView ::
   ( PostBuild t m
-  , Prerender t m
   , DomBuilder t m
-  ) => m ()
-monitorView = elClass "div" "w-full h-full text-gray-700 max-w-4xl mx-auto rounded flex flex-col" $
-  prerender_ (text "Loading Live Documentation") $ do
-  endpoint <- liftJSM $ do
-    let
-      webSocketProtocol :: T.Text -> T.Text
-      webSocketProtocol "https:" = "wss:"
-      webSocketProtocol _ = "ws:"
+  , MonadJSM m
+  , MonadFix m
+  , MonadHold t m
+  , MonadJSM (Performable m)
+  , TriggerEvent t m
+  , PerformEvent t m
+  , EventWriter t [ClientMsg] m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+monitorView lastTagId serverMsg = do
+  elClass "div" "h-full text-gray-700 max-w-4xl overflow-y-scroll rounded flex flex-col flex-shrink-0" $ do
+    elClass "div" "p-4" $ do
+      elClass "div" "text-3xl font-bold flex flex-row items-center justify-between" $ do
+        el "div" $ text "🐲 Hydra Pay Live Documentation"
+        elClass "div" "px-4 py-2 bg-gray-900 rounded text-white font-semibold text-sm" $ text $ "v" <> versionStr
+      -- Divider
+      elClass "div" "mt-4 w-full h-px bg-gray-200" blank
 
-    wsProtocol <- fmap webSocketProtocol $ fromJSValUnchecked =<< jsg "location" ^. js "protocol"
+      elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Websocket API"
+      elClass "div" "my-2 w-full h-px bg-gray-200" blank
+      elClass "p" "" $ do
+        text "The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api."
+        text " Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
+        text " In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
+        el "br" blank
+        el "br" blank
+        text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
+        text " this makes it easy to ensure you are sending the right information to Hydra Pay."
 
-    theHostname <- fromJSValUnchecked =<< jsg "location" ^. js "hostname"
-    thePort <- fromJSValUnchecked =<< jsg "location" ^. js "port"
+      -- Header
+      elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Tagging"
+      elClass "div" "my-2 w-full h-px bg-gray-200" blank
 
-    pure $ mconcat [ wsProtocol
-                   , "//"
-                   , theHostname
-                   , ":"
-                   , thePort
-                   , "/hydra/api"
-                   ]
-  rec
-    lastTagId <- foldDyn (+) 0 $ fromIntegral . length <$> sendToHydraPay
+      elClass "p" "" $ do
+        text "All communication the Client does with the Server through the WebSocket must be Tagged."
+        text " To Tag a message, we need the unique request-id, if we were sending this as the first message to our Server we may use 0 as the request-id."
+        text " Remember that all communication the Client makes with the Server must be tagged. This forms the request response part of the API."
 
-    let
-      sendToHydraPay =
-        attachWith (\tid msgs -> uncurry Tagged <$> zip [tid..] msgs) (current lastTagId) sendMsg
+    authentication lastTagId serverMsg
 
-      serverMsg = fmapMaybe id $ rws ^. webSocket_recv
+    sayHello lastTagId serverMsg
 
-    rws :: RawWebSocket t (Maybe (Tagged ServerMsg)) <- jsonWebSocket endpoint $ def
-      & webSocketConfig_send .~ sendToHydraPay
+    theDevnet lastTagId serverMsg
 
-    (_, sendMsg :: Event t [ClientMsg]) <- runEventWriterT $ do
-      elClass "div" "p-4" $ do
-        elClass "div" "text-3xl font-bold flex flex-row items-center justify-between" $ do
-          el "div" $ text "🐲 Hydra Pay Live Documentation"
-          elClass "div" "px-4 py-2 bg-gray-900 rounded text-white font-semibold text-sm" $ text $ "v" <> versionStr
-        -- Divider
-        elClass "div" "mt-4 w-full h-px bg-gray-200" blank
+    headCreation lastTagId serverMsg
 
-        elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Websocket API"
-        elClass "div" "my-2 w-full h-px bg-gray-200" blank
-        elClass "p" "" $ do
-          text "The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api."
-          text " Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
-          text " In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
-          el "br" blank
-          el "br" blank
-          text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
-          text " this makes it easy to ensure you are sending the right information to Hydra Pay."
+    subscribeTo lastTagId serverMsg
 
-        -- Header
-        elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Tagging"
-        elClass "div" "my-2 w-full h-px bg-gray-200" blank
+    fundingProxyAddresses lastTagId serverMsg
 
-        elClass "p" "" $ do
-          text "All communication the Client does with the Server through the WebSocket must be Tagged."
-          text " To Tag a message, we need the unique request-id, if we were sending this as the first message to our Server we may use 0 as the request-id."
-          text " Remember that all communication the Client makes with the Server must be tagged. This forms the request response part of the API."
+    initHead lastTagId serverMsg
 
-      authentication lastTagId serverMsg
-      sayHello lastTagId serverMsg
+    commitToHead lastTagId serverMsg
 
-      theDevnet lastTagId serverMsg
+    sendFundsInHead lastTagId serverMsg
 
-      headCreation lastTagId serverMsg
+    closeHead lastTagId serverMsg
 
-
-  elClass "div" "" blank
-
+    removeHead lastTagId serverMsg
   pure ()
