@@ -75,7 +75,7 @@ Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansyste
 
 Once you have Obelisk installed hacking on Hydra Pay is as easy as running `ob run` in the root directory.
 
-Some visual UI like the demo can then be viewed in Chrome at `http://localhost:8000/`.
+The live demo can then be viewed in Chrome at `http://localhost:8000/`.
 
 ## :construction: Under Construction
 
