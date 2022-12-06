@@ -2,6 +2,8 @@ import Backend
 import Frontend
 import Obelisk.Backend
 import Snap.Internal.Http.Server.Config
+import Config
+import Data.ByteString.UTF8 as BSU
 
 main :: IO ()
 main =
@@ -10,5 +12,6 @@ main =
         (runSnapWithConfig conf')
         defaultStaticAssets
         defaultGhcjsWidgets
-      conf = backendConfig defaultConfig
-  in runBackendWith conf backend frontend
+  in do
+    cfg <- getHydraCLIConfig
+    runBackendWith (backendConfig ((setPort (_port cfg) $ setBind (BSU.fromString . _bind $ cfg) defaultConfig))) backend frontend

@@ -96,3 +96,4 @@ executable backend
                , frontend
                , obelisk-backend
                , snap-server
+               , utf8-string

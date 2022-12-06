@@ -6,6 +6,8 @@ import Data.Maybe (fromMaybe)
 
 data HydraPayConfig = HydraPayConfig
   { _hydraPayMode :: HydraPayMode
+  , _port :: Int
+  , _bind :: String
   }
   deriving (Show,Read)
 
@@ -40,6 +42,8 @@ hydraPayConfigParser :: Parser HydraPayConfig
 hydraPayConfigParser =
   HydraPayConfig
   <$> (fromMaybe LiveDocMode <$> optional netConfigParser)
+  <*> (fromMaybe 8000 <$> optional (option auto (long "port" <> help "Port to use for the WebSocket endpoint and live documentation page")))
+  <*> (fromMaybe "0.0.0.0" <$> optional (strOption (long "bind" <> help "Address or hostname to bind to")))
 
 netConfigParser :: Parser HydraPayMode
 netConfigParser =
