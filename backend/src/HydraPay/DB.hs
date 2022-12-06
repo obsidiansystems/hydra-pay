@@ -1,4 +1,0 @@
--- | 
-
-module HydraPay.DB where
-
