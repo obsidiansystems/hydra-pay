@@ -140,7 +140,7 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
       pure (domEvent Click tryEl, req)
 
     elClass "div" "" $ do
-      elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+      elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
         rec
           (taggedToggle, _) <- elClass' "button" "absolute text-white top-0 right-0 p-2 flex flex-row items-center" $ do
             elClass "div" "rounded w-4 h-4 bg-orange-500 mr-2 flex justify-center items-center text-center" $ do
@@ -261,11 +261,11 @@ initHead ::   ( EventWriter t [ClientMsg] m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 initHead lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
-    header "Initialize The Head"
+    header "Initializing The Head"
 
     elClass "p" "" $ do
-      text "The next step, once we have fuel and funds, is to initialize a Head."
-      text " This creates an L1 transaction (using fuel given to the nodes) that places the initial head state on chain."
+      text "The next step, once we have fuel and funds for all our participants, is to initialize a Head."
+      text " This creates an L1 transaction (using fuel given to a Proxy Address) that places the initial head state on chain."
 
   let
     input = payloadInput $ do
