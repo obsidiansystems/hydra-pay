@@ -215,21 +215,6 @@ Example Response:
 { "tag": "AuthResult", "contents": true }
 ```
 
-#### Subscribe to Head
-
-Subscribing to a Head means you are interested in getting timely information about this Head's operation, including state changes, errors, and status updates like snapshot confirmation, node status and restarts. You will recieve *un-tagged* requests on the websocket where you subscribed.
-
-This makes it easier to implement logic where you wait for say a head to close and fanout, without having to poll the socket.
-
-```json
-{ "tag": "SubscribeTo", "contents": "test" }
-```
-
-Example Response:
-``` json
-{ "tag": "SubscriptionStarted", "contents": "test" }
-```
-
 #### Head Creation
 
 To create a Head you will give it a friendly name and list the addresses that will become the participants.
