@@ -2,6 +2,7 @@
 
 module HydraPay.Api where
 
+import Data.Map
 import Data.Int
 import GHC.Generics
 import Data.Aeson as Aeson
@@ -68,6 +69,7 @@ data HeadStatus = HeadStatus
   { headStatus_name :: HeadName
   , headStatus_running :: Bool
   , headStatus_status :: Status
+  , headStatus_balances :: Map Address Lovelace
   }
   deriving (Eq, Show, Generic)
 
@@ -170,7 +172,7 @@ data ServerMsg
   | HeadExistsResult Bool
   | DevnetRestarted
   | ServerError HydraPayError
-  | HeadStatusChanged HeadName Status
+  | HeadStatusChanged HeadName Status (Map Address Lovelace)
   | NodeMessage (ServerOutput Value)
   | DevnetAddresses [Address]
   | CurrentStats HydraPayStats
@@ -179,6 +181,7 @@ data ServerMsg
   | AuthResult Bool
   | L1Balance Lovelace
   | HeadBalance Lovelace
+  | BalanceChange HeadName (Map Address Lovelace)
   | ApiError T.Text
   deriving (Eq, Show, Generic)
 
