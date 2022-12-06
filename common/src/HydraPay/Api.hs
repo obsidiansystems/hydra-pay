@@ -6,6 +6,7 @@ import Data.Int
 import GHC.Generics
 import Data.Aeson as Aeson
 import qualified Data.Text as T
+import Control.Applicative((<|>))
 
 import Control.Lens.TH
 
@@ -133,6 +134,7 @@ data ClientMsg
   | CheckFuel Address
   | Withdraw Address
   | GetAddTx TxType Address Lovelace
+
   | SubscribeTo HeadName
   | SubmitHeadTx Address HeadSubmitTx
 
@@ -143,6 +145,8 @@ data ClientMsg
 
   | GetL1Balance Address
   | GetHeadBalance HeadName Address
+
+  | LiveDocEzSubmitTx Tx Address
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -156,6 +160,7 @@ versionStr = "0.1.0"
 data ServerMsg
   = ServerHello Version
   | OperationSuccess
+  | HeadInfo HeadStatus
   | TxConfirmed Pico
   | FundsTx Tx
   | FuelAmount Lovelace
@@ -175,10 +180,18 @@ data ServerMsg
   | AuthResult Bool
   | L1Balance Lovelace
   | HeadBalance Lovelace
+  | ApiError T.Text
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
 instance FromJSON ServerMsg
+
+data ApiMsg
+  = TaggedMsg (Tagged ServerMsg)
+  | PlainMsg ServerMsg
+
+instance FromJSON ApiMsg where
+  parseJSON v = (TaggedMsg <$> parseJSON v) <|> (PlainMsg <$> parseJSON v)
 
 data Tx = Tx
   { txType :: T.Text
@@ -212,3 +225,5 @@ isFuelType Fuel = True
 isFuelType _ = False
 
 makeLenses ''HydraPayStats
+makePrisms ''ApiMsg
+makePrisms ''ServerMsg

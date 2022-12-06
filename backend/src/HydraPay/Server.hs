@@ -10,6 +10,8 @@
 
 module HydraPay.Server where
 
+import System.Exit (ExitCode(..))
+
 import Crypto.Random
 import qualified Data.ByteString.Base64 as Base64
 
@@ -42,8 +44,6 @@ import Network.WebSockets.Client
 
 import Control.Monad.Reader
 import Control.Monad.Fail
-import Control.Applicative
-
 
 import Common.Helpers
 import HydraPay.Api (versionStr)
@@ -176,6 +176,13 @@ data Node = Node
 newtype Network = Network
   { _network_nodes :: Map Address Node
   }
+
+runningDevnet :: MonadIO m => State -> m Bool
+runningDevnet state = do
+  nodeConfig <- liftIO $ fmap cardanoNodeState_nodeType $ readMVar $ _state_cardanoNodeState state
+  pure $ case nodeConfig of
+    CfgDevnet -> True
+    _ -> False
 
 runHydraPay :: (State -> IO a)
   -> IO a
@@ -369,7 +376,7 @@ getProxyFuel state addr = do
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
-buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either HydraPayError Tx)
+buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either T.Text Tx)
 buildAddTx tType state fromAddr lovelaceAmount = do
   cardanoNodeInfo <- _hydraCardanoNodeInfo <$> getHydraSharedInfo state
   utxos <- queryAddressUTXOs cardanoNodeInfo fromAddr
@@ -378,7 +385,7 @@ buildAddTx tType state fromAddr lovelaceAmount = do
   (toAddr, _) <- addOrGetKeyInfo state fromAddr
 
   txBodyPath <- liftIO $ snd <$> getTempPath
-  _ <- liftIO $ readCreateProcess (proc cardanoCliPath
+  (exitCode, output, errorOutput) <- liftIO $ readCreateProcessWithExitCode (proc cardanoCliPath
                        (filter (/= "") $ [ "transaction"
                         , "build"
                         , "--babbage-era"
@@ -402,10 +409,15 @@ buildAddTx tType state fromAddr lovelaceAmount = do
                         ])) { env = Just [( "CARDANO_NODE_SOCKET_PATH"
                                           , _nodeSocket cardanoNodeInfo)] }
     ""
-  txResult <- liftIO $ readFile txBodyPath
-  case Aeson.decode $ LBS.pack txResult of
-    Just tx -> pure $ Right tx
-    Nothing -> pure $ Left FailedToBuildFundsTx
+
+  case exitCode of
+    ExitSuccess -> do
+      txResult <- liftIO $ readFile txBodyPath
+      case Aeson.decode $ LBS.pack txResult of
+        Just tx -> pure $ Right tx
+        Nothing -> pure $ Left $ "Failed to read tx file at " <> T.pack txBodyPath
+    _ -> pure $ Left $ "Cardano CLI: " <> T.pack errorOutput
+
 
 -- TODO: HydraPayError is too flat
 -- TODO: Add a reader data type for State
@@ -988,6 +1000,19 @@ handleClientMessage conn state = \case
     liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
     pure $ SubscriptionStarted name
 
+  LiveDocEzSubmitTx tx address -> do
+    isDevnet <- runningDevnet state
+    case isDevnet of
+      False -> pure $ ApiError "This endpoint is only available when Hydra Pay is running a Devnet"
+      True -> do
+        mKeys <- liftIO $ getTestAddressKeys address
+        case mKeys of
+          Nothing -> pure $ ApiError "Address is not a Devnet test address"
+          Just (KeyPair sk _) -> do
+            cardanoNodeInfo <- stateCardanoNodeInfo state
+            liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
+            pure OperationSuccess
+
   ClientHello -> pure $ ServerHello versionStr
 
   Withdraw addr -> do
@@ -1002,16 +1027,19 @@ handleClientMessage conn state = \case
 
   GetAddTx txtype addr lovelaceAmount -> do
     result <- buildAddTx txtype state addr lovelaceAmount
-    pure $ either ServerError FundsTx result
+    pure $ either ApiError FundsTx result
 
   CheckFuel addr -> do
     -- Calc the fuel amount
     fuel <- getProxyFuel state addr
     pure $ FuelAmount fuel
 
-  CreateHead hc -> do
+  CreateHead hc@(HeadCreate name _) -> do
     result <- createHead state hc
-    pure $ either ServerError (const OperationSuccess) result
+    case result of
+      Left err -> pure $ ServerError err
+      Right _ ->
+        either ServerError HeadInfo <$> getHeadStatus state name
 
   InitHead hi -> do
     result <- initHead state hi
@@ -1049,17 +1077,10 @@ newtype HydraPayClient a = HydraPayClient
 
 data ClientState = ClientState
   { clientState_connection :: WS.Connection
-  , clientState_inbox :: TChan Msg
+  , clientState_inbox :: TChan ApiMsg
   , clientState_msgs :: TChan ServerMsg
   , clientState_nextId :: MVar Int64
   }
-
-data Msg
-  = TaggedMsg (Tagged ServerMsg)
-  | PlainMsg ServerMsg
-
-instance FromJSON Msg where
-  parseJSON v = (TaggedMsg <$> parseJSON v) <|> (PlainMsg <$> parseJSON v)
 
 runHydraPayClient :: BS.ByteString -> HydraPayClient a -> IO (Maybe a)
 runHydraPayClient apiKey action = do
@@ -1069,7 +1090,7 @@ runHydraPayClient apiKey action = do
   WS.runClient "127.0.0.1" 8000 "hydra/api" $ \conn -> do
     -- We have a read thread that is centralized so we don't miss any messages
     _ <- forkIO $ forever $ do
-      mMsg :: Maybe Msg <- Aeson.decode <$> WS.receiveData conn
+      mMsg :: Maybe ApiMsg <- Aeson.decode <$> WS.receiveData conn
       case mMsg of
         Just (PlainMsg p) -> do
           atomically $ writeTChan msgsChannel p
