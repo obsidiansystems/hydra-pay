@@ -160,6 +160,24 @@ Information might include a Head changing state, an error or failure, a restart 
 
 This allows Light Wallet and DApp developers to have their implementation react and respond to these issues in a timely and automatic way.
 
+Example Subscription:
+
+``` json
+{
+    "contents": "test",
+    "tag": "SubscribeTo"
+}
+```
+
+Example Response:
+``` json
+{
+    "contents": "test",
+    "tag": "SubscriptionStarted"
+}
+```
+
+
 ### Authentication
 
 When you launch or deploy a Hydra Pay instance you will need to provide an API Key to authenticate against, this is a secret that should be only known to your DApp/LightWallet and your Hydra Pay instance. 
@@ -194,7 +212,7 @@ This will use the API Key you set up when you deployed the Server.
 
 Example Response:
 ``` json
-{ "tag": "AuthenticationResult", "contents": true }
+{ "tag": "AuthResult", "contents": true }
 ```
 
 #### Subscribe to Head
@@ -220,23 +238,18 @@ Creating the head starts the Hydra network.
 Example payload:
 ``` json
 {
-  "headCreate_name": "test",
-  "headCreate_participants": [
-    "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
-  ],
+    "contents": {
+        "headCreate_participants": ["addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"],
+        "headCreate_name": "test"
+    },
+    "tag": "CreateHead"
 }
 ```
 
-#### Head Status
-
-Get the status of the Head on-chain and the status of the network of hydra-nodes.
-
-Example Response:
+Expected Response:
 ``` json
 {
-  "headStatus_name": "test",
-  "headStatus_running": true,
-  "headStatus_status": "Status_Open"
+    "tag": "OperationSuccess"
 }
 ```
 
@@ -247,12 +260,23 @@ Post the inital state of your Head on chain, and start waiting for Commitments f
 Example Payload:
 ``` json
 {
-  "headInit_name": "test",
-  "headInit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"
+    "contents": {
+        "headInit_name": "test",
+        "headInit_contestation": 3
+    },
+    "tag": "InitHead"
 }
 ```
 
-## 🦾 Proxy Addresses
+Expected Response:
+
+``` json
+{
+    "tag": "OperationSuccess"
+}
+```
+
+### 🦾 Proxy Addresses
 
 Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers. One way we aid feature creation is through our Proxy Address structure.
 
@@ -273,34 +297,77 @@ Commit the funds at your Proxy Address to the named Head.
 Example Payload:
 ``` json
 {
-  "headCommit_participant": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "headCommit_name": "test"
+    "contents": {
+        "headCommit_name": "test",
+        "headCommit_participant": "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a",
+        "headCommit_amount": 100000000
+    },
+    "tag": "CommitHead"
 }
 ```
+
+Expected Response:
+``` json
+{
+    "tag": "OperationSuccess"
+}
+```
+
 
 #### Add Funds
 
 Get a CIP-30 compatible CBOR transaction that will fund your Proxy Address.
 
+Example Payload:
+``` json
+{
+    "contents": [
+        "Funds",
+        "",
+        100000000
+    ],
+    "tag": "GetAddTx"
+}
+```
+
 Example Response:
 ``` json
 {
-  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
-  "type": "TxBodyBabbage",
-  "description": ""
+    "contents": {
+        "type": "Unwitnessed Tx BabbageEra",
+        "cborHex": "Ledger Cddl Format",
+        "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
+    },
+    "tag": "FundsTx"
 }
 ```
 
 #### Add Fuel
 
-Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address. 
+Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address.
+
+Example Payload:
+``` json
+{
+    "contents": [
+        "Fuel",
+        "",
+        100000000
+    ],
+    "tag": "GetAddTx"
+}
+```
+
 
 Example Response:
 ``` json
 {
-  "cborHex": "86a30081825820754f4ebbc6c18f083f417052881c99ef6e05dbd725b2367cfe5ab51839717640010182a200581d604391e312f4ce9ebbd5b6566d1ecade6e8545a7d56ec429e5c23810d3011a35a25b4ba300581d606b4e68b0955fbfd0be9b76527da8fc425fcc80fd47f40fd2d2b2d548011a05f5e1000282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3021a00028db59fff8080f5f6",
-  "type": "TxBodyBabbage",
-  "description": ""
+    "contents": {
+        "type": "Unwitnessed Tx BabbageEra",
+        "cborHex": "Ledger Cddl Format",
+        "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
+    },
+    "tag": "FundsTx"
 }
 ```
 
@@ -311,34 +378,34 @@ Send funds from your Proxy Address to another participant identified by their L1
 Example Payload:
 ``` json
 {
-  "headSubmitTx_name": "test",
-  "headSubmitTx_toAddr": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "amount": 1000000
+    "contents": [
+        "",
+        {
+            "headSubmitTx_name": "test",
+            "headSubmitTx_toAddr": "",
+            "amount": 3000000
+        }
+    ],
+    "tag": "SubmitHeadTx"
 }
-```
-
-#### Query Head Balance
-
-Get the amount of Lovelace available on the head at your (Proxy) Address.
-``` json
-{ "tag" : "GetHeadBalance", "head": "test", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
-```
-
-Example Response:
-``` json
-10000000
 ```
 
 #### Close
 
 Close the head.
 
+Example Payload:
+``` json
+{
+    "contents": "test",
+    "tag": "CloseHead"
+}
+```
+
 Example Response:
 ``` json
 {
-  "headStatus_name": "test",
-  "headStatus_running": true,
-  "headStatus_status": "Status_Closed"
+    "tag": "OperationSuccess"
 }
 ```
 
@@ -348,26 +415,18 @@ Example Response:
 Withdraw funds from your Proxy Address to your main address.
 
 Example Payload:
-
 ``` json
 {
-  "withdraw_address": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
-  "withdraw_amount": "5000000"
+  "tag": "Withdraw"
+  "contents": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
 }
-```
-
-
-#### Query L1 Balance
-
-Get the amount of Lovelace available on the head at your (Proxy) Address on L1.
-
-``` json
-{ "tag" : "GetL1Balance", "addr" : "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp" }
 ```
 
 Example Response:
 ``` json
-10000000
+{
+    "tag": "OperationSuccess"
+}
 ```
 
 ## 🤔 FAQ
