@@ -104,6 +104,8 @@ Foundational:
 - [x] Authentication support
 - [x] Tested on Preview
 - [x] Tested over https and wss
+- [x] Live Documentation
+- [x] Full lifecycle guide
 - [ ] Deployment Guide
 - [ ] Docker Deployment Guide
 - [ ] Best Practices
