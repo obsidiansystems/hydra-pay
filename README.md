@@ -62,7 +62,7 @@ Visit the live documentation and confirm your key and requests presented work as
 
 ### API Key
 
-Your API Key should be provided in config/backend/api-key if no key is provided we generate a random one the aformentioned file. 
+Your API Key should be provided in `config/backend/api-key` if no key is provided we generate a random one the aformentioned file. 
 
 DO NOT USE THIS KEY IN PRODUCTION.
 
