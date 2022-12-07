@@ -79,7 +79,6 @@ library
   other-modules:
     Paths
     Hydra.Devnet
-    HydraPay.DB
     CardanoNodeInfo
     
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
