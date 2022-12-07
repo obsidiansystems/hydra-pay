@@ -37,10 +37,18 @@ data HydraNodeParams = HydraNodeParams
   }
   deriving (Show,Read)
 
+-- | Obelisk's 'ob run' passes a "--quiet". This parser
+-- transformer ignores "--quiet".
+ignoreObeliskRunArgs :: Parser a -> Parser a
+ignoreObeliskRunArgs p =
+  (\_ a -> a) <$> switch (long "quiet" <> hidden) <*> p
+
+
 -- | Unless specified otherwise the default is 'LiveDocMode'.
 hydraPayConfigParser :: Parser HydraPayConfig
 hydraPayConfigParser =
-  HydraPayConfig
+  ignoreObeliskRunArgs
+  $ HydraPayConfig
   <$> (fromMaybe LiveDocMode <$> optional netConfigParser)
   <*> (fromMaybe 8000 <$> optional (option auto (long "port" <> help "Port to use for the WebSocket endpoint and live documentation page")))
   <*> (fromMaybe "0.0.0.0" <$> optional (strOption (long "bind" <> help "Address or hostname to bind to")))
