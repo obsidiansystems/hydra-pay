@@ -667,12 +667,16 @@ addOrGetKeyInfo state addr = do
     case Map.lookup addr old of
       Just info -> pure (old, info)
       Nothing -> do
-        keyInfo <- withLogging $ generateKeysIn $ T.unpack addr <> "-proxy"
+        liftIO $ createDirectoryIfMissing False keystore
+        keyInfo <- withLogging $ generateKeysIn $ keystore <> "/" <> T.unpack addr <> "-proxy"
         proxyAddress <- liftIO
                         $ getCardanoAddress cardanoNodeInfo
                         $ _verificationKey . _cardanoKeys $ keyInfo
         let info = (proxyAddress, keyInfo)
         pure $ (Map.insert addr info old, info)
+
+    where
+      keystore = "keystore"
 
 getHeadStatus :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 getHeadStatus state name = liftIO $ do

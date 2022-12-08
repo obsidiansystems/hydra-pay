@@ -20,3 +20,4 @@ static.out
 /db/
 /tmp/
 /config/backend/api-key
+/keystore/
