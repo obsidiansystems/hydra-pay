@@ -97,32 +97,38 @@ prepareDevnet = do
 addressesPath :: FilePath
 addressesPath = "devnet/addresses"
 
+keysPath :: FilePath
+keysPath = "devnet/keys"
+
 seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
 seedTestAddresses cninf faucetKeys amount = do
-  exists <- liftIO $ doesFileExist path
+  exists <- liftIO $ doesFileExist addressesPath
   unless exists $ do
+    -- Remove the Cardano keys for the devnet
+    liftIO $ do
+      -- NOTE removePathForcibly does nothing if the path doesn't exist,
+      -- and doesn't throw exceptions when the path contains files
+      _ <- removePathForcibly keysPath
+      createDirectory keysPath
     seededAddresses <- for [1 .. amount] $ \n -> do
-      keypair <- generateCardanoKeys ("addr_" <> show n)
+      keypair <- generateCardanoKeys $ keysPath <> "/" <> "addr_" <> show n
       addr <- liftIO $ getCardanoAddress cninf $ _verificationKey keypair
       void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
       pure addr
-    liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
-  where
-    path = addressesPath
+    liftIO $ T.writeFile addressesPath $ T.intercalate "\n" seededAddresses
 
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
-  exists <- doesFileExist path
+  exists <- doesFileExist addressesPath
   case exists of
     False -> pure Nothing
     True -> do
-      contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile path
+      contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile addressesPath
       pure $ fmap mkKeypair . lookup addr $ contents
   where
     mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
       where
-        root = "addr_" <> show n <> ".cardano."
-    path = addressesPath
+        root = keysPath <> "/" <> "addr_" <> show n <> ".cardano."
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
