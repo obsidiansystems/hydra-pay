@@ -1,6 +1,6 @@
 name: common
 version: 0.1
-cabal-version: >= 1.2
+cabal-version: >= 1.10
 build-type: Simple
 
 library
