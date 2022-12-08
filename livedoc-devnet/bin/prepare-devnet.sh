@@ -14,7 +14,7 @@ chmod +w -R "$TARGETDIR"
 cp -rf "$BASEDIR/config/credentials" "$TARGETDIR"
 chmod +w -R "$TARGETDIR/credentials"
 
-cp -rf "$BASEDIR/config/protocol-parameters.json" "$TARGETDIR"
+cp -rf "$BASEDIR/config/protocol-parameters.json" "$TARGETDIR/hydra-protocol-parameters.json"
 echo '{"Producers": []}' > "$TARGETDIR/topology.json"
 sed -i "s/\"startTime\": [0-9]*/\"startTime\": $(date +%s)/" "$TARGETDIR/genesis-byron.json" && \
 sed -i "s/\"systemStart\": \".*\"/\"systemStart\": \"$(date -u +%FT%TZ)\"/" "$TARGETDIR/genesis-shelley.json"

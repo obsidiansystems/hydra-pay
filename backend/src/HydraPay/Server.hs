@@ -222,7 +222,7 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
         pure $ HydraSharedInfo
           { _hydraScriptsTxId = T.unpack scriptsTxId,
             _hydraLedgerGenesis = "devnet/genesis-shelley.json",
-            _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json",
+            _hydraLedgerProtocolParameters = "devnet/hydra-protocol-parameters.json",
             _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
           }
       _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
