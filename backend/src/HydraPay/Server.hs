@@ -173,7 +173,7 @@ newtype Network = Network
 runningDevnet :: MonadIO m => State -> m Bool
 runningDevnet state = do
   pure $ case getHydraPayMode state of
-    LiveDocMode -> True
+    ManagedDevnetMode -> True
     _ -> False
 
 runHydraPay :: HydraPayConfig -> (State -> IO a) -> IO a
@@ -215,7 +215,7 @@ runHydraPay cfg action = do
 -- | If we're in 'LiveDocMode' delete the devnet and restart it.
 makeCardanoNodeStateAndRestartDemoDevnet :: (MonadIO m) => HydraPayMode -> m CardanoNodeState
 makeCardanoNodeStateAndRestartDemoDevnet = \case
-  LiveDocMode -> liftIO $ do
+  ManagedDevnetMode -> liftIO $ do
       _ <- readCreateProcess (shell "rm -rf devnet") ""
       _ <- readCreateProcess (shell "rm -rf demo-logs") ""
       withLogging $ prepareDevnet
@@ -1039,7 +1039,7 @@ handleClientMessage conn state = \case
     cns <- liftIO $ readMVar (_state_cardanoNodeState state)
     case getHydraPayMode state of
       ConfiguredMode {} -> pure ()
-      LiveDocMode -> do
+      ManagedDevnetMode -> do
         heads <- Map.keys <$> (liftIO $ readMVar (_state_heads state))
         -- Terminate all the heads!
         for_ heads $ terminateHead state
