@@ -89,26 +89,6 @@ import Hydra.Snapshot as Snapshot
 import qualified Config as Config
 import Config (HydraPayMode(..), HydraPayConfig(_hydraPayMode))
 
-{-
-Architecture!
-
-HydraPay must manage all hydra nodes and heads
-
-WebSocket client!
-We need websockets for everything, because we need request responses and notification style stuff to write dApps and such
-The client facing dapp sockets need to be able to notify us about whatever is going on.
-
-Creating a head should probably just init right away, but give us a chance to change things and do whatever...
-A lot of the state management is just waiting for things to happen, with some triggers here and there..
-
-The devnet must be completely separate
-
-The nodes provide and respond to messages
-
-Hydra pay tracks their state and provides and responds to messages.
--}
-
-
 -- | The location where we store cardano and hydra keys
 getKeyPath :: IO FilePath
 getKeyPath = do
