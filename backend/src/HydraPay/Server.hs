@@ -86,8 +86,8 @@ import System.IO (hClose)
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 import System.IO.Temp (withTempFile)
 import Hydra.Snapshot as Snapshot
-import qualified Config as Config
-import Config (HydraPayMode(..), HydraPayConfig(_hydraPayMode))
+import qualified HydraPay.Config as Config
+import HydraPay.Config (HydraPayMode(..), HydraPayConfig(_hydraPayMode))
 
 {-
 Architecture!
@@ -1129,6 +1129,8 @@ handleClientMessage conn state = \case
     removeHead state name
     broadcastToSubscribers state name $ HeadRemoved name
     pure $ HeadRemoved name
+
+  GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a

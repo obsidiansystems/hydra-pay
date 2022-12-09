@@ -1,41 +1,9 @@
-module Config where
+module ParseConfig where
 
 import Options.Applicative
 import Data.Semigroup ((<>))
 import Data.Maybe (fromMaybe)
-
-data HydraPayConfig = HydraPayConfig
-  { _hydraPayMode :: HydraPayMode
-  , _port :: Int
-  , _bind :: String
-  }
-  deriving (Show,Read)
-
--- | Configure Cardano (L1) and Hydra networks. This is either an
--- explicit configuration for Cardano Node and Hydra Nodes, or the
--- default mode which runs a devnet for live documentation.
-data HydraPayMode
-  = ManagedDevnetMode
-  | ConfiguredMode
-    { _cardanoNodeParams :: CardanoNodeParams
-    , _hydraNodeParams :: HydraNodeParams
-    }
-  deriving (Show,Read)
-
-data CardanoNodeParams = CardanoNodeParams
-  { _testnetMagic :: Int
-  , _nodeSocket :: FilePath
-  , _ledgerGenesis :: FilePath
-  , _ledgerProtocolParameters :: FilePath
-  }
-  deriving (Show,Read)
-
-data HydraNodeParams = HydraNodeParams
-  { _hydraScriptsTxId :: String
-  , _hydraLedgerProtocolParameters :: FilePath
-  , _hydraLedgerGenesis :: FilePath
-  }
-  deriving (Show,Read)
+import HydraPay.Config
 
 -- | Obelisk's 'ob run' passes a "--quiet". This parser
 -- transformer ignores "--quiet".
@@ -65,8 +33,7 @@ nodeParamsParser =
   (CardanoNodeParams
    <$> option auto (long "testnet-magic")
    <*> strOption (long "node-socket")
-   <*> strOption (long "ledger-genesis")
-   <*> strOption (long "ledger-protocol-parameters"))
+   <*> strOption (long "ledger-genesis"))
   <*>
   (HydraNodeParams
    <$> strOption (long "hydra-scripts-tx-id")

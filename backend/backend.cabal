@@ -71,7 +71,7 @@ library
 
   exposed-modules:
     Backend
-    Config
+    ParseConfig
     HydraPay
     HydraPay.Server
     HydraPay.Network
