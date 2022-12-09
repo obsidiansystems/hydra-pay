@@ -117,16 +117,6 @@ getKeyPath = do
   where
     path = "keys"
 
-getDevnetHydraSharedInfo :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m HydraSharedInfo
-getDevnetHydraSharedInfo = do
-  scripts <- getReferenceScripts "devnet/scripts" (_signingKey devnetFaucetKeys)
-  pure $ HydraSharedInfo
-    { _hydraScriptsTxId = T.unpack scripts,
-      _hydraLedgerGenesis = "devnet/genesis-shelley.json",
-      _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json",
-      _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
-    }
-
 -- | State we need to run/manage Heads
 data State = State
   { _state_cardanoNodeState :: MVar CardanoNodeState
@@ -240,7 +230,14 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
                                         ])
                 { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
                 }) ""
-      hydraSharedInfo <- withLogging getDevnetHydraSharedInfo
+      hydraSharedInfo <- withLogging $ do
+        scriptsTxId <- publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
+        pure $ HydraSharedInfo
+          { _hydraScriptsTxId = T.unpack scriptsTxId,
+            _hydraLedgerGenesis = "devnet/genesis-shelley.json",
+            _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json",
+            _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
+          }
       withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
       pure $ CardanoNodeState (Just handles) hydraSharedInfo
 
