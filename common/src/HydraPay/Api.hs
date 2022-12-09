@@ -97,6 +97,7 @@ data HydraPayError
   | NodeCommandFailed
   -- ^ Anytime a command fails
   | NotAParticipant
+  | ProcessError String
   | NoValidUTXOToCommit
   | InsufficientFunds
   | FanoutNotPossible

@@ -16,7 +16,7 @@ import Crypto.Random
 import qualified Data.ByteString.Base64 as Base64
 
 import Control.Exception
-import Snap.Core hiding (path)
+import Snap.Core hiding (path, logError)
 import Network.WebSockets.Snap
 import qualified Network.WebSockets as WS
 
@@ -187,21 +187,28 @@ runHydraPay cfg action = do
            then (ps, Nothing)
            else (ys, Just xs)
   let freePorts ps = void $ modifyMVar_ ports (pure . (ps ++))
-  cardanoNodeState <- withLogging (makeCardanoNodeStateAndRestartDemoDevnet (_hydraPayMode cfg)) >>= newMVar
-  finally (action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts key cfg) $ do
-    node <- readMVar cardanoNodeState
-    stopCardanoNode node
+  cardanNodeResult <- withLogging (makeCardanoNodeStateAndRestartDemoDevnet (_hydraPayMode cfg))
+  case cardanNodeResult of
+    Left err -> do
+      withLogging $ logError $ pretty err
+      error err
+    Right nodeState -> do
+      cardanoNodeState <- newMVar nodeState
+      finally (action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts key cfg) $ do
+        node <- readMVar cardanoNodeState
+        stopCardanoNode node
 
 -- | If we're in 'LiveDocMode' delete the devnet and restart it.
-makeCardanoNodeStateAndRestartDemoDevnet :: (MonadIO m) => HydraPayMode -> m CardanoNodeState
+makeCardanoNodeStateAndRestartDemoDevnet :: (MonadIO m) => HydraPayMode -> m (Either String CardanoNodeState)
 makeCardanoNodeStateAndRestartDemoDevnet = \case
-  LiveDocMode -> liftIO $ do
-      _ <- readCreateProcess (shell "rm -rf devnet") ""
-      _ <- readCreateProcess (shell "rm -rf demo-logs") ""
-      withLogging $ prepareDevnet
-      handles <- createProcess cardanoNodeCreateProcess
-      threadDelay (seconds 3)
-      _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
+  LiveDocMode -> liftIO $ runExceptT $ do
+      lift $ do
+        removePathForcibly "devnet"
+        removePathForcibly nodeLogDir
+        withLogging $ prepareDevnet
+      handles <- lift $ createProcess cardanoNodeCreateProcess
+      lift $ threadDelay (seconds 3)
+      _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode ((proc cardanoCliPath [ "query"
                                         , "protocol-parameters"
                                         , "--testnet-magic"
                                         , "42"
@@ -210,19 +217,19 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
                                         ])
                 { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
                 }) ""
-      hydraSharedInfo <- withLogging $ do
-        scriptsTxId <- publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
+      hydraSharedInfo <- do
+        scriptsTxId <- ExceptT $ withLogging $ publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
         pure $ HydraSharedInfo
           { _hydraScriptsTxId = T.unpack scriptsTxId,
             _hydraLedgerGenesis = "devnet/genesis-shelley.json",
             _hydraLedgerProtocolParameters = "devnet/protocol-parameters.json",
             _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
           }
-      withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
+      _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
       pure $ CardanoNodeState (Just handles) hydraSharedInfo
 
   ConfiguredMode cardanoParams hydraParams ->
-    pure $ CardanoNodeState Nothing $ HydraSharedInfo
+    pure $ Right $ CardanoNodeState Nothing $ HydraSharedInfo
          { _hydraScriptsTxId = Config._hydraScriptsTxId hydraParams,
            _hydraLedgerGenesis = Config._hydraLedgerGenesis hydraParams,
            _hydraLedgerProtocolParameters = Config._hydraLedgerProtocolParameters hydraParams,
@@ -306,22 +313,23 @@ headAllBalances state headname = do
         result <- untilJust $ do
           x <- liftIO . atomically $ readTChan c
           case x of
-            GetUTxOResponse utxoz ->
-              Just <$> reverseMapProxyBalances state participants (wholeUtxoToBalanceMap utxoz)
-            CommandFailed {} -> pure $ Just mempty
+            GetUTxOResponse utxoz -> do
+              Just . mapLeft ProcessError <$> reverseMapProxyBalances state participants (wholeUtxoToBalanceMap utxoz)
+
+            CommandFailed {} -> pure $ Just $ Right mempty
             _ -> pure Nothing
 
-        pure $ Right result
+        pure result
 
 -- | Take all the UTxOs and organize them into a map of lovelace balances: Map Address Lovelace
 wholeUtxoToBalanceMap :: WholeUTXO -> Map Address Lovelace
 wholeUtxoToBalanceMap =
    foldr (\utxo allutxos -> Map.unionWith (+) utxo allutxos) mempty . fmap singletonFromTxInfo . Map.elems
 
-reverseMapProxyBalances :: MonadIO m => State -> Set Address -> Map Address Lovelace -> m (Map Address Lovelace)
-reverseMapProxyBalances state participants headBalance = do
+reverseMapProxyBalances :: MonadIO m => State -> Set Address -> Map Address Lovelace -> m (Either String (Map Address Lovelace))
+reverseMapProxyBalances state participants headBalance = runExceptT $ do
   reverseMap :: Map Address Address <- fmap mconcat $ for (Set.toList participants) $ \paddr -> do
-    (proxyAddr, _) <- addOrGetKeyInfo state paddr
+    (proxyAddr, _) <- ExceptT $ addOrGetKeyInfo state paddr
     pure $ Map.singleton proxyAddr paddr
 
   pure $ Map.mapKeys (\proxyKey-> maybe proxyKey id $ Map.lookup proxyKey reverseMap) headBalance
@@ -345,31 +353,31 @@ l1Balance state addr includeFuel = do
   pure fullAmount
 
 -- | The balance of the proxy address associated with the address given
-getProxyFunds :: (MonadIO m) => State -> Address -> m Lovelace
-getProxyFunds state addr = do
-  (proxyAddr, _) <- addOrGetKeyInfo state addr
+getProxyFunds :: (MonadIO m) => State -> Address -> m (Either String Lovelace)
+getProxyFunds state addr = runExceptT $ do
+  (proxyAddr, _) <- ExceptT $ addOrGetKeyInfo state addr
   l1Balance state proxyAddr False
 
-getProxyFuel :: (MonadIO m) => State -> Address -> m Lovelace
-getProxyFuel state addr = do
-  (proxyAddr, _) <- addOrGetKeyInfo state addr
-  cninf <- getCardanoNodeInfo state
-  utxos <- queryAddressUTXOs cninf proxyAddr
+getProxyFuel :: (MonadIO m) => State -> Address -> m (Either String Lovelace)
+getProxyFuel state addr = runExceptT $ do
+  (proxyAddr, _) <- ExceptT $ addOrGetKeyInfo state addr
+  cninf <- lift $ getCardanoNodeInfo state
+  utxos <- lift $ queryAddressUTXOs cninf proxyAddr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
-buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either T.Text Tx)
-buildAddTx tType state fromAddr lovelaceAmount = do
-  cardanoNodeInfo <- getCardanoNodeInfo state
-  utxos <- queryAddressUTXOs cardanoNodeInfo fromAddr
+buildAddTx :: MonadIO m => TxType -> State -> Address -> Lovelace -> m (Either String Tx)
+buildAddTx tType state fromAddr lovelaceAmount = runExceptT $ do
+  cardanoNodeInfo <- lift $ getCardanoNodeInfo state
+  utxos <- lift $ queryAddressUTXOs cardanoNodeInfo fromAddr
   let
     txInLovelaceAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
-  (toAddr, _) <- addOrGetKeyInfo state fromAddr
+  (toAddr, _) <- ExceptT $ addOrGetKeyInfo state fromAddr
 
-  txBodyPath <- liftIO $ snd <$> getTempPath
-  (exitCode, output, errorOutput) <- liftIO $ readCreateProcessWithExitCode (proc cardanoCliPath
+  txBodyPath <- lift $ liftIO $ snd <$> getTempPath
+  _ <- ExceptT $ processAdapter $ liftIO $ readCreateProcessWithExitCode (proc cardanoCliPath
                        (filter (/= "") $ [ "transaction"
                         , "build"
                         , "--babbage-era"
@@ -394,17 +402,12 @@ buildAddTx tType state fromAddr lovelaceAmount = do
                                           , _nodeSocket cardanoNodeInfo)] }
     ""
 
-  case exitCode of
-    ExitSuccess -> do
-      txResult <- liftIO $ readFile txBodyPath
-      case Aeson.decode $ LBS.pack txResult of
-        Just tx -> pure $ Right tx
-        Nothing -> pure $ Left $ "Failed to read tx file at " <> T.pack txBodyPath
-    _ -> pure $ Left $ "Cardano CLI: " <> T.pack errorOutput
+  txResult <- liftIO $ readFile txBodyPath
+  case Aeson.decode $ LBS.pack txResult of
+    Just tx -> pure tx
+    Nothing -> throwError $ "Failed to read tx file at " <> txBodyPath
+      -- pure $ Left $ "Failed to read tx file at " <> T.pack txBodyPath
 
-
--- TODO: HydraPayError is too flat
--- TODO: Add a reader data type for State
 withNetwork ::
   MonadIO m =>
   State ->
@@ -422,10 +425,11 @@ withNode ::
   m (Either HydraPayError b)
 withNode state name addr f = do
   withNetwork state name $ \network -> do
-      (proxyAddr, _) <- addOrGetKeyInfo state addr
+    runExceptT $ do
+      (proxyAddr, _) <- ExceptT $ fmap (mapLeft ProcessError) $ addOrGetKeyInfo state addr
       case Map.lookup proxyAddr $ _network_nodes network of
-        Nothing -> pure $ Left NotAParticipant
-        Just node -> f node proxyAddr
+        Nothing -> throwError $ NotAParticipant
+        Just node -> ExceptT $ f node proxyAddr
 
 withAnyNode ::
   MonadIO m =>
@@ -464,16 +468,15 @@ instance FromJSON WithdrawRequest
 
 -- | Withdraw funds (if available from proxy request), fee is subtracted.
 withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
-withdraw state (WithdrawRequest addr maybeAmount) = do
-  cninf <- getCardanoNodeInfo state
-  (proxyAddr, keyInfo) <- addOrGetKeyInfo state addr
-  utxos <- queryAddressUTXOs cninf proxyAddr
+withdraw state (WithdrawRequest addr maybeAmount) = runExceptT $ do
+  cninf <- lift $ getCardanoNodeInfo state
+  (proxyAddr, keyInfo) <- ExceptT $ fmap (mapLeft ProcessError) $ addOrGetKeyInfo state addr
+  utxos <- lift $ queryAddressUTXOs cninf proxyAddr
   let
     notFuel = filterOutFuel utxos
     txInAmounts = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
   let signingKey = _signingKey $ _cardanoKeys keyInfo
-  result <- liftIO $ transferAmount cninf signingKey txInAmounts addr True maybeAmount
-  pure $ maybe (Left InsufficientFunds) Right result
+  ExceptT $ fmap (mapLeft ProcessError) $ liftIO $ transferAmount cninf signingKey txInAmounts addr True maybeAmount
 
 fanoutHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 fanoutHead = sendToHeadAndWaitFor Fanout $ \case
@@ -575,8 +578,13 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   statusBTChan <- liftIO newBroadcastTChanIO
   let hydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
   liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name hydraHead
-  network <- startNetwork state hydraHead
-  liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
+  startResult <- startNetwork state hydraHead
+  case startResult of
+    Right network -> do
+      logInfo $ pretty $ "Network started for head \"" <> name <> "\""
+      liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
+    Left err -> do
+      logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
   pure hydraHead
 
 data HydraTxError =
@@ -601,18 +609,17 @@ getNodeUtxos node proxyAddr = do
 
 submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError Pico)
 submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
-  withNode state name addr $ \node proxyAddr -> do
-    c <- liftIO $ _node_get_listen_chan node
-    senderUtxos :: Map TxIn TxInInfo <- getNodeUtxos node proxyAddr
+  withNode state name addr $ \node proxyAddr -> runExceptT $ do
+    c <- lift $ liftIO $ _node_get_listen_chan node
+    senderUtxos :: Map TxIn TxInInfo <- lift $ getNodeUtxos node proxyAddr
     let signingKey = _signingKey . _cardanoKeys . _keys . _node_info $ node
     let lovelaceUtxos = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) senderUtxos
-    -- FIXME: fails on empty lovelaceUtxos
-    (toAddrProxy, _) <- addOrGetKeyInfo state toAddr
-    (txid, signedTxJsonStr) <- liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos lovelaceAmount
+    (toAddrProxy, _) <- ExceptT $ fmap (mapLeft ProcessError) $ addOrGetKeyInfo state toAddr
+    (txid, signedTxJsonStr) <- ExceptT $ fmap (mapLeft ProcessError) $ liftIO $ buildSignedHydraTx signingKey proxyAddr toAddrProxy lovelaceUtxos lovelaceAmount
     let jsonTx :: Aeson.Value = fromMaybe (error "Failed to parse TX") . Aeson.decode . LBS.pack $ signedTxJsonStr
     let txCborHexStr = fromJust . parseMaybe (withObject "signed tx" (.: "cborHex")) $ jsonTx
 
-    startTime <- liftIO $ getCurrentTime
+    startTime <- lift $ liftIO $ getCurrentTime
     liftIO $ _node_send_msg node $ NewTx . T.pack $ txCborHexStr
     -- TODO: Could we make sure we saw the transaction that we sent and not another one?
     untilJust $ do
@@ -623,10 +630,14 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
           if txid `elem` confirmedIds
             then do
               endTime <- liftIO $ getCurrentTime
-              pure . Just $ Right (nominalDiffTimeToSeconds $ diffUTCTime endTime startTime)
+              pure . Just $ nominalDiffTimeToSeconds $ diffUTCTime endTime startTime
             else pure Nothing
-        ServerOutput.TxInvalid theUtxo tx valError ->
-          pure $ Left (HydraPay.Api.TxInvalid theUtxo tx valError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
+
+        ServerOutput.TxInvalid theUtxo tx valError -> do
+          let
+            parsedError = (HydraPay.Api.TxInvalid theUtxo tx valError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
+          throwError $ maybe (ProcessError "Tx Invalid") id parsedError
+          pure Nothing
         _ -> pure Nothing
 
 -- | Send a Server Message to all subscribers of a particular Head
@@ -660,21 +671,24 @@ lookupHead state name = do
 
 -- NOTE(skylar): Idempotent
 -- | Generate a proxy address with keys,
-addOrGetKeyInfo :: MonadIO m => State -> Address -> m (Address, HydraKeyInfo)
+addOrGetKeyInfo :: MonadIO m => State -> Address -> m (Either String (Address, HydraKeyInfo))
 addOrGetKeyInfo state addr = do
   cardanoNodeInfo <- getCardanoNodeInfo state
   liftIO $ modifyMVar (_state_proxyAddresses state) $ \old -> do
     case Map.lookup addr old of
-      Just info -> pure (old, info)
+      Just info -> pure (old, Right info)
       Nothing -> do
         liftIO $ createDirectoryIfMissing False keystore
-        keyInfo <- withLogging $ generateKeysIn $ keystore <> "/" <> T.unpack addr <> "-proxy"
-        proxyAddress <- liftIO
-                        $ getCardanoAddress cardanoNodeInfo
-                        $ _verificationKey . _cardanoKeys $ keyInfo
-        let info = (proxyAddress, keyInfo)
-        pure $ (Map.insert addr info old, info)
-
+        result <- runExceptT $ do
+          keyInfo <- ExceptT $ withLogging $ generateKeysIn $ keystore <> "/" <> T.unpack addr <> "-proxy"
+          proxyAddress <- ExceptT $ liftIO
+                          $ getCardanoAddress cardanoNodeInfo
+                          $ _verificationKey . _cardanoKeys $ keyInfo
+          pure (proxyAddress, keyInfo)
+        case result of
+          Left err -> pure (old, Left err)
+          Right info -> do
+            pure (Map.insert addr info old, Right info)
     where
       keystore = "keystore"
 
@@ -712,15 +726,15 @@ waitForHeadStatus state name status = runMaybeT $ do
         else pure $ Nothing
 
 -- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
-startNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> Head -> m Network
+startNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> Head -> m (Either String Network)
 startNetwork state (Head name participants _ statusBTChan) = do
   mNetwork <- getNetwork state name
   case mNetwork of
-    Just network -> pure network
-    Nothing -> do
-      proxyMap <- participantsToProxyMap state participants
-      hydraInfo <- getHydraSharedInfo state
-      nodes <- startHydraNetwork hydraInfo proxyMap (_state_getPorts state)
+    Just network -> pure $ Right network
+    Nothing -> runExceptT $ do
+      proxyMap <- ExceptT $ participantsToProxyMap state participants
+      hydraInfo <-lift $ getHydraSharedInfo state
+      nodes <- lift $ startHydraNetwork hydraInfo proxyMap (_state_getPorts state)
       let numNodes = length nodes
       readyCounterChan <- liftIO $ newChan
       network <- fmap Network . forM nodes $ \(processHndl, nodeInfo, ports) -> do
@@ -790,8 +804,12 @@ startNetwork state (Head name participants _ statusBTChan) = do
                           Just balance -> do
                             reverseMapProxyBalances state participants $ wholeUtxoToBalanceMap balance
                           Nothing -> do
-                            pure $ Map.fromList $ fmap (,0) $ Set.toList participants
-                        WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status mappedBalance
+                            pure $ Right $ Map.fromList $ fmap (,0) $ Set.toList participants
+                        case mappedBalance of
+                          Right mb ->
+                            WS.sendTextData subConn . Aeson.encode $ HeadStatusChanged name status mb
+                          Left errMsg -> do
+                            withLogging $ logError $ pretty $ "Failed to get head balance in head " <> name <> ": " <> T.pack errMsg
                   pure ()
                 (Nothing, _) -> pure ()
               liftIO $ atomically $ writeTChan bRcvChan msg
@@ -819,9 +837,10 @@ startNetwork state (Head name participants _ statusBTChan) = do
 
 -- | This takes the set participants in a Head and gets their proxy equivalents as actual addresses
 -- participating in the network are not the addresses registered in the head, but their proxies
-participantsToProxyMap :: MonadIO m => State -> Set Address -> m (Map Address HydraKeyInfo)
-participantsToProxyMap state participants =
-  liftIO $ fmap Map.fromList $ for (Set.toList participants) $ addOrGetKeyInfo state
+participantsToProxyMap :: MonadIO m => State -> Set Address -> m (Either String (Map Address HydraKeyInfo))
+participantsToProxyMap state participants = runExceptT $ do
+  fmap Map.fromList $ for (Set.toList participants) $ \x -> do
+    ExceptT $ liftIO $ addOrGetKeyInfo state x
 
 -- | Lookup the network associated with a head name
 getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)
@@ -850,6 +869,7 @@ startHydraNetwork sharedInfo actors getPorts = do
     (_,_,_,resultHandle) <- createProcess cp
     pure (resultHandle, theNode, ports)
   where
+
     node :: forall a. (Int, (a, HydraKeyInfo)) -> IO (a, (HydraNodeInfo, [Int]))
     node (n, (name, keys)) = do
       -- TODO: Handle lack of ports
@@ -957,7 +977,8 @@ cardanoNodeCreateProcess =
    ]) { std_out = CreatePipe
       }
 
-signAndSubmitTx :: CardanoNodeInfo -> SigningKey -> Tx -> IO ()
+-- | Sign and submit a transaction on the Node given, the return is the error if one exists
+signAndSubmitTx :: CardanoNodeInfo -> SigningKey -> Tx -> IO (Maybe String)
 signAndSubmitTx cninfo sk tx = do
   withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
     LBS.hPut draftHandle $ Aeson.encode tx
@@ -975,8 +996,17 @@ signAndSubmitTx cninfo sk tx = do
                                     ])
             { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninfo)]
             }
-      _ <- readCreateProcess cp ""
-      submitTx cninfo signedFile >>= withLogging . waitForTxIn cninfo
+      (exitCode, _, stderr) <- readCreateProcessWithExitCode cp ""
+      case exitCode of
+        ExitSuccess -> do
+          submitResult <- submitTx cninfo signedFile
+          case submitResult of
+            Right txid -> do
+              withLogging . waitForTxIn cninfo $ txid
+              pure Nothing
+            Left err -> pure $ Just err
+          pure Nothing
+        _ -> pure $ Just stderr
 
 handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
 handleTaggedMessage conn state (Tagged tid clientMsg) = do
@@ -1026,17 +1056,19 @@ handleClientMessage conn state = \case
   RestartDevnet -> do
     cns <- liftIO $ readMVar (_state_cardanoNodeState state)
     case getHydraPayMode state of
-      ConfiguredMode {} -> pure ()
+      ConfiguredMode {} -> pure $ ApiError "Hydra Pay is currently not running a Devnet"
       LiveDocMode -> do
         heads <- Map.keys <$> (liftIO $ readMVar (_state_heads state))
         -- Terminate all the heads!
         for_ heads $ terminateHead state
 
         -- Create a new devnet and update the MVar
-        liftIO $ modifyMVar_ (_state_cardanoNodeState state) $ \oldCns -> do
+        liftIO $ modifyMVar (_state_cardanoNodeState state) $ \oldCns -> do
           teardownDevnet oldCns
-          withLogging (makeCardanoNodeStateAndRestartDemoDevnet (getHydraPayMode state))
-    pure DevnetRestarted
+          result <- withLogging (makeCardanoNodeStateAndRestartDemoDevnet (getHydraPayMode state))
+          case result of
+            Right newstate -> pure (newstate, DevnetRestarted)
+            Left err -> pure (oldCns, ApiError $ "Failed to restart devnet: " <> T.pack err)
 
   GetDevnetAddresses lovelaceAmount -> do
     mAddrs <- liftIO $ getDevnetAddresses [1 .. fromIntegral lovelaceAmount]
@@ -1079,12 +1111,12 @@ handleClientMessage conn state = \case
 
   GetAddTx txtype addr lovelaceAmount -> do
     result <- buildAddTx txtype state addr lovelaceAmount
-    pure $ either ApiError FundsTx result
+    pure $ either (ApiError . T.pack) FundsTx result
 
   CheckFuel addr -> do
     -- Calc the fuel amount
     fuel <- getProxyFuel state addr
-    pure $ FuelAmount fuel
+    pure $ either (ApiError . T.pack) FuelAmount fuel
 
   CreateHead hc@(HeadCreate name _) -> do
     result <- createHead state hc
