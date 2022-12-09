@@ -28,7 +28,6 @@ in
           useradd -r -g hydrapay hydrapay
           mkdir -p /hydrapay
           ln -sft /hydrapay '${self.linuxExe}'/*
-          cp -r ${./config} /hydrapay/config 
           chown -R hydrapay:hydrapay /hydrapay
         '';
       config = {

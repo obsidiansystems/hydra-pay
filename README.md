@@ -29,12 +29,16 @@ Pull the docker image, run it and visit [localhost:8000](http://localhost:8000) 
 ```bash
 docker pull obsidiansys/hydra-pay:latest
 
-docker run -p 127.0.0.1:8000:8000/tcp obsidiansys/hydra-pay:latest
+docker run -p 127.0.0.1:8000:8000/tcp --name hydra-pay obsidiansys/hydra-pay:latest
 ```
 
-The default API key can be found in this repository under `config/backend/api-key`.
+Hydra Pay will generate an *API key* which can be read out with:
 
-To use a custom API key mount a copy of the `config` directory to `/hydrapay/config`:
+```bash
+docker exec -it hydra-pay cat /hydrapay/config/backend/api-key
+```
+
+To use a custom configuration, mount a copy of the `config` directory from this repository to `/hydrapay/config`:
 
 ```bash
 docker run -p 127.0.0.1:8000:8000/tcp --volume /path/to/hydra-pay/config:/hydrapay/config obsidiansys/hydra-pay:latest
