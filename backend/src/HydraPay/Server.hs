@@ -828,17 +828,21 @@ getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)
 getNetwork state name =
   liftIO $ withMVar (_state_networks state) (pure . Map.lookup name)
 
+-- | Where the nodes log their output
+nodeLogDir :: FilePath
+nodeLogDir ="node-logs"
+
 startHydraNetwork :: (MonadIO m)
   => HydraSharedInfo
   -> Map Address HydraKeyInfo
   -> (Int -> IO (Maybe [Int]))
   -> m (Map Address (ProcessHandle, HydraNodeInfo, [Int]))
 startHydraNetwork sharedInfo actors getPorts = do
-  liftIO $ createDirectoryIfMissing True "demo-logs"
+  liftIO $ createDirectoryIfMissing True nodeLogDir
   nodes :: (Map Address (HydraNodeInfo, [Int])) <- liftIO . fmap Map.fromList . mapM node $ zip [1 ..] (Map.toList actors)
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name (theNode, ports) -> do
-    logHndl <- openFile [iii|demo-logs/hydra-node-#{name}.log|] WriteMode
-    errHndl <- openFile [iii|demo-logs/hydra-node-#{name}.error.log|] WriteMode
+    logHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.log|] WriteMode
+    errHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.error.log|] WriteMode
     let cp = (mkHydraNodeCP sharedInfo theNode (filter ((/= _nodeId theNode) . _nodeId) (fmap fst $ Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
