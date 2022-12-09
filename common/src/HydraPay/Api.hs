@@ -14,6 +14,7 @@ import Control.Lens.TH
 import Data.Fixed (Pico)
 import Hydra.Types
 import Hydra.ServerOutput as ServerOutput
+import qualified HydraPay.Config as Config
 
 type HeadName = T.Text
 
@@ -149,6 +150,8 @@ data ClientMsg
   | GetHeadBalance HeadName Address
 
   | LiveDocEzSubmitTx Tx Address
+
+  | GetHydraPayMode
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -185,6 +188,7 @@ data ServerMsg
   | BalanceChange HeadName (Map Address Lovelace)
   | HeadRemoved HeadName
   | ApiError T.Text
+  | HydraPayMode Config.HydraPayMode
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
