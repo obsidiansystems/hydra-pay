@@ -25,14 +25,11 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Aeson.Encode.Pretty as Aeson
 
-import Control.Monad (join, (<=<))
-
 import Hydra.Types
-import HydraPay.Api
+import HydraPay.Api hiding (amount)
 
 import Text.Read (readMaybe)
 
-import Data.Fixed
 import qualified Data.Text as T
 
 import Obelisk.Frontend
@@ -137,10 +134,11 @@ trySection ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> TrySectionConfig t m ->  m ()
-trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorText extraStuff) = do
+trySection lastTagId serverMsg config = do
+  -- (TrySectionConfig pinput example genErrorText extraStuff)
   elClass "div" "p-4 bg-white rounded flex flex-col" $ do
     (tryButtonClick, request) <- elClass "div" "flex flex-row justify-between mb-4" $ do
-      req <- payloadInput
+      req <- trySection_payloadInput config
       (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
       pure (domEvent Click tryEl, req)
 
@@ -177,11 +175,11 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
           elClass "pre" "overflow-y-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-          case genErrorText msg of
+          case (trySection_genHelpfulErrorText config) msg of
             Just errMsg -> elClass "div" "text-sm font-semibold text-red-400" $ text errMsg
             Nothing -> blank
 
-        extraStuff request msg
+        (trySection_extraStuff config) request msg
 
       WaitingOnResponse -> do
         elClass "div" "font-semibold mt-4" $ text "Waiting for Response..."
@@ -190,7 +188,7 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
 
       Standby -> blank
 
-    example
+    trySection_example config
   pure ()
 
 removeHead ::
@@ -199,8 +197,6 @@ removeHead ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  , MonadJSM (Performable m)
-  , PerformEvent t m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 removeHead lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
@@ -235,8 +231,6 @@ closeHead ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  , MonadJSM (Performable m)
-  , PerformEvent t m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 closeHead lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
@@ -273,7 +267,7 @@ activeHeads ::
   , MonadHold t m
   , MonadFix m
   ) => Dynamic t Bool -> Dynamic t Int64 -> Event t (ServerMsg) -> Event t (Tagged ServerMsg) -> m ()
-activeHeads authenticated lastTagId subscriptions responses = do
+activeHeads authenticated _ subscriptions responses = do
   elClass "div" "flex-grow p-4" $ elClass "div" "max-w-lg" $ do
     header "Your Heads"
 
@@ -439,8 +433,8 @@ sendFundsInHead lastTagId serverMsg = do
         pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
 
       let
-        mkSubmitHeadTx hname to from lovelace =
-          SubmitHeadTx from (HeadSubmitTx hname to lovelace)
+        mkSubmitHeadTx hname toaddr fromaddr lovelace =
+          SubmitHeadTx fromaddr (HeadSubmitTx hname toaddr lovelace)
 
       pure $ mkSubmitHeadTx <$> name <*> toAddr <*> fromAddr <*> amount
 
@@ -1116,11 +1110,9 @@ authentication lastTagId serverMsg = do
 monitorView ::
   ( PostBuild t m
   , DomBuilder t m
-  , MonadJSM m
   , MonadFix m
   , MonadHold t m
   , MonadJSM (Performable m)
-  , TriggerEvent t m
   , PerformEvent t m
   , EventWriter t [ClientMsg] m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()

@@ -81,7 +81,6 @@ import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 import Control.Monad.Loops (untilJust, iterateUntilM)
 import Data.Aeson.Types (parseMaybe)
 import Control.Monad.Except
-import Text.Read (readMaybe)
 import Prelude hiding ((.))
 import System.IO (hClose)
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
@@ -288,29 +287,6 @@ websocketApiHandler state = do
           Left err ->
             WS.sendTextData conn . Aeson.encode $ InvalidMessage $ T.pack err
 
-{-
-        case (isAuthenticated, mClientMsg) of
-          -- Handle authentication
-          (False, Right (Tagged t (Authenticate token))) -> do
-            let apiKey = _state_apiKey state
-                sentKey = T.encodeUtf8 token
-
-                authResult = apiKey == sentKey
-
-            modifyMVar_ authVar (pure . const authResult)
-            WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
-
-          -- Turn away requests that aren't authenticated
-          (False, Right (Tagged t _)) -> do
-            WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
-
-          -- When authenticated just process as normal
-          (True, Right clientMsg) -> do
-            msg <- withLogging $ handleTaggedMessage conn state clientMsg
-            WS.sendTextData conn . Aeson.encode $ msg
-
-          (_, Left err) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage $ T.pack err
--}
 stopCardanoNode :: CardanoNodeState -> IO ()
 stopCardanoNode (CardanoNodeState handles _) =
   maybe (pure ()) cleanupProcess handles
@@ -353,22 +329,22 @@ headAllBalances state headname = do
 -- | Take all the UTxOs and organize them into a map of lovelace balances: Map Address Lovelace
 wholeUtxoToBalanceMap :: WholeUTXO -> Map Address Lovelace
 wholeUtxoToBalanceMap =
-   foldr (\utxo allutxos -> Map.unionWith (+) utxo allutxos) mempty . fmap singletonFromTxInfo . Map.elems
+   foldr (\output allutxos -> Map.unionWith (+) output allutxos) mempty . fmap singletonFromTxInfo . Map.elems
 
 reverseMapProxyBalances :: MonadIO m => State -> Set Address -> Map Address Lovelace -> m (Either String (Map Address Lovelace))
-reverseMapProxyBalances state participants headBalance = runExceptT $ do
+reverseMapProxyBalances state participants inHeadBalance = runExceptT $ do
   reverseMap :: Map Address Address <- fmap mconcat $ for (Set.toList participants) $ \paddr -> do
     (proxyAddr, _) <- ExceptT $ addOrGetKeyInfo state paddr
     pure $ Map.singleton proxyAddr paddr
 
-  pure $ Map.mapKeys (\proxyKey-> maybe proxyKey id $ Map.lookup proxyKey reverseMap) headBalance
+  pure $ Map.mapKeys (\proxyKey-> maybe proxyKey id $ Map.lookup proxyKey reverseMap) inHeadBalance
 
 
 singletonFromTxInfo :: TxInInfo -> Map Address Lovelace
-singletonFromTxInfo (TxInInfo addr _ value) =
+singletonFromTxInfo (TxInInfo addr _ val) =
   Map.singleton addr $ fromIntegral lovelace
   where
-    lovelace = maybe 0 id . Map.lookup "lovelace" $ value
+    lovelace = maybe 0 id . Map.lookup "lovelace" $ val
 
 
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
@@ -483,6 +459,7 @@ initHead state (HeadInit name con) = do
     Right (ReadyToCommit {}) -> pure $ Right ()
     Right (PostTxOnChainFailed {}) -> pure $ Left "Failed to submit tx, check participants fuel"
     Left err -> pure $ Left $ tShow err
+    _ -> pure $ Left "Impossible error"
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
@@ -665,7 +642,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
         ServerOutput.TxInvalid theUtxo tx valError -> do
           let
             parsedError = (HydraPay.Api.TxInvalid theUtxo tx valError) <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
-          throwError $ maybe (ProcessError "Tx Invalid") id parsedError
+          _ <- throwError $ maybe (ProcessError "Tx Invalid") id parsedError
           pure Nothing
         _ -> pure Nothing
 
@@ -1034,7 +1011,6 @@ signAndSubmitTx cninfo sk tx = do
               withLogging . waitForTxIn cninfo $ txid
               pure Nothing
             Left err -> pure $ Just err
-          pure Nothing
         _ -> pure $ Just stderr
 
 handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
@@ -1083,7 +1059,6 @@ handleClientMessage conn state = \case
     pure $ CurrentStats $ HydraPayStats numHeads numNodes
 
   RestartDevnet -> do
-    cns <- liftIO $ readMVar (_state_cardanoNodeState state)
     case getHydraPayMode state of
       ConfiguredMode {} -> pure $ ApiError "Hydra Pay is currently not running a Devnet"
       LiveDocMode -> do
@@ -1113,18 +1088,20 @@ handleClientMessage conn state = \case
     liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
     pure $ SubscriptionStarted name
 
-  LiveDocEzSubmitTx tx address -> do
+  LiveDocEzSubmitTx tx addr -> do
     isDevnet <- runningDevnet state
     case isDevnet of
       False -> pure $ ApiError "This endpoint is only available when Hydra Pay is running a Devnet"
       True -> do
-        mKeys <- liftIO $ getTestAddressKeys address
+        mKeys <- liftIO $ getTestAddressKeys addr
         case mKeys of
           Nothing -> pure $ ApiError "Address is not a Devnet test address"
           Just (KeyPair sk _) -> do
             cardanoNodeInfo <- getCardanoNodeInfo state
-            liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
-            pure OperationSuccess
+            result <- liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
+            pure $ case result of
+              Just err -> ApiError $ T.pack err
+              Nothing -> OperationSuccess
 
   ClientHello -> pure $ ServerHello versionStr
 
