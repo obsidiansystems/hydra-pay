@@ -58,6 +58,7 @@ library
                , cryptonite
                , base64-bytestring
                , optparse-applicative
+               , attoparsec
 
   default-extensions:
     OverloadedStrings

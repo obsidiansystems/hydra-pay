@@ -24,6 +24,9 @@ processAdapter action = do
     ExitSuccess -> Right out
     _ -> Left err
 
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe = either (const Nothing) Just
+
 mapBoth :: (a -> c) -> (b -> d) -> Either a b -> Either c d
 mapBoth f _ (Left x)  = Left (f x)
 mapBoth _ f (Right x) = Right (f x)

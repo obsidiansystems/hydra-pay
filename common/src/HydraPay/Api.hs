@@ -168,7 +168,7 @@ data ServerMsg
   | FuelAmount Lovelace
   | SubscriptionStarted HeadName
   | AlreadySubscribed HeadName
-  | InvalidMessage
+  | InvalidMessage T.Text
   | UnhandledMessage
   | HeadExistsResult Bool
   | DevnetRestarted

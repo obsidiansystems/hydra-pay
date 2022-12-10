@@ -121,7 +121,7 @@ seedTestAddresses cninf faucetKeys amount = do
       pure addr
     case sequenceA result of
       Right seededAddresses ->
-        liftIO $ T.writeFile addressesPath $ T.intercalate "\n" seededAddresses
+        liftIO $ T.writeFile addressesPath $ T.intercalate "\n" $ fmap unAddress seededAddresses
       Left err -> logError $ pretty err
 
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
@@ -130,7 +130,7 @@ getTestAddressKeys addr = do
   case exists of
     False -> pure Nothing
     True -> do
-      contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile addressesPath
+      contents <- flip zip [(1 :: Integer)..] . fmap UnsafeToAddress . T.lines <$> T.readFile addressesPath
       pure $ fmap mkKeypair . lookup addr $ contents
   where
     mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
@@ -305,7 +305,7 @@ queryAddressUTXOs cninf addr = liftIO $ do
         (proc cardanoCliPath $ [ "query"
                              , "utxo"
                              , "--address"
-                             , T.unpack addr
+                             , addressToString addr
                              , "--out-file"
                              , "/dev/stdout"
                              ]
@@ -350,7 +350,7 @@ getFirstTxIn cninf addr = runExceptT $ do
                               [ "query"
                               , "utxo"
                               , "--address"
-                              , T.unpack addr
+                              , addressToString addr
                               , "--out-file"
                               , "/dev/stdout"
                               ]
@@ -361,7 +361,7 @@ getCardanoAddress :: CardanoNodeInfo -> VerificationKey -> IO (Either String Add
 getCardanoAddress cninf keyPath = do
   (exitCode, stdout, stderr) <- readCreateProcessWithExitCode cp ""
   case exitCode of
-    ExitSuccess -> pure $ Right $ T.pack stdout
+    ExitSuccess -> pure $ Right $ UnsafeToAddress . T.pack $ stdout
     _ -> pure $ Left stderr
   where
     cp = (proc cardanoCliPath $ [ "address"
@@ -403,12 +403,12 @@ buildDraftTx cninf tx = do
                                      , "--babbage-era"
                                      , "--cardano-mode"
                                      , "--change-address"
-                                     , T.unpack (_tx_changeAddr tx)
+                                     , addressToString (_tx_changeAddr tx)
                                      ]
                                      <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ _tx_ins tx)
                                      <>
                                      [ "--tx-out"
-                                     , T.unpack (_tx_outAddr tx) <> "+" <> show (_tx_outAmount tx)
+                                     , addressToString (_tx_outAddr tx) <> "+" <> show (_tx_outAmount tx)
                                      ]
                                      <> maybe [] (\h -> [ "--tx-out-datum-hash", T.unpack h ]) (_tx_outDatumHash tx)
                                      <>
@@ -432,7 +432,7 @@ buildRawEmptyTx cninf txins outAddrs = do
                               ]
                               <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ txins)
                               <>
-                              concatMap (\addr -> [ "--tx-out", T.unpack addr <> "+0" ]) outAddrs
+                              concatMap (\addr -> [ "--tx-out", addressToString addr <> "+0" ]) outAddrs
                               <>
                               [ "--fee", "0"
                               , "--invalid-hereafter", "0"
@@ -596,9 +596,9 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = runExceptT $ 
                         <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
                         <>
                         [ "--tx-out"
-                        , [i|#{toAddr}+#{amount}|]
+                        , [i|#{addressToString toAddr}+#{amount}|]
                         , "--tx-out"
-                        , [i|#{fromAddr}+#{fullAmount - amount}|]
+                        , [i|#{addressToString fromAddr}+#{fullAmount - amount}|]
                         , "--fee"
                         , "0"
                         , "--out-file"
@@ -629,7 +629,7 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = runExceptT $ 
 getDevnetAddresses :: [Int] -> IO (Maybe [Address])
 getDevnetAddresses is = do
   addrs <- zip [1..] . T.lines . T.pack <$> readFile addressesPath
-  pure $ for is (flip lookup addrs)
+  pure $ for is (eitherToMaybe . parseAddress <=< flip lookup addrs)
 
 getDevnetAddress :: Int -> IO (Maybe Address)
 getDevnetAddress addrIndex = do
