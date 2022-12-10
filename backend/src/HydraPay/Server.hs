@@ -37,6 +37,7 @@ import Data.Set (Set)
 import qualified Data.Map as Map
 import Data.Aeson ((.:))
 import Data.Aeson as Aeson
+import Data.Aeson.Types as Aeson
 import Data.Maybe
 import Data.String.Interpolate ( i, iii )
 import System.IO (IOMode(WriteMode), openFile, Handle)
@@ -258,11 +259,39 @@ websocketApiHandler state = do
     WS.withPingThread conn 30 (pure ()) $ do
       WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
       forever $ do
-        mClientMsg <- Aeson.decode <$> WS.receiveData conn
+        -- To provide good Error UX if somebody has a tagged message that fails to parse, we want
+        -- to show them why, so we decode in two steps so we can tag our response with the error message
+        -- ensuring it gets routed to the correct place!
+        decodeResult :: Either String (Tagged Value) <- Aeson.eitherDecode <$> WS.receiveData conn
         isAuthenticated <- readMVar authVar
+        case decodeResult of
+          Right (Tagged t val) -> do
+            case (isAuthenticated, Aeson.parseEither parseJSON val) of
+              (False, Right (Authenticate token)) -> do
+                let
+                  apiKey = _state_apiKey state
+                  sentKey = T.encodeUtf8 token
+                  authResult = apiKey == sentKey
+
+                modifyMVar_ authVar (pure . const authResult)
+                WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
+
+              (False, Right _) -> do
+                WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
+
+              (True, Right clientMsg) -> do
+                 msg <- withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
+                 WS.sendTextData conn . Aeson.encode $ msg
+
+              (_, Left err) -> WS.sendTextData conn . Aeson.encode $ Tagged t $ InvalidMessage $ T.pack err
+
+          Left err ->
+            WS.sendTextData conn . Aeson.encode $ InvalidMessage $ T.pack err
+
+{-
         case (isAuthenticated, mClientMsg) of
           -- Handle authentication
-          (False, Just (Tagged t (Authenticate token))) -> do
+          (False, Right (Tagged t (Authenticate token))) -> do
             let apiKey = _state_apiKey state
                 sentKey = T.encodeUtf8 token
 
@@ -272,16 +301,16 @@ websocketApiHandler state = do
             WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
 
           -- Turn away requests that aren't authenticated
-          (False, Just (Tagged t _)) -> do
+          (False, Right (Tagged t _)) -> do
             WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
 
           -- When authenticated just process as normal
-          (True, Just clientMsg) -> do
+          (True, Right clientMsg) -> do
             msg <- withLogging $ handleTaggedMessage conn state clientMsg
             WS.sendTextData conn . Aeson.encode $ msg
 
-          (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
-
+          (_, Left err) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage $ T.pack err
+-}
 stopCardanoNode :: CardanoNodeState -> IO ()
 stopCardanoNode (CardanoNodeState handles _) =
   maybe (pure ()) cleanupProcess handles
@@ -386,12 +415,12 @@ buildAddTx tType state fromAddr lovelaceAmount = runExceptT $ do
                         <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInLovelaceAmounts)
                         <>
                         [ "--tx-out"
-                        , [i|#{toAddr}+#{lovelaceAmount}|]
+                        , [i|#{addressToString toAddr}+#{lovelaceAmount}|]
                         ]
                         <> bool [] [ "--tx-out-datum-hash", T.unpack fuelMarkerDatumHash ] (isFuelType tType)
                         <>
                         [ "--change-address"
-                        , T.unpack fromAddr
+                        , addressToString fromAddr
                         , "--testnet-magic"
                         , show . _testNetMagic . _nodeType $ cardanoNodeInfo
                         ]
@@ -680,7 +709,7 @@ addOrGetKeyInfo state addr = do
       Nothing -> do
         liftIO $ createDirectoryIfMissing False keystore
         result <- runExceptT $ do
-          keyInfo <- ExceptT $ withLogging $ generateKeysIn $ keystore <> "/" <> T.unpack addr <> "-proxy"
+          keyInfo <- ExceptT $ withLogging $ generateKeysIn $ keystore <> "/" <> addressToString addr <> "-proxy"
           proxyAddress <- ExceptT $ liftIO
                           $ getCardanoAddress cardanoNodeInfo
                           $ _verificationKey . _cardanoKeys $ keyInfo
