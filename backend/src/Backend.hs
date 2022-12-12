@@ -17,17 +17,21 @@ import HydraPay.Logging
 import Obelisk.Backend
 import Obelisk.Route
 import Prelude hiding (filter)
+import Config
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
   { _backend_run = \serve -> do
+      -- Parse command line arguments
+      cfg <- getHydraCLIConfig
+
       -- Greet the user
       putStrLn hydraAsciiLogo
       putStrLn hydraPayAsciiLogo
       putStrLn hydraPayAsciiSubhead
 
       withLogging $ do
-        liftIO $ runHydraPay $ \state -> do
+        liftIO $ runHydraPay cfg $ \state -> do
           liftIO . serve $ \case
             BackendRoute_HydraPay :/ hpr -> case hpr of
               HydraPayRoute_Api :/ () -> websocketApiHandler state

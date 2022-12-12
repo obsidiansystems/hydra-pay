@@ -17,7 +17,36 @@ This will cover:
   * Fanout
 * A real-world example application
 
-## Prerequisites
+## 👷🏾‍♂️ Running Hydra Pay
+
+Hydra Pay can be ran via Docker or Nix.
+By default it wil run in live documentation mode on port 8000 which gives you a realtime way to test and learn about the Hydra Pay API and Best Practices.
+
+### With Docker
+
+Pull the docker image, run it and visit [localhost:8000](http://localhost:8000) to see the Live Documentation:
+
+```bash
+docker pull obsidiansys/hydra-pay:latest
+
+docker run -p 127.0.0.1:8000:8000/tcp --name hydra-pay obsidiansys/hydra-pay:latest
+```
+
+Hydra Pay will generate an *API key* which can be read out with:
+
+```bash
+docker exec -it hydra-pay cat /hydrapay/config/backend/api-key
+```
+
+To use a custom configuration, mount a copy of the `config` directory from this repository to `/hydrapay/config`:
+
+```bash
+docker run -p 127.0.0.1:8000:8000/tcp --volume /path/to/hydra-pay/config:/hydrapay/config obsidiansys/hydra-pay:latest
+```
+
+There are command line options to run on your own Cardano network and Hydra Head parameters. These can be listed with the `--help` option and are similar to those of `cardano-node` and [`hydra-node`](https://hydra.family/head-protocol/docs/getting-started).
+
+### With Nix
 
 1. [Install Nix](https://nixos.org/nix/). If you already have Nix installed, make sure you have version 2.0 or higher. To check your current version, run nix-env --version.
 
@@ -34,12 +63,6 @@ This will cover:
         binary-cache-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ryantrinkle.com-1:JJiAKaRv9mWgpVAz8dwewnZe0AzzEAzPkagE9SP5NWI=
         binary-caches-parallel-connections = 40
         ```
-
-## 👷🏾‍♂️ Running Hydra Pay
-
-Hydra Pay is currently under construction, detailed steps about running and deploying Hydra Pay as well as endpoint and configuration documentation is on its way!
-
-We plan to support docker, and nix out of the box for those who want to deploy and run their own Hydra Pay service, no knowledge of Obelisk, Haskell or any other underlying technology will be necessary.
 
 To deploy hydra-pay locally you can build and deploy the app as described below.
 
@@ -65,10 +88,6 @@ Visit the live documentation and confirm your key and requests presented work as
 Your API Key should be provided in `config/backend/api-key` if no key is provided we generate a random one the aformentioned file. 
 
 DO NOT USE THIS KEY IN PRODUCTION.
-
-### Live Documentation
-
-Once you have hydra pay running visit [localhost:8000](http://localhost:8000) to see the Live Documentation which gives you a realtime way to test and learn about the Hydra Pay API and Best Practices.
 
 ## 👩🏿‍💻 Hacking on Hydra Pay
 Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansystems/obelisk#installing-obelisk) so to contribute you must have Obelisk installed.
@@ -107,7 +126,7 @@ Foundational:
 - [x] Live Documentation
 - [x] Full lifecycle guide
 - [ ] Deployment Guide
-- [ ] Docker Deployment Guide
+- [x] Docker Deployment Guide
 - [ ] Best Practices
 - [ ] TTL on add funds and fuel pre-built transactions
 - [ ] Integration of hydra libraries

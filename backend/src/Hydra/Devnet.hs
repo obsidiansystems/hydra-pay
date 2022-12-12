@@ -14,7 +14,6 @@ module Hydra.Devnet
   , TxId
   , getCardanoAddress
   , seedAddressFromFaucetAndWait
-  , getReferenceScripts
   , publishReferenceScripts
   , queryAddressUTXOs
   , buildSignedTx
@@ -91,7 +90,7 @@ devnetFaucetKeys = mkKeyPair "devnet/credentials/faucet.sk" "devnet/credentials/
 
 prepareDevnet :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => m ()
 prepareDevnet = do
-  _ <- liftIO $ readCreateProcess (shell "[ -d devnet ] || ./config/backend/prepare-devnet.sh") ""
+  _ <- liftIO $ readCreateProcess (shell [i| [ -d devnet ] || #{livedocDevnetScriptPath}|]) ""
   logInfo "Prepared Devnet, running..."
   pure ()
 
@@ -143,9 +142,6 @@ type HydraScriptTxId = T.Text
 
 type DraftTx = FilePath
 type SignedTx = FilePath
-
-devnetNetworkId :: Int
-devnetNetworkId = 42
 
 generateKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m HydraKeyInfo
 generateKeys = do
@@ -212,28 +208,19 @@ generateHydraKeys path = do
   when (not . null $ output) $ logInfo $ pretty output
   pure $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
 
--- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
-getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => FilePath -> SigningKey -> m HydraScriptTxId
-getReferenceScripts scriptPath sk = do
-  exists <- liftIO $ doesFileExist scriptPath
-  case exists of
-    True -> liftIO $ T.readFile scriptPath
-    False -> do
-      scripts <- publishReferenceScripts sk
-      liftIO $ T.writeFile scriptPath scripts
-      pure scripts
-
--- TODO: Make this generic over node and signing key?
-publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m HydraScriptTxId
-publishReferenceScripts sk = do
+publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m)
+  => CardanoNodeInfo
+  -> SigningKey
+  -> m HydraScriptTxId
+publishReferenceScripts cninf sk = do
   logInfo $ "Publishing reference scripts ('νInitial' & 'νCommit')..."
   fmap (T.strip . T.pack) $ liftIO $ readCreateProcess cp ""
   where
     cp = proc hydraNodePath [ "publish-scripts"
                               , "--network-id"
-                              , show devnetNetworkId
+                              , show . _testNetMagic . _nodeType $ cninf
                               , "--node-socket"
-                              , "devnet/node.socket"
+                              , _nodeSocket cninf
                               , "--cardano-signing-key"
                               , getSigningKeyFilePath sk
                               ]
