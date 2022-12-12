@@ -156,9 +156,6 @@ type HydraScriptTxId = T.Text
 type DraftTx = FilePath
 type SignedTx = FilePath
 
-devnetNetworkId :: Int
-devnetNetworkId = 42
-
 generateKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m (Either String HydraKeyInfo)
 generateKeys = do
   basePath <- liftIO getTempPath'
