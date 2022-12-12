@@ -263,29 +263,27 @@ websocketApiHandler state = do
         -- ensuring it gets routed to the correct place!
         decodeResult :: Either String (Tagged Value) <- Aeson.eitherDecode <$> WS.receiveData conn
         isAuthenticated <- readMVar authVar
-        case decodeResult of
-          Right (Tagged t val) -> do
-            case (isAuthenticated, Aeson.parseEither parseJSON val) of
-              (False, Right (Authenticate token)) -> do
-                let
-                  apiKey = _state_apiKey state
-                  sentKey = T.encodeUtf8 token
-                  authResult = apiKey == sentKey
-
-                modifyMVar_ authVar (pure . const authResult)
-                WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
-
-              (False, Right _) -> do
-                WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
-
-              (True, Right clientMsg) -> do
-                 msg <- withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
-                 WS.sendTextData conn . Aeson.encode $ msg
-
-              (_, Left err) -> WS.sendTextData conn . Aeson.encode $ Tagged t $ InvalidMessage $ T.pack err
-
-          Left err ->
-            WS.sendTextData conn . Aeson.encode $ InvalidMessage $ T.pack err
+        WS.sendTextData conn $ case decodeResult of
+          Left err -> Aeson.encode $ InvalidMessage $ T.pack err
+          Right (Tagged t val) -> Aeson.encode
+            =<< case (isAuthenticated, Aeson.parseEither parseJSON val) of
+             -- Handle authentication
+             (False, Right (Authenticate token)) -> do
+               let apiKey = _state_apiKey state
+                   sentKey = T.encodeUtf8 token
+                   authResult = apiKey == sentKey
+               modifyMVar_ authVar (pure . const authResult)
+               pure . Tagged t $ AuthResult authResult
+             
+             -- Allow GetHydraPayMode even when not authenticated
+             (_, Right GetHydraPayMode) -> do
+               withLogging $ handleTaggedMessage conn state (Tagged t GetHydraPayMode)
+   
+             -- Turn away requests that aren't authenticated
+             (False, Right _) -> pure . Tagged t $ NotAuthenticated
+   
+             -- When authenticated just process as normal
+             (True, Right clientMsg) -> withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
 
 stopCardanoNode :: CardanoNodeState -> IO ()
 stopCardanoNode (CardanoNodeState handles _) =
