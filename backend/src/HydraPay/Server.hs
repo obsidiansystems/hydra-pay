@@ -221,15 +221,6 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
       withLogging $ prepareDevnet
       handles <- createProcess cardanoNodeCreateProcess
       threadDelay (seconds 3)
-      _ <- liftIO $ readCreateProcess ((proc cardanoCliPath [ "query"
-                                        , "protocol-parameters"
-                                        , "--testnet-magic"
-                                        , "42"
-                                        , "--out-file"
-                                        , "devnet/devnet-protocol-parameters.json"
-                                        ])
-                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
-                }) ""
       hydraSharedInfo <- withLogging $ do
         scriptsTxId <- publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
         pure $ HydraSharedInfo
@@ -238,20 +229,23 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
             _hydraLedgerProtocolParameters = "devnet/hydra-protocol-parameters.json",
             _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
           }
+      liftIO $ writeProtocolParameters (_hydraCardanoNodeInfo hydraSharedInfo)
       withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
       pure $ CardanoNodeState (Just handles) hydraSharedInfo
 
-  ConfiguredMode cardanoParams hydraParams ->
+  ConfiguredMode cardanoParams hydraParams -> do
+    protocolParametersPath <- liftIO $ snd <$> getTempPath
+    let cninf = CardanoNodeInfo { _nodeType = TestNet (Config._testnetMagic cardanoParams),
+                             _nodeSocket = Config._nodeSocket cardanoParams,
+                             _nodeLedgerProtocolParameters = protocolParametersPath,
+                             _nodeLedgerGenesis = Config._ledgerGenesis cardanoParams
+                           }
+    liftIO $ writeProtocolParameters cninf
     pure $ CardanoNodeState Nothing $ HydraSharedInfo
          { _hydraScriptsTxId = Config._hydraScriptsTxId hydraParams,
            _hydraLedgerGenesis = Config._hydraLedgerGenesis hydraParams,
            _hydraLedgerProtocolParameters = Config._hydraLedgerProtocolParameters hydraParams,
-           _hydraCardanoNodeInfo =
-           CardanoNodeInfo { _nodeType = TestNet (Config._testnetMagic cardanoParams),
-                             _nodeSocket = Config._nodeSocket cardanoParams,
-                             _nodeLedgerProtocolParameters = Config._ledgerProtocolParameters cardanoParams,
-                             _nodeLedgerGenesis = Config._ledgerGenesis cardanoParams
-                           }
+           _hydraCardanoNodeInfo = cninf
          }
 
 getHydraSharedInfo :: MonadIO m => State -> m HydraSharedInfo

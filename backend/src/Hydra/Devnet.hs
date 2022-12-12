@@ -42,6 +42,7 @@ module Hydra.Devnet
   , getDevnetAddresses
   , devnetFaucetKeys
   , cardanoDevnetNodeInfo
+  , writeProtocolParameters
   )
 
 where
@@ -239,6 +240,17 @@ waitForTxIn cninf txin = do
 
 cardanoNodeArgs :: CardanoNodeInfo -> [String]
 cardanoNodeArgs cninf = ["--testnet-magic", show . _testNetMagic . _nodeType $ cninf]
+
+writeProtocolParameters :: CardanoNodeInfo ->  IO ()
+writeProtocolParameters cninf = do
+  void $ readCreateProcess ((proc cardanoCliPath ([ "query"
+                                    , "protocol-parameters"
+                                    , "--out-file"
+                                    , _nodeLedgerProtocolParameters cninf
+                                    ]
+                       <> cardanoNodeArgs cninf))
+            { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninf)]
+            }) ""
 
 txInExists :: CardanoNodeInfo -> TxIn -> IO Bool
 txInExists cninf txin = do
