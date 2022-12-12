@@ -273,27 +273,29 @@ websocketApiHandler state = do
       forever $ do
         mClientMsg <- Aeson.decode <$> WS.receiveData conn
         isAuthenticated <- readMVar authVar
-        case (isAuthenticated, mClientMsg) of
-          -- Handle authentication
-          (False, Just (Tagged t (Authenticate token))) -> do
-            let apiKey = _state_apiKey state
-                sentKey = T.encodeUtf8 token
-
-                authResult = apiKey == sentKey
-
-            modifyMVar_ authVar (pure . const authResult)
-            WS.sendTextData conn . Aeson.encode $ Tagged t $ AuthResult authResult
-
-          -- Turn away requests that aren't authenticated
-          (False, Just (Tagged t _)) -> do
-            WS.sendTextData conn . Aeson.encode $ Tagged t $ NotAuthenticated
-
-          -- When authenticated just process as normal
-          (True, Just clientMsg) -> do
-            msg <- withLogging $ handleTaggedMessage conn state clientMsg
-            WS.sendTextData conn . Aeson.encode $ msg
-
-          (_, Nothing) -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+        case mClientMsg of
+          Nothing -> WS.sendTextData conn . Aeson.encode $ InvalidMessage
+          Just clientMsg -> WS.sendTextData conn . Aeson.encode
+            =<< case (isAuthenticated, clientMsg) of
+             -- Handle authentication
+             (False, Tagged t (Authenticate token)) -> do
+               let apiKey = _state_apiKey state
+                   sentKey = T.encodeUtf8 token
+   
+                   authResult = apiKey == sentKey
+   
+               modifyMVar_ authVar (pure . const authResult)
+               pure . Tagged t $ AuthResult authResult
+             
+             -- Allow GetHydraPayMode even when not authenticated
+             (_, Tagged t GetHydraPayMode) -> do
+               withLogging $ handleTaggedMessage conn state clientMsg
+   
+             -- Turn away requests that aren't authenticated
+             (False, Tagged t _) -> pure . Tagged t $ NotAuthenticated
+   
+             -- When authenticated just process as normal
+             (True, clientMsg) -> withLogging $ handleTaggedMessage conn state clientMsg
 
 stopCardanoNode :: CardanoNodeState -> IO ()
 stopCardanoNode (CardanoNodeState handles _) =
