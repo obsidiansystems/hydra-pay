@@ -3,6 +3,7 @@
 {-# OPTIONS_GHC -Wno-unused-local-binds #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Frontend
   ( frontend
@@ -47,6 +48,8 @@ import Control.Monad.Fix
 
 import Language.Javascript.JSaddle (MonadJSM, jsg, js, js1, liftJSM, fromJSValUnchecked)
 import Data.Bool (bool)
+import HydraPay.Config (HydraPayMode (ManagedDevnetMode, ConfiguredMode), CardanoNodeParams (..))
+import Data.String.Interpolate ( iii, __i )
 
 default (T.Text)
 
@@ -71,6 +74,7 @@ frontend = Frontend
 
   , _frontend_body = elAttr "div" ("class" =: "w-screen h-screen overflow-hidden flex flex-col bg-gray-100" <> "style" =: "font-family: 'Inter', sans-serif;") $ do
       prerender_ (text "Loading Live Documentation") $ do
+        pb <- getPostBuild
         endpoint <- liftJSM $ do
           let
             webSocketProtocol :: T.Text -> T.Text
@@ -109,7 +113,13 @@ frontend = Frontend
 
           (_, sendMsg :: Event t [ClientMsg]) <- runEventWriterT $ elClass "div" "w-full h-full flex flex-row text-gray-700" $ do
             activeHeads authenticated lastTagId subscriptions responses
-            monitorView lastTagId responses
+            hydraPayModeReply <- requester lastTagId responses (GetHydraPayMode <$ pb)
+            runWithReplace blank $
+              mapMaybe ((\case
+                            HydraPayMode hpm -> Just (monitorView lastTagId responses hpm)
+                            _ -> Nothing)
+                         . tagged_payload)
+              hydraPayModeReply
             elClass "div" "flex-grow" $ elClass "div" "max-w-lg" blank
         pure ()
   }
@@ -398,8 +408,8 @@ sendFundsInHead lastTagId serverMsg = do
     header "Transactions in a Head"
 
     elClass "p" "" $ do
-      text "Once a Head is Open (All participants have commited UTxOs), you are free to move funds around withing the head by creating transactions."
-      text " You will get BalanceChanged payloads if you are subscribed to the Head, we are using this payload in the Live Documentation to live update the balance of all participants in the Head in the \"Your Heads\" section"
+      text "Once a Head is Open (all participants have commited UTxOs), you are free to move funds around within the head by creating transactions."
+      text " You will get BalanceChanged payloads if you are subscribed to the Head. We are using this payload in the Live Documentation to live update the balance of all participants in the Head in the \"Your Heads\" section."
 
   let
     input = payloadInput $ do
@@ -557,8 +567,8 @@ fundingProxyAddresses ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
-fundingProxyAddresses lastTagId serverMsg = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
+fundingProxyAddresses lastTagId serverMsg hpm = do
   elClass "div" "px-4 pb-4" $ do
     header "Proxy Addresses"
 
@@ -568,16 +578,21 @@ fundingProxyAddresses lastTagId serverMsg = do
       el "br" blank
       el "br" blank
       text "Instead of participating directly in a Head, any participant will actually be mapped to a \"Proxy Address\"."
-      text " This is a regular cardano address that is created to hold funds and fuel for said participant in Hydra Pay Head."
+      text " This is a regular cardano address that is created to hold funds and fuel for said participant in a Hydra Pay Head."
 
   elClass "div" "px-4 pb-4" $ do
     header "Funding Proxy Addresses | Funds & Fuel"
 
     elClass "p" "" $ do
-      text "To participate in a Hydra Pay managed Head you need to transfer funds to your Proxy Address, you must transfer both Funds and Fuel."
-      el "br" blank
-      el "br" blank
-      hintText $ text "Hydra Pay manages its own devnet, so we can conveniently allow you to submit transactions for testing purposes, give it a try!"
+      text "To participate in a Hydra Pay managed Head you need to transfer funds from your address to your Proxy Address. You must transfer both regular Ada and a specially tagged Fuel transaction yourself."
+    elClass "p" "" $ do
+      text "For your convenience Hydra Pay provides endpoints which return draft transactions for both types of funds. However, you yourself must sign and submit these transactions with the signing key for your address."
+
+    hintText $ text $ case hpm of
+        ManagedDevnetMode  ->
+          "Since you're running Hydra Pay in managed-devnet mode, we can conveniently submit transactions for you. Give it a try!"
+        ConfiguredMode {} ->
+          "You're running Hydra Pay with an externally managed Cardano network. After you request the funding transactions, we'll provide shell commands for you to submit them."
 
   let
     input = payloadInput $ do
@@ -619,7 +634,30 @@ fundingProxyAddresses lastTagId serverMsg = do
 
       pure $ GetAddTx <$> txType <*> addr <*> amount
 
+  -- TODO: make sure we say that this has to be an address with funds
+
   let
+    shellCommands cardanoParams req = \case
+      FundsTx tx -> elClass "div" "my-4" $ do
+        elClass "div" "font-semibold my-4" $ text "Submitting the transaction"
+        elClass "p" "my-4" $ text "To submit the transaction on your Cardano net you can execute the shell commands below. Remember to fill in the path to your signing key file."
+        elClass "pre" "overflow-y-scroll" $ text $
+          [__i|
+              cat > unsigned-tx.json<< EOF
+                #{Aeson.encodePretty tx}
+              EOF
+
+              cardano-cli transaction sign \\
+                --tx-body-file unsigned-tx.json \\
+                --out-file signed.json \\
+                --signing-key-file [PATH-TO-SIGNING-KEY]
+
+              CARDANO_NODE_SOCKET_PATH=#{_nodeSocket cardanoParams} \\
+                cardano-cli transaction submit \\
+                --tx-file signed.json \\
+                --testnet-magic #{_testnetMagic cardanoParams}
+              |]
+      _ -> blank
     submitTxButton req = \case
       FundsTx tx -> elClass "div" "mt-4" $ do
         rec
@@ -670,7 +708,9 @@ fundingProxyAddresses lastTagId serverMsg = do
     "Ledger Cddl Format"
     )
     (const Nothing)
-    submitTxButton
+    (case hpm of
+       ManagedDevnetMode -> submitTxButton
+       ConfiguredMode cardanoParams _ -> shellCommands cardanoParams)
 
   pure ()
 
@@ -690,7 +730,7 @@ payloadInput input = do
 
 hintText :: DomBuilder t m => m a -> m a
 hintText action = do
-  elClass "span" "text-gray-400 font-semibold italic" action
+  elClass "div" "text-gray-400 font-semibold italic my-4" action
 
 subscribeTo ::
   ( EventWriter t [ClientMsg] m
@@ -705,11 +745,10 @@ subscribeTo lastTagId serverMsg = do
 
     elClass "p" "" $ do
       text "A lot of the time the logic for your DApp or Light Wallet will include waiting for certain state changes to take place."
-      text " To be convenient for developers and to avoid unecessary complications and resource usage of polling, you can subscribe to state changes of certain heads"
-      text " For example if you create a head you should subscribe to it."
-      el "br" blank
-      el "br" blank
-      hintText $ text "When you subscribe to updates for a head in the live documentation, we will automatically update the view in \"Your Heads\""
+      text " To be convenient for developers and to avoid unecessary complications and resource usage of polling, you can subscribe to state changes of certain heads."
+      text " If you create a head you should subscribe to it as well."
+
+    hintText $ text "When you subscribe to updates for a head in the live documentation, we will automatically update the view in \"Your Heads\"."
 
   let
     input = do
@@ -755,9 +794,8 @@ headCreation lastTagId serverMsg = do
     elClass "p" "" $ do
       text "To create a Head you will give it a friendly name and list the addresses that will become the participants."
       text " Creating the head starts the Hydra network."
-      el "br" blank
-      el "br" blank
-      elClass "span" "italic" $ text " This request may take some time as Hydra Pay waits for all Hydra Nodes to respond"
+
+    hintText $ text " This request may take some time as Hydra Pay waits for all Hydra Nodes to respond."
 
   elClass "div" "p-4 bg-white rounded flex flex-col" $ do
     let
@@ -875,7 +913,7 @@ theDevnet lastTagId serverMsg = do
           elClass "div" "flex flex-col" $ do
             ie <- inputElement $ def
               & initialAttributes .~ ("class" =: "border px-2" <> "type" =: "number")
-              & inputElementConfig_initialValue .~ "1"
+              & inputElementConfig_initialValue .~ "2"
             pure $ GetDevnetAddresses . maybe 1 id . readMaybe . T.unpack <$> _inputElement_value ie
 
       (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
@@ -959,7 +997,7 @@ sayHello lastTagId serverMsg = do
 
     elClass "p" "" $ do
       text "This Live Documentation is currently connected to your Hydra Pay instance, this allows you to easily verify if things are set up and working, and try requests and see responses."
-      text " Lets say hello to the Hydra Pay instance, hit Try Request to send a ClientHello payload to Hydra Pay."
+      text " Let's say hello to the Hydra Pay instance. Hit Try Request to send a ClientHello payload to Hydra Pay."
 
   let
     request = pure ClientHello
@@ -1045,8 +1083,14 @@ authentication lastTagId serverMsg = do
     header "Authentication"
 
     elClass "p" "" $ do
-      text "When you launch or deploy a Hydra Pay instance you will need to provide an API Key to authenticate against, this is a secret that should be only known to your DApp/LightWallet and your Hydra Pay instance."
-      text "Upon opening a websocket connection to your HydraPay instance, you should immediately Authenticate by sending a Tagged `Authenticate` request (see below)."
+      text [iii|
+             When you launch or deploy a Hydra Pay instance you will
+             need to provide an API Key to authenticate against.
+             This is a secret that should be only known to your
+             DApp/LightWallet and your Hydra Pay instance.
+             Upon opening a websocket connection to your HydraPay instance,
+             you should immediately Authenticate by sending a Tagged `Authenticate` request (see below).
+           |]
 
   elClass "div" "p-4 bg-white rounded flex flex-col relative" $ do
     (tryButton, _) <- elClass "div" "flex flex-row justify-between" $ do
@@ -1109,9 +1153,9 @@ authentication lastTagId serverMsg = do
 
     expectedResponse $ AuthResult True
 
-  elClass "p" "p-4"$
+  elClass "p" "p-4 my-8"$
     elClass "span" "text-gray-600 font-semibold" $ do
-    text "Ensure you have authenticated before trying the requests below"
+    text "Ensure you have authenticated before trying the requests below."
 
 monitorView ::
   ( PostBuild t m
@@ -1123,8 +1167,8 @@ monitorView ::
   , TriggerEvent t m
   , PerformEvent t m
   , EventWriter t [ClientMsg] m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
-monitorView lastTagId serverMsg = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
+monitorView lastTagId serverMsg hpm = do
   elClass "div" "h-full text-gray-700 max-w-4xl overflow-y-scroll rounded flex flex-col flex-shrink-0" $ do
     elClass "div" "p-4" $ do
       elClass "div" "text-3xl font-bold flex flex-row items-center justify-between" $ do
@@ -1133,37 +1177,55 @@ monitorView lastTagId serverMsg = do
       -- Divider
       elClass "div" "mt-4 w-full h-px bg-gray-200" blank
 
-      elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Websocket API"
+      elClass "p" "my-4" $ do
+        text [iii|
+               This page provides hands-on documentation of the Hydra
+               Pay API. You can try out every request against your
+               configured Cardano network. If you didn't specify any,
+               Hydra Pay will have started a devnet for you with
+               pre-funded addresses. This page is fully implemented
+               using the Hydra Pay API and thus also serves as an
+               example of its use.
+               |]
+
+      elClass "div" "text-xl mt-12 mb-2 font-semibold" $ text "Websocket API"
       elClass "div" "my-2 w-full h-px bg-gray-200" blank
       elClass "p" "" $ do
         text "The Hydra Pay API is a websocket based API that gives you all that you need to manage and monitor heads, securely. The endpoint to connect to the Hydra Pay websocket is /hydra/api."
-        text " Once you are connected you must authenticate via your Authentication Token you have set for your Hydra Pay Instance."
+        text " Once you are connected you must authenticate via the Authentication Token you have set for your Hydra Pay Instance."
         text " In this section Client refers to the developer, and Server refers to the running Hydra Pay instance reachable at /hydra/api/."
-        el "br" blank
-        el "br" blank
-        text " In this Live Documentation we Tag the requests automatically, and when viewing the JSON payload of a request you may always see the tagged equivalent, we even auto increment the request id,"
-        text " this makes it easy to ensure you are sending the right information to Hydra Pay."
 
       -- Header
-      elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text "Tagging"
-      elClass "div" "my-2 w-full h-px bg-gray-200" blank
+      elClass "div" "text-lg mt-8 mb-2 font-semibold" $ text "Tagging"
 
-      elClass "p" "" $ do
-        text "All communication the Client does with the Server through the WebSocket must be Tagged."
-        text " To Tag a message, we need the unique request-id, if we were sending this as the first message to our Server we may use 0 as the request-id."
-        text " Remember that all communication the Client makes with the Server must be tagged. This forms the request response part of the API."
+      elClass "p" "my-4" $ do
+        text [iii|
+          The Hydra Pay WebSocket API comes with a convenient scheme to keep track of responses to specific requests.
+          Each request must be tagged with an identifying value as follows:|]
+      elClass "pre" "my-4" . text $ [__i|{ "tagged_payload": REQUEST, "tagged_id": ID }|]
+      elClass "p" "my-4" $ text [iii|When the server replies this identifier will be included:|]
+      elClass "pre" "my-4" . text $ [__i|{ "tagged_payload": REPLY, "tagged_id": ID }|]
+
+      elClass "p" "my-4" $ do
+        text [iii|
+          In this Live Documentation we tag the requests
+          automatically and hide the tagging by default. When viewing the JSON payload of a
+          request you can always look at the tagged equivalent by checking "Show Tagged".
+          |]
 
     authentication lastTagId serverMsg
 
     sayHello lastTagId serverMsg
 
-    theDevnet lastTagId serverMsg
+    case hpm of
+      ManagedDevnetMode -> theDevnet lastTagId serverMsg
+      _ -> blank
 
     headCreation lastTagId serverMsg
 
     subscribeTo lastTagId serverMsg
 
-    fundingProxyAddresses lastTagId serverMsg
+    fundingProxyAddresses lastTagId serverMsg hpm
 
     initHead lastTagId serverMsg
 
