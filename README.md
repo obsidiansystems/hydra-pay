@@ -125,12 +125,11 @@ Foundational:
 - [x] Tested over https and wss
 - [x] Live Documentation
 - [x] Full lifecycle guide
-- [ ] Deployment Guide
+- [x] Deployment Guide
 - [x] Docker Deployment Guide
-- [ ] Best Practices
-- [ ] TTL on add funds and fuel pre-built transactions
-- [ ] Integration of hydra libraries
-- [ ] Choice of network: Devnet, Preview, Preprod, Mainnet
+- [x] Best Practices
+- [x] TTL on add funds and fuel pre-built transactions
+- [x] Choice of network: Devnet, Preview
 - [ ] How to Contribute
 
 ## 🗝 API
