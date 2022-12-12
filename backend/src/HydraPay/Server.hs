@@ -208,15 +208,6 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
         withLogging $ prepareDevnet
       handles <- lift $ createProcess cardanoNodeCreateProcess
       lift $ threadDelay (seconds 3)
-      _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode ((proc cardanoCliPath [ "query"
-                                        , "protocol-parameters"
-                                        , "--testnet-magic"
-                                        , "42"
-                                        , "--out-file"
-                                        , "devnet/devnet-protocol-parameters.json"
-                                        ])
-                { env = Just [( "CARDANO_NODE_SOCKET_PATH" , "devnet/node.socket")]
-                }) ""
       hydraSharedInfo <- do
         scriptsTxId <- ExceptT $ withLogging $ publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
         pure $ HydraSharedInfo
@@ -225,20 +216,23 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
             _hydraLedgerProtocolParameters = "devnet/hydra-protocol-parameters.json",
             _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
           }
+      liftIO $ writeProtocolParameters (_hydraCardanoNodeInfo hydraSharedInfo)
       _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
       pure $ CardanoNodeState (Just handles) hydraSharedInfo
 
-  ConfiguredMode cardanoParams hydraParams ->
+  ConfiguredMode cardanoParams hydraParams -> do
+    protocolParametersPath <- liftIO $ snd <$> getTempPath
+    let cninf = CardanoNodeInfo { _nodeType = TestNet (Config._testnetMagic cardanoParams),
+                             _nodeSocket = Config._nodeSocket cardanoParams,
+                             _nodeLedgerProtocolParameters = protocolParametersPath,
+                             _nodeLedgerGenesis = Config._ledgerGenesis cardanoParams
+                           }
+    liftIO $ writeProtocolParameters cninf
     pure $ Right $ CardanoNodeState Nothing $ HydraSharedInfo
          { _hydraScriptsTxId = Config._hydraScriptsTxId hydraParams,
            _hydraLedgerGenesis = Config._hydraLedgerGenesis hydraParams,
            _hydraLedgerProtocolParameters = Config._hydraLedgerProtocolParameters hydraParams,
-           _hydraCardanoNodeInfo =
-           CardanoNodeInfo { _nodeType = TestNet (Config._testnetMagic cardanoParams),
-                             _nodeSocket = Config._nodeSocket cardanoParams,
-                             _nodeLedgerProtocolParameters = Config._ledgerProtocolParameters cardanoParams,
-                             _nodeLedgerGenesis = Config._ledgerGenesis cardanoParams
-                           }
+           _hydraCardanoNodeInfo = cninf
          }
 
 getHydraSharedInfo :: MonadIO m => State -> m HydraSharedInfo
@@ -263,27 +257,28 @@ websocketApiHandler state = do
         -- ensuring it gets routed to the correct place!
         decodeResult :: Either String (Tagged Value) <- Aeson.eitherDecode <$> WS.receiveData conn
         isAuthenticated <- readMVar authVar
-        WS.sendTextData conn $ case decodeResult of
-          Left err -> Aeson.encode $ InvalidMessage $ T.pack err
-          Right (Tagged t val) -> Aeson.encode
-            =<< case (isAuthenticated, Aeson.parseEither parseJSON val) of
-             -- Handle authentication
-             (False, Right (Authenticate token)) -> do
-               let apiKey = _state_apiKey state
-                   sentKey = T.encodeUtf8 token
-                   authResult = apiKey == sentKey
-               modifyMVar_ authVar (pure . const authResult)
-               pure . Tagged t $ AuthResult authResult
-             
-             -- Allow GetHydraPayMode even when not authenticated
-             (_, Right GetHydraPayMode) -> do
-               withLogging $ handleTaggedMessage conn state (Tagged t GetHydraPayMode)
-   
-             -- Turn away requests that aren't authenticated
-             (False, Right _) -> pure . Tagged t $ NotAuthenticated
-   
-             -- When authenticated just process as normal
-             (True, Right clientMsg) -> withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
+        WS.sendTextData conn =<< case decodeResult of
+          Left err -> pure . Aeson.encode $ InvalidMessage $ T.pack err
+          Right (Tagged t val) ->
+            case (isAuthenticated, Aeson.parseEither parseJSON val) of
+              -- Handle authentication
+              (False, Right (Authenticate token)) -> do
+                let apiKey = _state_apiKey state
+                    sentKey = T.encodeUtf8 token
+                    authResult = apiKey == sentKey
+                modifyMVar_ authVar (pure . const authResult)
+                pure . Aeson.encode . Tagged t $ AuthResult authResult
+              -- Allow GetHydraPayMode even when not authenticated
+              (_, Right GetHydraPayMode) -> do
+                fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state (Tagged t GetHydraPayMode)
+              -- Turn away requests that aren't authenticated
+              (False, Right _) ->
+                pure . Aeson.encode . Tagged t $ NotAuthenticated
+              -- When authenticated just process as normal
+              (True, Right clientMsg) ->
+                fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
+              (_, Left err) ->
+                pure . Aeson.encode $ Tagged t $ InvalidMessage $ T.pack err
 
 stopCardanoNode :: CardanoNodeState -> IO ()
 stopCardanoNode (CardanoNodeState handles _) =
