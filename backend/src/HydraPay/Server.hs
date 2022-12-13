@@ -378,7 +378,16 @@ buildAddTx tType state fromAddr lovelaceAmount = runExceptT $ do
   cardanoNodeInfo <- lift $ getCardanoNodeInfo state
   utxos <- lift $ queryAddressUTXOs cardanoNodeInfo fromAddr
   let
-    txInLovelaceAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    txInLovelaceAmounts :: _ = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
+    lovelaceTotal = fromIntegral $ sum txInLovelaceAmounts
+
+  -- Better errors before we hit cardano-cli
+  when (Map.null txInLovelaceAmounts) $ throwError "This address has no ada"
+  when (lovelaceTotal < lovelaceAmount) $ throwError $
+    "Insufficient funds, wanted " <> show lovelaceAmount <> ", current balance " <> show lovelaceTotal
+  when (lovelaceTotal == lovelaceAmount) $ throwError $
+    "No room for fees, transaction won't balance: wanted " <> show lovelaceAmount <> ", current balance " <> show lovelaceTotal
+
   (toAddr, _) <- ExceptT $ addOrGetKeyInfo state fromAddr
 
   txBodyPath <- lift $ liftIO $ snd <$> getTempPath

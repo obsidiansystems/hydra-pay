@@ -934,8 +934,8 @@ theDevnet lastTagId serverMsg = do
 
       Nothing -> blank
 
-    responseVisualizer "Example Response" $ DevnetAddresses [ UnsafeToAddress "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a"
-                                                            , UnsafeToAddress "addr_test1vr6mp9zqpxk5nw7p3xm6kvnt2w6mgl9lhmzuvuez5v59hqgakn855"
+    responseVisualizer "Example Response" $ DevnetAddresses [ obviouslyInvalidAddress
+                                                            , obviouslyInvalidAddress
                                                             ]
 
 
@@ -1015,7 +1015,7 @@ responseVisualizer name msg = do
   -- Divider
   elClass "div" "mt-6 w-full h-px bg-gray-200" blank
 
-  elClass "div" "font-semibold mt-4 mb-2" $ text name
+  elClass "div" "font-semibold text-sm text-gray-400 mt-4 mb-2" $ text name
   elClass "div" "" $
     elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
     text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg

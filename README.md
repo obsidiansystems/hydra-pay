@@ -242,7 +242,7 @@ Example payload:
 ``` json
 {
     "contents": {
-        "headCreate_participants": ["addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp"],
+        "headCreate_participants": ["addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease"],
         "headCreate_name": "test"
     },
     "tag": "CreateHead"
@@ -302,7 +302,7 @@ Example Payload:
 {
     "contents": {
         "headCommit_name": "test",
-        "headCommit_participant": "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a",
+        "headCommit_participant": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
         "headCommit_amount": 100000000
     },
     "tag": "CommitHead"
@@ -421,7 +421,7 @@ Example Payload:
 ``` json
 {
   "tag": "Withdraw"
-  "contents": "addr_test1vpperccj7n8faw74ketx68k2mehg23d864hvg209cgupp5c4r47hp",
+  "contents": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
 }
 ```
 
