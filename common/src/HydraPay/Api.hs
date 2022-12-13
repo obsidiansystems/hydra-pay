@@ -150,7 +150,7 @@ data ClientMsg
   | GetHeadBalance HeadName Address
 
   | LiveDocEzSubmitTx Tx Address
-
+  | GetIsManagedDevnet
   | GetHydraPayMode
   | GetProxyInfo Address
   deriving (Eq, Show, Generic)
@@ -190,6 +190,7 @@ data ServerMsg
   | HeadRemoved HeadName
   | ApiError T.Text
   | HydraPayMode Config.HydraPayMode
+  | IsManagedDevnet Bool
   | ProxyAddressInfo ProxyInfo
   deriving (Eq, Show, Generic)
 

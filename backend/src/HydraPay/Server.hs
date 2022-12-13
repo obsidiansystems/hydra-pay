@@ -268,9 +268,10 @@ websocketApiHandler state = do
                     authResult = apiKey == sentKey
                 modifyMVar_ authVar (pure . const authResult)
                 pure . Aeson.encode . Tagged t $ AuthResult authResult
-              -- Allow GetHydraPayMode even when not authenticated
-              (_, Right GetHydraPayMode) -> do
-                fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state (Tagged t GetHydraPayMode)
+              -- Allow GetIsManagedDevnet even when not authenticated to allow the
+              -- live docs to make this distinction upon loading.
+              (_, Right GetIsManagedDevnet) -> do
+                fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state (Tagged t GetIsManagedDevnet)
               -- Turn away requests that aren't authenticated
               (False, Right _) ->
                 pure . Aeson.encode . Tagged t $ NotAuthenticated
@@ -1167,6 +1168,7 @@ handleClientMessage conn state = \case
     broadcastToSubscribers state name $ HeadRemoved name
     pure $ HeadRemoved name
 
+  GetIsManagedDevnet -> pure . IsManagedDevnet . (== ManagedDevnetMode) . getHydraPayMode $ state
   GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state
 
   GetProxyInfo address -> do

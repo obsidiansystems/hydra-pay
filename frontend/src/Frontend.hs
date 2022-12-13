@@ -45,8 +45,9 @@ import Control.Monad.Fix
 
 import Language.Javascript.JSaddle (MonadJSM, jsg, js, js1, liftJSM, fromJSValUnchecked)
 import Data.Bool (bool)
-import HydraPay.Config (HydraPayMode (ManagedDevnetMode, ConfiguredMode), CardanoNodeParams (..))
+import HydraPay.Config (HydraPayMode (ConfiguredMode), CardanoNodeParams (..))
 import Data.String.Interpolate ( iii, __i )
+import Control.Monad (when)
 
 default (T.Text)
 
@@ -110,13 +111,13 @@ frontend = Frontend
 
           (_, sendMsg :: Event t [ClientMsg]) <- runEventWriterT $ elClass "div" "w-full h-full flex flex-row text-gray-700" $ do
             activeHeads authenticated lastTagId subscriptions responses
-            hydraPayModeReply <- requester lastTagId responses (GetHydraPayMode <$ pb)
-            runWithReplace blank $
+            managedDevnetReply <- requester lastTagId responses (GetIsManagedDevnet  <$ pb)
+            _ <- runWithReplace blank $
               mapMaybe ((\case
-                            HydraPayMode hpm -> Just (monitorView lastTagId responses hpm)
+                            IsManagedDevnet x -> Just (monitorView lastTagId responses x)
                             _ -> Nothing)
                          . tagged_payload)
-              hydraPayModeReply
+              managedDevnetReply
             elClass "div" "flex-grow" $ elClass "div" "max-w-lg" blank
         pure ()
   }
@@ -561,8 +562,8 @@ proxyAddressInfo ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
-proxyAddressInfo lastTagId serverMsg hpm = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) ->  m ()
+proxyAddressInfo lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
     header "Proxy Address Information"
 
@@ -602,8 +603,8 @@ fundingProxyAddresses ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
-fundingProxyAddresses lastTagId serverMsg hpm = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> Bool -> m ()
+fundingProxyAddresses lastTagId serverMsg isManagedDevnet = do
   elClass "div" "px-4 pb-4" $ do
     header "Funding Proxy Addresses | Funds & Fuel"
 
@@ -612,11 +613,11 @@ fundingProxyAddresses lastTagId serverMsg hpm = do
     elClass "p" "" $ do
       text "For your convenience Hydra Pay provides endpoints which return draft transactions for both types of funds. However, you yourself must sign and submit these transactions with the signing key for your address."
 
-    hintText $ text $ case hpm of
-        ManagedDevnetMode  ->
-          "Since you're running Hydra Pay in managed-devnet mode, we can conveniently submit transactions for you. Give it a try!"
-        ConfiguredMode {} ->
-          "You're running Hydra Pay with an externally managed Cardano network. After you request the funding transactions, we'll provide shell commands for you to submit them."
+    hintText $ text $
+      bool
+      "You're running Hydra Pay with an externally managed Cardano network. After you request the funding transactions, we'll provide shell commands for you to submit them."
+      "Since you're running Hydra Pay in managed-devnet mode, we can conveniently submit transactions for you. Give it a try!"
+      isManagedDevnet
 
   let
     input = payloadInput $ do
@@ -661,7 +662,7 @@ fundingProxyAddresses lastTagId serverMsg hpm = do
   -- TODO: make sure we say that this has to be an address with funds
 
   let
-    shellCommands cardanoParams req = \case
+    shellCommands cardanoParams = \case
       FundsTx tx -> elClass "div" "my-4" $ do
         elClass "div" "font-semibold my-4" $ text "Submitting the transaction"
         elClass "p" "my-4" $ text "To submit the transaction on your Cardano net you can execute the shell commands below. Remember to fill in the path to your signing key file."
@@ -732,9 +733,18 @@ fundingProxyAddresses lastTagId serverMsg hpm = do
     "Ledger Cddl Format"
     )
     (const Nothing)
-    (case hpm of
-       ManagedDevnetMode -> submitTxButton
-       ConfiguredMode cardanoParams _ -> shellCommands cardanoParams)
+    (if isManagedDevnet
+      then submitTxButton
+      else \_req thisServerMsg -> do
+        pb <- getPostBuild
+        hydraPayModeReply <- requester lastTagId serverMsg (GetHydraPayMode <$ pb)
+        _ <- runWithReplace blank $
+          mapMaybe ((\case
+                            HydraPayMode (ConfiguredMode cardanoParams _) -> Just (shellCommands cardanoParams thisServerMsg)
+                            _ -> Nothing)
+                         . tagged_payload)
+              hydraPayModeReply
+        pure ())
 
   pure ()
 
@@ -744,8 +754,8 @@ proxyAddresses ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
-proxyAddresses lastTagId serverMsg hpm = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> Bool -> m ()
+proxyAddresses lastTagId serverMsg isManagedDevnet = do
   elClass "div" "px-4 pb-4" $ do
     header "Proxy Addresses"
 
@@ -757,8 +767,8 @@ proxyAddresses lastTagId serverMsg hpm = do
       text "Instead of participating directly in a Head, any participant will actually be mapped to a \"Proxy Address\"."
       text " This is a regular cardano address that is created to hold funds and fuel for said participant in a Hydra Pay Head."
 
-  fundingProxyAddresses lastTagId serverMsg hpm
-  proxyAddressInfo lastTagId serverMsg hpm
+  fundingProxyAddresses lastTagId serverMsg isManagedDevnet
+  proxyAddressInfo lastTagId serverMsg
 
 data SubmitStatus
   = TxNotSubmitted
@@ -1211,8 +1221,8 @@ monitorView ::
   , MonadJSM (Performable m)
   , PerformEvent t m
   , EventWriter t [ClientMsg] m
-  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
-monitorView lastTagId serverMsg hpm = do
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> Bool -> m ()
+monitorView lastTagId serverMsg isManagedDevnet = do
   elClass "div" "h-full text-gray-700 max-w-4xl overflow-y-scroll rounded flex flex-col flex-shrink-0" $ do
     elClass "div" "p-4" $ do
       elClass "div" "text-3xl font-bold flex flex-row items-center justify-between" $ do
@@ -1261,15 +1271,13 @@ monitorView lastTagId serverMsg hpm = do
 
     sayHello lastTagId serverMsg
 
-    case hpm of
-      ManagedDevnetMode -> theDevnet lastTagId serverMsg
-      _ -> blank
+    when isManagedDevnet $ theDevnet lastTagId serverMsg
 
     headCreation lastTagId serverMsg
 
     subscribeTo lastTagId serverMsg
 
-    proxyAddresses lastTagId serverMsg hpm
+    proxyAddresses lastTagId serverMsg isManagedDevnet
 
     initHead lastTagId serverMsg
 
