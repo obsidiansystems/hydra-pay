@@ -934,8 +934,8 @@ theDevnet lastTagId serverMsg = do
 
       Nothing -> blank
 
-    responseVisualizer "Example Response" $ DevnetAddresses [ UnsafeToAddress "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a"
-                                                            , UnsafeToAddress "addr_test1vr6mp9zqpxk5nw7p3xm6kvnt2w6mgl9lhmzuvuez5v59hqgakn855"
+    responseVisualizer "Example Response" $ DevnetAddresses [ obviouslyInvalidAddress
+                                                            , obviouslyInvalidAddress
                                                             ]
 
 

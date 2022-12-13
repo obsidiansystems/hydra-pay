@@ -37,13 +37,22 @@ addressToString :: Address -> String
 addressToString = T.unpack . unAddress
 
 parseAddress :: T.Text -> Either String Address
-parseAddress = parseOnly parser
+parseAddress t =
+  case parseOnly parser t of
+    Left err -> Left err
+    Right addr ->
+      case addr == obviouslyInvalidAddress of
+        True -> Left "This is Hydra Pay example cardano address, rejecting request"
+        False -> Right addr
   where
     parser = do
       prefix <- string "addr1" <|> string "addr_test1"
       rest <- takeWhile1 (\x -> isDigit x || isAlpha_ascii x)
       endOfInput
       pure $ UnsafeToAddress $ prefix <> rest
+
+obviouslyInvalidAddress :: Address
+obviouslyInvalidAddress = UnsafeToAddress "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease"
 
 type Lovelace = Integer
 
