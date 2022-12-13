@@ -25,14 +25,11 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Aeson.Encode.Pretty as Aeson
 
-import Control.Monad (join, (<=<))
-
 import Hydra.Types
-import HydraPay.Api
+import HydraPay.Api hiding (amount)
 
 import Text.Read (readMaybe)
 
-import Data.Fixed
 import qualified Data.Text as T
 
 import Obelisk.Frontend
@@ -137,10 +134,11 @@ trySection ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> TrySectionConfig t m ->  m ()
-trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorText extraStuff) = do
+trySection lastTagId serverMsg config = do
+  -- (TrySectionConfig pinput example genErrorText extraStuff)
   elClass "div" "p-4 bg-white rounded flex flex-col" $ do
     (tryButtonClick, request) <- elClass "div" "flex flex-row justify-between mb-4" $ do
-      req <- payloadInput
+      req <- trySection_payloadInput config
       (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
       pure (domEvent Click tryEl, req)
 
@@ -177,11 +175,11 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
           elClass "pre" "overflow-y-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
-          case genErrorText msg of
+          case (trySection_genHelpfulErrorText config) msg of
             Just errMsg -> elClass "div" "text-sm font-semibold text-red-400" $ text errMsg
             Nothing -> blank
 
-        extraStuff request msg
+        (trySection_extraStuff config) request msg
 
       WaitingOnResponse -> do
         elClass "div" "font-semibold mt-4" $ text "Waiting for Response..."
@@ -190,7 +188,7 @@ trySection lastTagId serverMsg (TrySectionConfig payloadInput example genErrorTe
 
       Standby -> blank
 
-    example
+    trySection_example config
   pure ()
 
 removeHead ::
@@ -199,8 +197,6 @@ removeHead ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  , MonadJSM (Performable m)
-  , PerformEvent t m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 removeHead lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
@@ -235,8 +231,6 @@ closeHead ::
   , PostBuild t m
   , MonadFix m
   , MonadHold t m
-  , MonadJSM (Performable m)
-  , PerformEvent t m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
 closeHead lastTagId serverMsg = do
   elClass "div" "px-4 pb-4" $ do
@@ -273,7 +267,7 @@ activeHeads ::
   , MonadHold t m
   , MonadFix m
   ) => Dynamic t Bool -> Dynamic t Int64 -> Event t (ServerMsg) -> Event t (Tagged ServerMsg) -> m ()
-activeHeads authenticated lastTagId subscriptions responses = do
+activeHeads authenticated _ subscriptions responses = do
   elClass "div" "flex-grow p-4" $ elClass "div" "max-w-lg" $ do
     header "Your Heads"
 
@@ -333,9 +327,9 @@ activeHeads authenticated lastTagId subscriptions responses = do
               _ <- listWithKey (headStatus_balances <$> hstatus) $ \addr lovelace -> do
                 (addrButton, _) <- elClass' "button" "rounded-lg mx-2 px-2 py-1 mb-2 hover:bg-gray-200 active:bg-gray-400 flex flex-row justify-between items-baseline" $ do
                   elClass "div" "font-semibold text-gray-600" $ do
-                    text $ T.take 12 addr
+                    text $ T.take 12 $ unAddress addr
                     text "..."
-                    text $ T.takeEnd 8 addr
+                    text $ T.takeEnd 8 $ unAddress addr
 
                   elClass "div" "flex flex-row items-baseline" $ do
                     let
@@ -346,7 +340,7 @@ activeHeads authenticated lastTagId subscriptions responses = do
                           ]
                     elDynClass "div" (mkAdaClasses <$> isOpen) $ dynText $ T.pack . printf "%.2f" . lovelaceToAda <$> lovelace
                     elClass "span" "ml-2 text-lg material-symbols-rounded" $ text "content_copy"
-                performEvent_ $ copyToClipboard addr <$ domEvent Click addrButton
+                performEvent_ $ copyToClipboard (unAddress addr) <$ domEvent Click addrButton
               pure ()
 
 
@@ -419,7 +413,7 @@ sendFundsInHead lastTagId serverMsg = do
         elClass "div" "flex flex-col" $ do
           ie <- inputElement $ def
             & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the sender?")
-          pure $ _inputElement_value ie
+          pure $ UnsafeToAddress <$> _inputElement_value ie
       fromAddr <- elClass "div" "ml-4 flex flex-row" $ do
         elClass "div" "mr-2" $ text "from"
         elClass "div" "font-semibold text-orange-400" $ text "String"
@@ -427,7 +421,7 @@ sendFundsInHead lastTagId serverMsg = do
         elClass "div" "flex flex-col" $ do
           ie <- inputElement $ def
             & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Who is the recipient?")
-          pure $ _inputElement_value ie
+          pure $ UnsafeToAddress <$> _inputElement_value ie
 
       amount <- elClass "div" "ml-4 flex flex-row" $ do
         elClass "div" "mr-2" $ text "lovelace"
@@ -439,8 +433,8 @@ sendFundsInHead lastTagId serverMsg = do
         pure $ maybe (ada 3) id . readMaybe . T.unpack <$> _inputElement_value ie
 
       let
-        mkSubmitHeadTx hname to from lovelace =
-          SubmitHeadTx from (HeadSubmitTx hname to lovelace)
+        mkSubmitHeadTx hname toaddr fromaddr lovelace =
+          SubmitHeadTx fromaddr (HeadSubmitTx hname toaddr lovelace)
 
       pure $ mkSubmitHeadTx <$> name <*> toAddr <*> fromAddr <*> amount
 
@@ -486,7 +480,7 @@ commitToHead lastTagId serverMsg = do
         elClass "div" "mx-4" $ text ":"
         ie <- inputElement $ def
           & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Committer address")
-        pure $ _inputElement_value ie
+        pure $ UnsafeToAddress <$> _inputElement_value ie
       amount <- elClass "div" "ml-4 flex flex-row" $ do
         elClass "div" "mr-2" $ text "lovelace"
         elClass "div" "font-semibold text-orange-400" $ text "Number"
@@ -607,7 +601,7 @@ fundingProxyAddresses lastTagId serverMsg = do
         elClass "div" "mx-4" $ text ":"
         ie <- inputElement $ def
           & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which address will you add funds from")
-        pure $ _inputElement_value ie
+        pure $ UnsafeToAddress <$> _inputElement_value ie
       amount <- elClass "div" "ml-4 flex flex-row" $ do
         elClass "div" "mr-2" $ text "lovelace"
         elClass "div" "font-semibold text-orange-400" $ text "Number"
@@ -659,7 +653,7 @@ fundingProxyAddresses lastTagId serverMsg = do
       where
         properReq = ffor req $ \case
           GetAddTx _ addr _ -> addr
-          _ -> ""
+          _ -> UnsafeToAddress ""
   
   trySection lastTagId serverMsg $
     TrySectionConfig
@@ -786,7 +780,7 @@ headCreation lastTagId serverMsg = do
           elClass "div" "flex flex-col" $ do
             ta <- textAreaElement $ def
               & initialAttributes .~ ("class" =: "border px-2" <> "type" =: "number" <> "placeholder" =: "Enter addresses separated by a newline" <> "cols" =: "65")
-            pure $ fmap T.strip . T.lines <$> _textAreaElement_value ta
+            pure $ fmap (UnsafeToAddress . T.strip) . T.lines <$> _textAreaElement_value ta
         pure $ fmap CreateHead $ HeadCreate <$> name <*> participants
 
       (tryEl, _) <- elClass' "div" "mb-4" $ elClass "button" "flex-grow-0 rounded-md px-4 py-1 text-center bg-green-500 text-white font-bold border-2 border-green-600" $ text "Try Request"
@@ -819,14 +813,14 @@ headCreation lastTagId serverMsg = do
       GotResponse (Tagged _ msg@(AuthResult False)) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $ do
-          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
+          elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
           elClass "div" "text-sm font-semibold text-red-400" $ text "It looks like your API Key is invalid, ensure your key matches the one hydra pay was given in config/backend/api-key"
       GotResponse (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
         elClass "div" "" $
-          elClass "pre" "relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
+          elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $ do
           text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
 
       WaitingOnResponse -> do
@@ -920,7 +914,7 @@ theDevnet lastTagId serverMsg = do
               elClass "div" "p-2 rounded active:bg-white/30 hover:bg-gray-400/30 bg-black/30 flex justify-center items-center text-center" $ do
                 elClass "span" "text-3xl material-symbols-rounded" $ text "content_copy"
 
-            performEvent_ $ copyToClipboard (T.intercalate "\n" addrs) <$ domEvent Click copyButton
+            performEvent_ $ copyToClipboard (T.intercalate "\n" . fmap unAddress $ addrs) <$ domEvent Click copyButton
 
             text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
         elClass "div" "mt-4" $ do
@@ -928,9 +922,9 @@ theDevnet lastTagId serverMsg = do
             (addrButton, _) <- elClass' "button" "w-full hover:bg-gray-200 active:bg-gray-700 active:text-white mb-2 px-2 py-1 border rounded-md font-semibold text-md flex flex-row items-center justify-between" $ do
               elClass "div" "" $ do
                 elClass "span" "font-bold mr-2" $ text $ tShow n
-                text addr
+                text $ unAddress addr
               elClass "span" "text-2xl material-symbols-rounded" $ text "content_copy"
-            performEvent_ $ copyToClipboard addr <$ domEvent Click addrButton
+            performEvent_ $ copyToClipboard (unAddress addr) <$ domEvent Click addrButton
 
       Just (Tagged _ msg) -> do
         elClass "div" "font-semibold mt-4" $ text "Hydra Pay Responded"
@@ -940,8 +934,8 @@ theDevnet lastTagId serverMsg = do
 
       Nothing -> blank
 
-    responseVisualizer "Example Response" $ DevnetAddresses [ "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a"
-                                                            , "addr_test1vr6mp9zqpxk5nw7p3xm6kvnt2w6mgl9lhmzuvuez5v59hqgakn855"
+    responseVisualizer "Example Response" $ DevnetAddresses [ UnsafeToAddress "addr_test1vpnpz04x65gmwcw25xr7p6spehmpmtakq885j92sprz7hggsnlm4a"
+                                                            , UnsafeToAddress "addr_test1vr6mp9zqpxk5nw7p3xm6kvnt2w6mgl9lhmzuvuez5v59hqgakn855"
                                                             ]
 
 
@@ -1116,11 +1110,9 @@ authentication lastTagId serverMsg = do
 monitorView ::
   ( PostBuild t m
   , DomBuilder t m
-  , MonadJSM m
   , MonadFix m
   , MonadHold t m
   , MonadJSM (Performable m)
-  , TriggerEvent t m
   , PerformEvent t m
   , EventWriter t [ClientMsg] m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()

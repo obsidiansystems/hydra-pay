@@ -97,6 +97,7 @@ data HydraPayError
   | NodeCommandFailed
   -- ^ Anytime a command fails
   | NotAParticipant
+  | ProcessError String
   | NoValidUTXOToCommit
   | InsufficientFunds
   | FanoutNotPossible
@@ -167,7 +168,7 @@ data ServerMsg
   | FuelAmount Lovelace
   | SubscriptionStarted HeadName
   | AlreadySubscribed HeadName
-  | InvalidMessage
+  | InvalidMessage T.Text
   | UnhandledMessage
   | HeadExistsResult Bool
   | DevnetRestarted

@@ -46,6 +46,8 @@ module Hydra.Devnet
 
 where
 
+import System.Exit (ExitCode(..))
+
 import System.Which
 import System.Directory
 import System.Process
@@ -65,6 +67,8 @@ import qualified Data.Text.IO as T
 import qualified Data.Map as Map
 import Data.String.Interpolate (i)
 import Paths
+
+import Control.Monad.Except
 
 import qualified Data.ByteString.Lazy.Char8 as BS
 
@@ -97,32 +101,41 @@ prepareDevnet = do
 addressesPath :: FilePath
 addressesPath = "devnet/addresses"
 
+keysPath :: FilePath
+keysPath = "devnet/keys"
+
 seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
 seedTestAddresses cninf faucetKeys amount = do
-  exists <- liftIO $ doesFileExist path
+  exists <- liftIO $ doesFileExist addressesPath
   unless exists $ do
-    seededAddresses <- for [1 .. amount] $ \n -> do
-      keypair <- generateCardanoKeys ("addr_" <> show n)
-      addr <- liftIO $ getCardanoAddress cninf $ _verificationKey keypair
+    -- Remove the Cardano keys for the devnet
+    liftIO $ do
+      -- NOTE removePathForcibly does nothing if the path doesn't exist,
+      -- and doesn't throw exceptions when the path contains files
+      _ <- removePathForcibly keysPath
+      createDirectory keysPath
+    result <- for [1 .. amount] $ \n -> runExceptT $ do
+      keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/" <> "addr_" <> show n
+      addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
       void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
       pure addr
-    liftIO $ T.writeFile path $ T.intercalate "\n" seededAddresses
-  where
-    path = addressesPath
+    case sequenceA result of
+      Right seededAddresses ->
+        liftIO $ T.writeFile addressesPath $ T.intercalate "\n" $ fmap unAddress seededAddresses
+      Left err -> logError $ pretty err
 
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
-  exists <- doesFileExist path
+  exists <- doesFileExist addressesPath
   case exists of
     False -> pure Nothing
     True -> do
-      contents <- flip zip [(1 :: Integer)..] . T.lines <$> T.readFile path
+      contents <- flip zip [(1 :: Integer)..] . fmap UnsafeToAddress . T.lines <$> T.readFile addressesPath
       pure $ fmap mkKeypair . lookup addr $ contents
   where
     mkKeypair n = KeyPair (SigningKey $ root <> "sk") (VerificationKey $ root <> "vk")
       where
-        root = "addr_" <> show n <> ".cardano."
-    path = addressesPath
+        root = keysPath <> "/" <> "addr_" <> show n <> ".cardano."
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
@@ -143,14 +156,14 @@ type HydraScriptTxId = T.Text
 type DraftTx = FilePath
 type SignedTx = FilePath
 
-generateKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m HydraKeyInfo
+generateKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m (Either String HydraKeyInfo)
 generateKeys = do
   basePath <- liftIO getTempPath'
-  HydraKeyInfo <$> generateCardanoKeys basePath <*> generateHydraKeys basePath
+  runExceptT $ HydraKeyInfo <$> (ExceptT $ generateCardanoKeys basePath) <*> (ExceptT $ generateHydraKeys basePath)
 
-generateKeysIn :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => FilePath ->  m HydraKeyInfo
-generateKeysIn fp =
-  HydraKeyInfo <$> generateCardanoKeys fp <*> generateHydraKeys fp
+generateKeysIn :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => FilePath -> m (Either String HydraKeyInfo)
+generateKeysIn fp = runExceptT $
+  HydraKeyInfo <$> (ExceptT $ generateCardanoKeys fp) <*> (ExceptT $ generateHydraKeys fp)
 
 newtype SigningKey = SigningKey
   { getSigningKeyFilePath :: FilePath }
@@ -178,10 +191,10 @@ data HydraKeyInfo = HydraKeyInfo
 -- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.cardano.{vk,sk}" keys being
 -- written.
-generateCardanoKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateCardanoKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m (Either String KeyPair)
 generateCardanoKeys path = do
-  output <- liftIO $
-    readCreateProcess
+  (exitCode, output, stderr) <- liftIO $
+    readCreateProcessWithExitCode
     (proc cardanoCliPath [ "address"
                          , "key-gen"
                          , "--verification-key-file"
@@ -191,30 +204,49 @@ generateCardanoKeys path = do
                          ])
     ""
   when (not . null $ output) $ logWarning $ pretty output
-  pure $ mkKeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
-
+  case exitCode of
+    ExitSuccess -> do
+      pure $ Right $ mkKeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
+    _ -> pure $ Left stderr
 -- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.hydra.{vk,sk}" keys being
 -- written.
-generateHydraKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m KeyPair
+generateHydraKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m (Either String KeyPair)
 generateHydraKeys path = do
-  output <- liftIO $
-    readCreateProcess
+  (exitCode, output, stderr) <- liftIO $
+    readCreateProcessWithExitCode
     (proc hydraToolsPath [ "gen-hydra-key"
                          , "--output-file"
                          , [i|#{path}.hydra|]
                          ])
     ""
   when (not . null $ output) $ logInfo $ pretty output
-  pure $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
+  case exitCode of
+    ExitSuccess -> do
+      pure $ Right $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
+    _ -> pure $ Left stderr
 
+-- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
+-- getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => FilePath -> SigningKey -> m (Either String HydraScriptTxId)
+-- getReferenceScripts scriptPath sk = runExceptT $ do
+--   exists <- liftIO $ doesFileExist scriptPath
+--   case exists of
+--     True -> liftIO $ T.readFile scriptPath
+--     False -> do
+--       scripts <- ExceptT $ publishReferenceScripts sk
+--       lift $ liftIO $ T.writeFile scriptPath scripts
+--       pure scripts
+--
+-- -- TODO: Make this generic over Cardano node socket path/network id?
+-- publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m (Either String HydraScriptTxId)
+-- publishReferenceScripts sk = do
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m)
   => CardanoNodeInfo
   -> SigningKey
-  -> m HydraScriptTxId
+  -> m (Either String HydraScriptTxId)
 publishReferenceScripts cninf sk = do
   logInfo $ "Publishing reference scripts ('νInitial' & 'νCommit')..."
-  fmap (T.strip . T.pack) $ liftIO $ readCreateProcess cp ""
+  (fmap . fmap) (T.strip . T.pack) $ processAdapter $ liftIO $ readCreateProcessWithExitCode cp ""
   where
     cp = proc hydraNodePath [ "publish-scripts"
                               , "--network-id"
@@ -270,7 +302,7 @@ queryAddressUTXOs cninf addr = liftIO $ do
         (proc cardanoCliPath $ [ "query"
                              , "utxo"
                              , "--address"
-                             , T.unpack addr
+                             , addressToString addr
                              , "--out-file"
                              , "/dev/stdout"
                              ]
@@ -297,33 +329,37 @@ data SomeTx = SomeTx
   , _tx_outDatumHash :: Maybe T.Text
   }
 
-buildSignedTx :: CardanoNodeInfo -> SigningKey -> SomeTx -> IO (FilePath, TxId)
-buildSignedTx nodeInfo signingKey tx = do
-  draftTx <- buildDraftTx nodeInfo tx
-  signedTx <- signTx nodeInfo signingKey draftTx
-  txid <- txIdFromSignedTx signedTx
+buildSignedTx :: CardanoNodeInfo -> SigningKey -> SomeTx -> IO (Either String (FilePath, TxId))
+buildSignedTx nodeInfo signingKey tx = runExceptT $ do
+  draftTx <- ExceptT $ buildDraftTx nodeInfo tx
+  signedTx <- ExceptT $ signTx nodeInfo signingKey draftTx
+  txid <- ExceptT $ txIdFromSignedTx signedTx
   pure (signedTx,txid)
 
 -- | Convenience for getting faucet Output for seeding
-getFirstTxIn :: CardanoNodeInfo -> Address -> IO TxIn
-getFirstTxIn cninf addr =
-  readCreateProcess cp "" >>= readProcess jqPath ["-r", "keys[0]"] >>= \a -> pure $ T.strip $ T.pack a
+getFirstTxIn :: CardanoNodeInfo -> Address -> IO (Either String TxIn)
+getFirstTxIn cninf addr = runExceptT $ do
+  output <- ExceptT $ processAdapter $ readCreateProcessWithExitCode cp ""
+  a <- ExceptT $ processAdapter $ readProcessWithExitCode jqPath ["-r", "keys[0]"] output
+  pure $ T.strip $ T.pack a
   where
     cp = (proc cardanoCliPath $
                               [ "query"
                               , "utxo"
                               , "--address"
-                              , T.unpack addr
+                              , addressToString addr
                               , "--out-file"
                               , "/dev/stdout"
                               ]
                               <> cardanoNodeArgs cninf
         ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
-
-getCardanoAddress :: CardanoNodeInfo -> VerificationKey -> IO Address
-getCardanoAddress cninf keyPath =
-  T.pack <$> readCreateProcess cp ""
+getCardanoAddress :: CardanoNodeInfo -> VerificationKey -> IO (Either String Address)
+getCardanoAddress cninf keyPath = do
+  (exitCode, stdout, stderr) <- readCreateProcessWithExitCode cp ""
+  case exitCode of
+    ExitSuccess -> pure $ Right $ UnsafeToAddress . T.pack $ stdout
+    _ -> pure $ Left stderr
   where
     cp = (proc cardanoCliPath $ [ "address"
                               , "build"
@@ -333,54 +369,56 @@ getCardanoAddress cninf keyPath =
                <> cardanoNodeArgs cninf
          ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
-
 -- | Returns Nothing if the address doesn't have enough funds to cover fees.
-transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Maybe TxIn)
+transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Either String TxIn)
 transferAll cninf signingKey fromAddr destAddr = do
   txins <- getAllLovelaceUtxos cninf fromAddr
   transferAmount cninf signingKey (fmap toInteger txins) destAddr True Nothing
   
 
-seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m TxIn
-seedAddressFromFaucetAndWait cninf faucetKeys addr amount makeFuel = do
-  txin <- liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount makeFuel
-  waitForTxIn cninf txin
+seedAddressFromFaucetAndWait :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> m (Either String TxIn)
+seedAddressFromFaucetAndWait cninf faucetKeys addr amount makeFuel = runExceptT $ do
+  txin <- ExceptT $ liftIO $ seedAddressFromFaucet cninf faucetKeys addr amount makeFuel
+  lift $ waitForTxIn cninf txin
   pure txin
 
 -- | Send an amount in lovelace to the named actor
-seedAddressFromFaucet :: CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> IO TxIn
-seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount makeFuel = do
-  draftTx <- buildSeedTxForAddress cninf faucetvk addr amount makeFuel
-  signedTx <- signTx cninf faucetsk draftTx
-  txin <- txInput 0 <$> txIdFromSignedTx signedTx
-  void $ submitTx cninf signedTx
+seedAddressFromFaucet :: CardanoNodeInfo -> KeyPair -> Address -> Lovelace -> Bool -> IO (Either String TxIn)
+seedAddressFromFaucet cninf (KeyPair faucetsk faucetvk) addr amount makeFuel = runExceptT $ do
+  draftTx <- ExceptT $ buildSeedTxForAddress cninf faucetvk addr amount makeFuel
+  signedTx <- ExceptT $ signTx cninf faucetsk draftTx
+  txin <- txInput 0 <$> (ExceptT $ txIdFromSignedTx signedTx)
+  _ <- ExceptT $ submitTx cninf signedTx
   pure txin
 
-buildDraftTx :: () => CardanoNodeInfo -> SomeTx -> IO FilePath
+buildDraftTx :: () => CardanoNodeInfo -> SomeTx -> IO (Either String FilePath)
 buildDraftTx cninf tx = do
   filename <- getTempPath'
-  _ <- readCreateProcess ((proc cardanoCliPath $ filter (/= "")
-                              [ "transaction"
-                              , "build"
-                              , "--babbage-era"
-                              , "--cardano-mode"
-                              , "--change-address"
-                              , T.unpack (_tx_changeAddr tx)
-                              ]
-                              <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ _tx_ins tx)
-                              <>
-                              [ "--tx-out"
-                              , T.unpack (_tx_outAddr tx) <> "+" <> show (_tx_outAmount tx)
-                              ]
-                              <> maybe [] (\h -> [ "--tx-out-datum-hash", T.unpack h ]) (_tx_outDatumHash tx)
-                              <>
-                              [ "--out-file"
-                              , filename
-                              ]
-                              <> cardanoNodeArgs cninf)
-                              { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
-                           ""
-  pure filename
+  (exitCode, _, stderr) <- readCreateProcessWithExitCode ((proc cardanoCliPath $ filter (/= "")
+                                     [ "transaction"
+                                     , "build"
+                                     , "--babbage-era"
+                                     , "--cardano-mode"
+                                     , "--change-address"
+                                     , addressToString (_tx_changeAddr tx)
+                                     ]
+                                     <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ _tx_ins tx)
+                                     <>
+                                     [ "--tx-out"
+                                     , addressToString (_tx_outAddr tx) <> "+" <> show (_tx_outAmount tx)
+                                     ]
+                                     <> maybe [] (\h -> [ "--tx-out-datum-hash", T.unpack h ]) (_tx_outDatumHash tx)
+                                     <>
+                                     [ "--out-file"
+                                     , filename
+                                     ]
+                                     <> cardanoNodeArgs cninf)
+                                     { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
+                                  ""
+  case exitCode of
+    ExitSuccess -> pure $ Right filename
+    _ -> pure $ Left stderr
+
 
 buildRawEmptyTx :: () => CardanoNodeInfo -> [TxIn] -> [Address] -> IO FilePath
 buildRawEmptyTx cninf txins outAddrs = do
@@ -391,7 +429,7 @@ buildRawEmptyTx cninf txins outAddrs = do
                               ]
                               <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) $ txins)
                               <>
-                              concatMap (\addr -> [ "--tx-out", T.unpack addr <> "+0" ]) outAddrs
+                              concatMap (\addr -> [ "--tx-out", addressToString addr <> "+0" ]) outAddrs
                               <>
                               [ "--fee", "0"
                               , "--invalid-hereafter", "0"
@@ -431,8 +469,8 @@ getAllLovelaceUtxos cninf fromAddr = do
   allUtxos <- queryAddressUTXOs cninf fromAddr
   pure $ Map.mapMaybe (Map.lookup "lovelace" . value) $ allUtxos
 
--- | Returns Nothing if there are not enough funds available.
-transferAmount :: CardanoNodeInfo -> SigningKey -> Map TxIn Lovelace -> Address -> Bool -> Maybe Lovelace -> IO (Maybe TxId)
+-- | Successful only if there is enough funds available
+transferAmount :: CardanoNodeInfo -> SigningKey -> Map TxIn Lovelace -> Address -> Bool -> Maybe Lovelace -> IO (Either String TxId)
 transferAmount cninf signingKey utxos toAddr minusFee maybeAmount = do
   let txins = Map.keys utxos
   let fullAmount :: Lovelace = sum . Map.elems $ utxos
@@ -442,17 +480,19 @@ transferAmount cninf signingKey utxos toAddr minusFee maybeAmount = do
   if (if minusFee
       then fee >= amount || amount > fullAmount
       else fee + amount >= fullAmount)
-    then pure Nothing
-    else Just <$> do
-      tipSlotNo <- getTipSlotNo cninf
-      submitTx cninf
-        =<< signTx cninf signingKey
-        =<< buildRawTx cninf txins (Map.singleton toAddr (bool (+) (-) minusFee fullAmount fee)) (tipSlotNo + 200) fee
+    then pure $ Left "Insufficient funds to transfer"
+    else runExceptT $ do
+      tipSlotNo <- lift $ getTipSlotNo cninf
+      rawTx <- ExceptT $ buildRawTx cninf txins (Map.singleton toAddr (bool (+) (-) minusFee fullAmount fee)) (tipSlotNo + 200) fee
+      signedTx <- ExceptT $ signTx cninf signingKey rawTx
+      ExceptT $ submitTx cninf signedTx
 
-buildRawTx :: CardanoNodeInfo -> [TxIn] -> Map Address Lovelace -> Integer -> Lovelace -> IO FilePath
+
+
+buildRawTx :: CardanoNodeInfo -> [TxIn] -> Map Address Lovelace -> Integer -> Lovelace -> IO (Either String FilePath)
 buildRawTx cninf txins outAmounts invalidAfter fee = do
   outFile <- getTempPath'
-  _ <- readCreateProcess
+  (exitCode, _, stderr) <- readCreateProcessWithExitCode
     ((proc cardanoCliPath $ ["transaction", "build-raw"
                             ]
                             <> concatMap (\txin -> ["--tx-in", T.unpack txin]) txins
@@ -464,13 +504,16 @@ buildRawTx cninf txins outAmounts invalidAfter fee = do
      )
      { env = Just [("CARDANO_NODE_SOCKET_PATH",  _nodeSocket cninf)] })
     ""
-  pure outFile
+  case exitCode of
+    ExitSuccess -> pure $ Right outFile
+    _ -> pure $ Left stderr
 
-buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO DraftTx
-buildSeedTxForAddress cninf faucetvk addr amount makeFuel = do
-  faucetAddr <- getCardanoAddress cninf faucetvk
-  hash <- getFirstTxIn cninf faucetAddr
-  buildDraftTx cninf $ SomeTx
+
+buildSeedTxForAddress :: CardanoNodeInfo -> VerificationKey -> Address -> Lovelace -> Bool -> IO (Either String DraftTx)
+buildSeedTxForAddress cninf faucetvk addr amount makeFuel = runExceptT $ do
+  faucetAddr <- ExceptT $ getCardanoAddress cninf faucetvk
+  hash <- ExceptT $ getFirstTxIn cninf faucetAddr
+  ExceptT $ buildDraftTx cninf $ SomeTx
       { _tx_ins = [hash],
         _tx_outAddr = addr,
         _tx_outAmount = amount,
@@ -479,7 +522,7 @@ buildSeedTxForAddress cninf faucetvk addr amount makeFuel = do
       }
 
 -- | Sign a transaction and a path containing it.
-signTx :: CardanoNodeInfo -> SigningKey -> DraftTx -> IO SignedTx
+signTx :: CardanoNodeInfo -> SigningKey -> DraftTx -> IO (Either String SignedTx)
 signTx cninf sk draftFile = do
   outFile <- getTempPath'
   let cp =
@@ -497,12 +540,17 @@ signTx cninf sk draftFile = do
         )
           { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)]
           }
-  _ <- readCreateProcess cp ""
-  pure outFile
+  (exitCode, _, stderr) <- readCreateProcessWithExitCode cp ""
+  case exitCode of
+    ExitSuccess -> pure $ Right outFile
+    _ -> pure $ Left stderr
 
-txIdFromSignedTx :: SignedTx -> IO TxId
-txIdFromSignedTx filename =
-  T.strip . T.pack <$> readCreateProcess cp ""
+txIdFromSignedTx :: SignedTx -> IO (Either String TxId)
+txIdFromSignedTx filename = do
+  (exitCode, output, stderr) <- readCreateProcessWithExitCode cp ""
+  case exitCode of
+    ExitSuccess -> pure $ Right $ T.strip . T.pack $ output
+    _ -> pure $ Left stderr
   where
     cp =
       ( proc cardanoCliPath $
@@ -513,10 +561,11 @@ txIdFromSignedTx filename =
           ]
       )
 
-submitTx :: CardanoNodeInfo -> SignedTx -> IO TxId
-submitTx cninf signedFile = do
-  txid <- txInput 0 <$> txIdFromSignedTx signedFile
-  _ <- readCreateProcess cp ""
+-- | Try to submit a Tx on the given Node, returns either what went wrong or the TxId submitted
+submitTx :: CardanoNodeInfo -> SignedTx -> IO (Either String TxId)
+submitTx cninf signedFile = runExceptT $ do
+  txid <- txInput 0 <$> (ExceptT $ txIdFromSignedTx signedFile)
+  _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode cp ""
   pure txid
   where
     cp =
@@ -532,11 +581,11 @@ submitTx cninf signedFile = do
         }
 
 -- | Return (transaction id, signed tx json text).
-buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO (T.Text, String)
-buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
+buildSignedHydraTx :: SigningKey -> Address -> Address -> Map TxIn Lovelace -> Lovelace -> IO (Either String (T.Text, String))
+buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = runExceptT $ do
   let fullAmount = sum txInAmounts
-  txBodyPath <- snd <$> getTempPath
-  void $ readCreateProcess (proc cardanoCliPath
+  txBodyPath <- lift $ snd <$> getTempPath
+  _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode (proc cardanoCliPath
                        ([ "transaction"
                         , "build-raw"
                         , "--babbage-era"
@@ -544,16 +593,16 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
                         <> (concatMap (\txin -> ["--tx-in", T.unpack txin]) . Map.keys $ txInAmounts)
                         <>
                         [ "--tx-out"
-                        , [i|#{toAddr}+#{amount}|]
+                        , [i|#{addressToString toAddr}+#{amount}|]
                         , "--tx-out"
-                        , [i|#{fromAddr}+#{fullAmount - amount}|]
+                        , [i|#{addressToString fromAddr}+#{fullAmount - amount}|]
                         , "--fee"
                         , "0"
                         , "--out-file"
                         , txBodyPath
                         ]))
     ""
-  txid <- readCreateProcess
+  txid <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
     (proc cardanoCliPath
       [ "transaction"
       , "txid"
@@ -561,7 +610,7 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
       , txBodyPath
       ])
     ""
-  (T.strip . T.pack $ txid,) <$> readCreateProcess
+  fmap (T.strip . T.pack $ txid,) $ ExceptT $ processAdapter $ readCreateProcessWithExitCode
     (proc cardanoCliPath
       [ "transaction"
       , "sign"
@@ -577,7 +626,7 @@ buildSignedHydraTx signingKey fromAddr toAddr txInAmounts amount = do
 getDevnetAddresses :: [Int] -> IO (Maybe [Address])
 getDevnetAddresses is = do
   addrs <- zip [1..] . T.lines . T.pack <$> readFile addressesPath
-  pure $ for is (flip lookup addrs)
+  pure $ for is (eitherToMaybe . parseAddress <=< flip lookup addrs)
 
 getDevnetAddress :: Int -> IO (Maybe Address)
 getDevnetAddress addrIndex = do

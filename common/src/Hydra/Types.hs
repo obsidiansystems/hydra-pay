@@ -4,15 +4,46 @@ module Hydra.Types where
 
 import GHC.Generics
 import Data.Aeson
+import Data.Aeson.Types (parseFail)
+
+import Control.Applicative
 
 import Data.Map (Map)
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Data.Map as Map
 import Numeric.Natural (Natural)
+import Data.Attoparsec.Text
+import Data.Attoparsec.ByteString.Char8 (isDigit, isAlpha_ascii)
 
 -- | Cardano address
-type Address = T.Text
+newtype Address =
+  UnsafeToAddress { unAddress :: T.Text }
+  deriving (Ord, Eq, Show, Generic)
+
+instance ToJSON Address where
+  toJSON = String . unAddress
+
+instance FromJSON Address where
+  parseJSON = withText "Address" $ \t -> do
+    case parseAddress t of
+      Right addr -> pure addr
+      Left err -> parseFail $ "Not a valid Cardano Address: " <> err
+
+instance ToJSONKey Address
+instance FromJSONKey Address
+
+addressToString :: Address -> String
+addressToString = T.unpack . unAddress
+
+parseAddress :: T.Text -> Either String Address
+parseAddress = parseOnly parser
+  where
+    parser = do
+      prefix <- string "addr1" <|> string "addr_test1"
+      rest <- takeWhile1 (\x -> isDigit x || isAlpha_ascii x)
+      endOfInput
+      pure $ UnsafeToAddress $ prefix <> rest
 
 type Lovelace = Integer
 
