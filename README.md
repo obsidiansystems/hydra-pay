@@ -78,7 +78,7 @@ Copy the result to a new directory, add configuration, and run!
 mkdir test-app
 ln -s $(nix-build -A exe --no-out-link)/* test-app/
 cp -r config test-app
-(cd test-app && ./backend)
+(cd test-app && ./hydra-pay)
 ```
 
 Visit the live documentation and confirm your key and requests presented work as expected.

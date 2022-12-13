@@ -16,6 +16,7 @@ library
                , containers
                , time
                , lens
+               , attoparsec
 
   default-extensions:
     DeriveGeneric
