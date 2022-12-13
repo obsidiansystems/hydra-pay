@@ -360,6 +360,15 @@ l1Balance state addr includeFuel = do
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
+fuelBalance :: (MonadIO m) => State -> Address -> m Lovelace
+fuelBalance state addr = do
+  cninf <- getCardanoNodeInfo state
+  utxos <- queryAddressUTXOs cninf addr
+  let
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
+    fullAmount = toInteger $ sum txInAmounts
+  pure fullAmount
+
 -- | The balance of the proxy address associated with the address given
 getProxyFunds :: (MonadIO m) => State -> Address -> m Lovelace
 getProxyFunds state addr = do
@@ -1127,6 +1136,17 @@ handleClientMessage conn state = \case
     pure $ HeadRemoved name
 
   GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state
+
+  GetProxyInfo address -> do
+    (proxyAddr, _) <- addOrGetKeyInfo state address
+    balance <- l1Balance state proxyAddr False
+    fuel <- fuelBalance state proxyAddr
+    pure $ ProxyAddressInfo $ ProxyInfo
+      address
+      proxyAddr
+      balance
+      fuel
+
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a
