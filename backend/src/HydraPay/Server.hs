@@ -350,6 +350,15 @@ l1Balance state addr includeFuel = do
     fullAmount = toInteger $ sum txInAmounts
   pure fullAmount
 
+fuelBalance :: (MonadIO m) => State -> Address -> m Lovelace
+fuelBalance state addr = do
+  cninf <- getCardanoNodeInfo state
+  utxos <- queryAddressUTXOs cninf addr
+  let
+    txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ filterFuel utxos
+    fullAmount = toInteger $ sum txInAmounts
+  pure fullAmount
+
 -- | The balance of the proxy address associated with the address given
 getProxyFunds :: (MonadIO m) => State -> Address -> m (Either String Lovelace)
 getProxyFunds state addr = runExceptT $ do
@@ -1020,7 +1029,7 @@ handleTaggedMessage conn state (Tagged tid clientMsg) = do
   serverMsg <- handleClientMessage conn state clientMsg
   pure $ Tagged tid serverMsg
 
-handleClientMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> ClientMsg -> m (ServerMsg)
+handleClientMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> ClientMsg -> m ServerMsg
 handleClientMessage conn state = \case
   Authenticate token -> do
     let apiKey = _state_apiKey state
@@ -1159,6 +1168,20 @@ handleClientMessage conn state = \case
     pure $ HeadRemoved name
 
   GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state
+
+  GetProxyInfo address -> do
+    inf <- addOrGetKeyInfo state address
+    case inf of
+      Right (proxyAddr, _) -> do
+        balance <- l1Balance state proxyAddr False
+        fuel <- fuelBalance state proxyAddr
+        pure $ ProxyAddressInfo $ ProxyInfo
+          address
+          proxyAddr
+          balance
+          fuel
+      Left err -> pure $ ServerError (ProcessError err)
+
 
 newtype HydraPayClient a = HydraPayClient
   { unHydraPayClient :: MaybeT (ReaderT ClientState IO) a

@@ -555,6 +555,47 @@ initHead lastTagId serverMsg = do
 
   pure ()
 
+proxyAddressInfo ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
+proxyAddressInfo lastTagId serverMsg hpm = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Proxy Address Information"
+
+    elClass "p" "" $ do
+      text "Sometimes you want to inspect or be aware of the Proxy Address' funds and fuel, maybe to automate filling those up in your business logic."
+      text " The Proxy Info includes the address of the proxy address, and the balance and fuel of that proxy address."
+
+  let
+    input = payloadInput $ do
+      addr <- elClass "div" "ml-4 flex flex-row mb-4" $ do
+        elClass "div" "mr-2" $ text "address"
+        elClass "div" "font-semibold text-orange-400" $ text "String"
+        elClass "div" "mx-4" $ text ":"
+        ie <- inputElement $ def
+          & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which address do you want proxy info for?")
+        pure $ _inputElement_value ie
+      pure $ GetProxyInfo . UnsafeToAddress <$> addr
+
+    example =
+      ProxyAddressInfo $ ProxyInfo
+      (UnsafeToAddress "addr_test1vpn4a8f6s7h8grgw2zf8wvths7qzm8s3s4739yh6qj33a0cx3v906")
+      (UnsafeToAddress "addr_test1vrstc4qyum6fx0rewnx2d62994lgjtmmwepekxcr9vfu5yctt9rdu")
+      50000000
+      50000000
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (exampleResponse example)
+    (const Nothing)
+    noExtra
+  pure ()
+
 fundingProxyAddresses ::
   ( EventWriter t [ClientMsg] m
   , DomBuilder t m
@@ -563,17 +604,6 @@ fundingProxyAddresses ::
   , MonadHold t m
   ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
 fundingProxyAddresses lastTagId serverMsg hpm = do
-  elClass "div" "px-4 pb-4" $ do
-    header "Proxy Addresses"
-
-    elClass "p" "" $ do
-      text "Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers."
-      text " One way we aid feature creation is through our Proxy Address structure."
-      el "br" blank
-      el "br" blank
-      text "Instead of participating directly in a Head, any participant will actually be mapped to a \"Proxy Address\"."
-      text " This is a regular cardano address that is created to hold funds and fuel for said participant in a Hydra Pay Head."
-
   elClass "div" "px-4 pb-4" $ do
     header "Funding Proxy Addresses | Funds & Fuel"
 
@@ -692,7 +722,7 @@ fundingProxyAddresses lastTagId serverMsg hpm = do
         properReq = ffor req $ \case
           GetAddTx _ addr _ -> addr
           _ -> UnsafeToAddress ""
-  
+
   trySection lastTagId serverMsg $
     TrySectionConfig
     input
@@ -707,6 +737,28 @@ fundingProxyAddresses lastTagId serverMsg hpm = do
        ConfiguredMode cardanoParams _ -> shellCommands cardanoParams)
 
   pure ()
+
+proxyAddresses ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> HydraPayMode -> m ()
+proxyAddresses lastTagId serverMsg hpm = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Proxy Addresses"
+
+    elClass "p" "" $ do
+      text "Hydra Pay simplifies the creation and managment of Heads to facilitate easy creation of Hydra Head based features for Light Wallet and DApp developers."
+      text " One way we aid feature creation is through our Proxy Address structure."
+      el "br" blank
+      el "br" blank
+      text "Instead of participating directly in a Head, any participant will actually be mapped to a \"Proxy Address\"."
+      text " This is a regular cardano address that is created to hold funds and fuel for said participant in a Hydra Pay Head."
+
+  fundingProxyAddresses lastTagId serverMsg hpm
+  proxyAddressInfo lastTagId serverMsg hpm
 
 data SubmitStatus
   = TxNotSubmitted
@@ -1217,7 +1269,7 @@ monitorView lastTagId serverMsg hpm = do
 
     subscribeTo lastTagId serverMsg
 
-    fundingProxyAddresses lastTagId serverMsg hpm
+    proxyAddresses lastTagId serverMsg hpm
 
     initHead lastTagId serverMsg
 

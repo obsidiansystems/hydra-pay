@@ -152,6 +152,7 @@ data ClientMsg
   | LiveDocEzSubmitTx Tx Address
 
   | GetHydraPayMode
+  | GetProxyInfo Address
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -189,10 +190,24 @@ data ServerMsg
   | HeadRemoved HeadName
   | ApiError T.Text
   | HydraPayMode Config.HydraPayMode
+  | ProxyAddressInfo ProxyInfo
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
 instance FromJSON ServerMsg
+
+-- | Information about the managed proxy-address
+-- for a specific address
+data ProxyInfo = ProxyInfo
+  { proxyInfo_address :: Address
+  , proxyInfo_proxyAddress :: Address
+  , proxyInfo_balance :: Lovelace
+  , proxyInfo_fuel :: Lovelace
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON ProxyInfo
+instance FromJSON ProxyInfo
 
 data ApiMsg
   = TaggedMsg (Tagged ServerMsg)
