@@ -1015,7 +1015,7 @@ responseVisualizer name msg = do
   -- Divider
   elClass "div" "mt-6 w-full h-px bg-gray-200" blank
 
-  elClass "div" "font-semibold mt-4 mb-2" $ text name
+  elClass "div" "font-semibold text-sm text-gray-400 mt-4 mb-2" $ text name
   elClass "div" "" $
     elClass "pre" "overflow-x-scroll relative rounded-lg p-4 border bg-gray-900 text-green-500" $ elClass "code" "language-json" $
     text $ decodeUtf8 . LBS.toStrict . Aeson.encodePretty $ msg
