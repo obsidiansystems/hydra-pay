@@ -475,8 +475,8 @@ initHead state (HeadInit name con) = do
 
 data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
-  -- | Nothing to redraw all.
   , withdraw_amount :: Maybe Lovelace
+  -- | ^ Nothing to withdraw all.
   }
   deriving(Eq, Show, Generic)
 
