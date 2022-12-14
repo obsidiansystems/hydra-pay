@@ -381,7 +381,7 @@ getCardanoAddress cninf keyPath = do
                <> cardanoNodeArgs cninf
          ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
--- | Returns Nothing if the address doesn't have enough funds to cover fees.
+-- | Returns an error if the address doesn't have enough funds to cover fees.
 transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Either String TxIn)
 transferAll cninf signingKey fromAddr destAddr = do
   txins <- getAllLovelaceUtxos cninf fromAddr
