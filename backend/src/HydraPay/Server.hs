@@ -639,7 +639,6 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
 
     startTime <- lift $ liftIO $ getCurrentTime
     liftIO $ _node_send_msg node $ NewTx . T.pack $ txCborHexStr
-    -- TODO: Could we make sure we saw the transaction that we sent and not another one?
     untilJust $ do
       x <- liftIO . atomically $ readTChan c
       case x of
@@ -647,7 +646,7 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) = do
           let confirmedIds = mapMaybe (parseMaybe (withObject "tx" (.: "id"))) confirmeds
           if txid `elem` confirmedIds
             then do
-              endTime <- liftIO $ getCurrentTime
+              endTime <- liftIO getCurrentTime
               pure . Just $ nominalDiffTimeToSeconds $ diffUTCTime endTime startTime
             else pure Nothing
 
