@@ -576,7 +576,7 @@ txIdFromSignedTx filename = do
 -- | Try to submit a Tx on the given Node, returns either what went wrong or the TxId submitted
 submitTx :: CardanoNodeInfo -> SignedTx -> IO (Either String TxId)
 submitTx cninf signedFile = runExceptT $ do
-  txid <- txInput 0 <$> (ExceptT $ txIdFromSignedTx signedFile)
+  txid <- ExceptT $ txIdFromSignedTx signedFile
   _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode cp ""
   pure txid
   where
