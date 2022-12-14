@@ -508,7 +508,7 @@ buildRawTx cninf txins outAmounts invalidAfter fee = do
     ((proc cardanoCliPath $ ["transaction", "build-raw"
                             ]
                             <> concatMap (\txin -> ["--tx-in", T.unpack txin]) txins
-                            <> concatMap (\(addr,amount) -> [ "--tx-out", [i|#{addr}+#{amount}|] ]) (Map.toList outAmounts)
+                            <> concatMap (\(addr,amount) -> [ "--tx-out", [i|#{addressToString addr}+#{amount}|] ]) (Map.toList outAmounts)
                             <> [ "--invalid-hereafter", show invalidAfter
                                , "--fee", show fee
                                , "--out-file", outFile
