@@ -14,6 +14,7 @@ import Control.Lens.TH
 import Data.Fixed (Pico)
 import Hydra.Types
 import Hydra.ServerOutput as ServerOutput
+import qualified HydraPay.Config as Config
 
 type HeadName = T.Text
 
@@ -149,6 +150,9 @@ data ClientMsg
   | GetHeadBalance HeadName Address
 
   | LiveDocEzSubmitTx Tx Address
+  | GetIsManagedDevnet
+  | GetHydraPayMode
+  | GetProxyInfo Address
   deriving (Eq, Show, Generic)
 
 instance ToJSON ClientMsg
@@ -185,10 +189,26 @@ data ServerMsg
   | BalanceChange HeadName (Map Address Lovelace)
   | HeadRemoved HeadName
   | ApiError T.Text
+  | HydraPayMode Config.HydraPayMode
+  | IsManagedDevnet Bool
+  | ProxyAddressInfo ProxyInfo
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
 instance FromJSON ServerMsg
+
+-- | Information about the managed proxy-address
+-- for a specific address
+data ProxyInfo = ProxyInfo
+  { proxyInfo_address :: Address
+  , proxyInfo_proxyAddress :: Address
+  , proxyInfo_balance :: Lovelace
+  , proxyInfo_fuel :: Lovelace
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON ProxyInfo
+instance FromJSON ProxyInfo
 
 data ApiMsg
   = TaggedMsg (Tagged ServerMsg)

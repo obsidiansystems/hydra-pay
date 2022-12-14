@@ -1,6 +1,6 @@
 name: backend
 version: 0.1
-cabal-version: >= 1.8
+cabal-version: >= 1.10
 build-type: Simple
 
 library
@@ -71,7 +71,7 @@ library
 
   exposed-modules:
     Backend
-    Config
+    ParseConfig
     HydraPay
     HydraPay.Server
     HydraPay.Network

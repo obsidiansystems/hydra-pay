@@ -17,7 +17,7 @@ import HydraPay.Logging
 import Obelisk.Backend
 import Obelisk.Route
 import Prelude hiding (filter)
-import Config
+import ParseConfig
 
 backend :: Backend BackendRoute FrontendRoute
 backend = Backend
