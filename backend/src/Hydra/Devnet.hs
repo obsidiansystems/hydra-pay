@@ -150,8 +150,6 @@ hydraNodePath = $(staticWhich "hydra-node")
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")
 
-type TxId = T.Text
-
 type HydraScriptTxId = T.Text
 
 type DraftTx = FilePath

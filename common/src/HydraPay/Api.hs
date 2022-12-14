@@ -135,7 +135,7 @@ data ClientMsg
   -- ^ Kills network and removes head
 
   | CheckFuel Address
-  | Withdraw Address
+  | Withdraw Address Bool
   | GetAddTx TxType Address Lovelace
 
   | SubscribeTo HeadName
@@ -192,6 +192,7 @@ data ServerMsg
   | HydraPayMode Config.HydraPayMode
   | IsManagedDevnet Bool
   | ProxyAddressInfo ProxyInfo
+  | WithdrawSubmitted TxId
   deriving (Eq, Show, Generic)
 
 instance ToJSON ServerMsg
