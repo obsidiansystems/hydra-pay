@@ -585,8 +585,8 @@ proxyAddressInfo lastTagId serverMsg = do
 
     example =
       ProxyAddressInfo $ ProxyInfo
-      (UnsafeToAddress "addr_test1vpn4a8f6s7h8grgw2zf8wvths7qzm8s3s4739yh6qj33a0cx3v906")
-      (UnsafeToAddress "addr_test1vrstc4qyum6fx0rewnx2d62994lgjtmmwepekxcr9vfu5yctt9rdu")
+      obviouslyInvalidAddress
+      obviouslyInvalidAddress
       50000000
       50000000
 
