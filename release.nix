@@ -11,9 +11,9 @@
   nixpkgs = obelisk.nixpkgs;
 in
 {
-  dockerImage = args@{ version ? "latest" }:
+  dockerImage = args@{ version ? "latest", name ? "obsidiansys/hydra-pay" }:
     nixpkgs.dockerTools.buildImage ({
-      name = "hydra-pay";
+      name = name;
       tag = version;
       contents = [ nixpkgs.iana-etc
                    nixpkgs.cacert
