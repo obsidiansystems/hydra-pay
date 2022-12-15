@@ -1,7 +1,7 @@
-{-# LANGUAGE ExtendedDefaultRules #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -Wno-unused-local-binds #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE QuasiQuotes #-}
 
@@ -585,8 +585,8 @@ proxyAddressInfo lastTagId serverMsg = do
 
     example =
       ProxyAddressInfo $ ProxyInfo
-      (UnsafeToAddress "addr_test1vpn4a8f6s7h8grgw2zf8wvths7qzm8s3s4739yh6qj33a0cx3v906")
-      (UnsafeToAddress "addr_test1vrstc4qyum6fx0rewnx2d62994lgjtmmwepekxcr9vfu5yctt9rdu")
+      obviouslyInvalidAddress
+      obviouslyInvalidAddress
       50000000
       50000000
 
@@ -787,6 +787,59 @@ payloadInput input =
 
 hintText :: DomBuilder t m => m a -> m a
 hintText = elClass "div" "text-gray-400 font-semibold italic my-4"
+
+withdrawFromHydraPay ::
+  ( EventWriter t [ClientMsg] m
+  , DomBuilder t m
+  , PostBuild t m
+  , MonadFix m
+  , MonadHold t m
+  ) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> m ()
+withdrawFromHydraPay lastTagId serverMsg = do
+  elClass "div" "px-4 pb-4" $ do
+    header "Withdrawing from Hydra Pay (Proxy Address)"
+
+    elClass "p" "" $ do
+      text "After you are done using your Funds within Hydra Pay, you are free to withdraw them from a Proxy address."
+      text " You can take back everything, or just funds or just fuel."
+      text " This allows flexibility in how DApp developers and potentially individual users want to structure withdrawals"
+
+    hintText $ text "Remember withdrawal is a L1 transaction where the Proxy address sends funds back to the Non Proxy. This is subject to fees on networks that aren't the Devnet."
+
+  let
+    input = do
+      elClass "div" "flex flex-row justify-between mb-4" $ elClass "div" "flex flex-col" $ do
+        elClass "div" "font-semibold flex flex-row" $ do
+          elClass "div" "mr-2" $ text "Payload"
+          elClass "div" "text-green-400" $ text "Object"
+
+        addr <- elClass "div" "ml-4 flex flex-row" $ do
+          elClass "div" "mr-2" $ text "address"
+          elClass "div" "font-semibold text-orange-400" $ text "String"
+          elClass "div" "mx-4" $ text ":"
+          elClass "div" "flex flex-col" $ do
+            ie <- inputElement $ def
+              & initialAttributes .~ ("class" =: "border px-2" <> "placeholder" =: "Which address would you like to withdraw to?")
+            pure $ UnsafeToAddress <$> _inputElement_value ie
+
+        takeFuel <- elClass "div" "ml-4 flex flex-row items-center" $ do
+          elClass "div" "mr-2" $ text "take fuel"
+          elClass "div" "font-semibold text-orange-400" $ text "Bool"
+          elClass "div" "mx-4" $ text ":"
+          elClass "div" "flex flex-col" $ do
+            ie <- inputElement $ def
+              & initialAttributes .~ ("class" =: "border px-2" <> "type" =: "checkbox")
+            pure $ _inputElement_checked ie
+
+        pure $ Withdraw <$> addr <*> takeFuel
+
+  trySection lastTagId serverMsg $
+    TrySectionConfig
+    input
+    (exampleResponse $ WithdrawSubmitted "e174c1033009de66ccc577743ae4542c9d5e6c8220acfcd55c1c4cf330b7ca04")
+    (const Nothing)
+    noExtra
+
 
 subscribeTo ::
   ( EventWriter t [ClientMsg] m
@@ -1288,4 +1341,6 @@ monitorView lastTagId serverMsg isManagedDevnet = do
     closeHead lastTagId serverMsg
 
     removeHead lastTagId serverMsg
+
+    withdrawFromHydraPay lastTagId serverMsg
   pure ()

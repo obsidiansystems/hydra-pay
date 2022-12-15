@@ -415,13 +415,17 @@ Example Response:
 
 #### Withdraw
 
-Withdraw funds from your Proxy Address to your main address.
+Withdraw funds from your Proxy Address to your main address. Takes the
+Proxy Address and a boolean determining whether to withdraw fuel as well.
 
 Example Payload:
 ``` json
 {
-  "tag": "Withdraw"
-  "contents": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
+  "tag": "Withdraw",
+  "contents": [
+      "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
+      true
+  ]
 }
 ```
 

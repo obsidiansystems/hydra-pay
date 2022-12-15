@@ -58,6 +58,7 @@ type Lovelace = Integer
 
 type NodeId = T.Text
 
+type TxId = T.Text
 type TxIn = T.Text
 type WholeUTXO = Map TxIn TxInInfo
 

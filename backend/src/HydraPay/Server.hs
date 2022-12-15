@@ -472,6 +472,7 @@ data WithdrawRequest = WithdrawRequest
   { withdraw_address :: Address
   , withdraw_amount :: Maybe Lovelace
   -- ^ Nothing to withdraw all.
+  , withdraw_takeFuel :: Bool
   }
   deriving(Eq, Show, Generic)
 
@@ -481,15 +482,17 @@ instance FromJSON WithdrawRequest
 
 -- | Withdraw funds (if available from proxy request), fee is subtracted.
 withdraw :: MonadIO m => State -> WithdrawRequest -> m (Either HydraPayError TxId)
-withdraw state (WithdrawRequest addr maybeAmount) = runExceptT $ do
+withdraw state (WithdrawRequest addr maybeAmount takeFuel) = runExceptT $ do
   cninf <- lift $ getCardanoNodeInfo state
   (proxyAddr, keyInfo) <- ExceptT $ mapLeft ProcessError <$> addOrGetKeyInfo state addr
   utxos <- lift $ queryAddressUTXOs cninf proxyAddr
   let
-    notFuel = filterOutFuel utxos
-    txInAmounts = toInteger <$> Map.mapMaybe (Map.lookup "lovelace" . HT.value) notFuel
+    filterFunc = bool filterOutFuel id takeFuel
+    filtered = filterFunc utxos
+    txInAmounts = fmap toInteger $ Map.mapMaybe (Map.lookup "lovelace" . HT.value) filtered
   let signingKey = _signingKey $ _cardanoKeys keyInfo
-  ExceptT $ fmap (mapLeft ProcessError) $ liftIO $ transferAmount cninf signingKey txInAmounts addr True maybeAmount
+  ExceptT $ fmap (mapLeft ProcessError) $
+    liftIO $ transferAmount cninf signingKey txInAmounts addr True maybeAmount
 
 fanoutHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
 fanoutHead = sendToHeadAndWaitFor Fanout $ \case
@@ -985,31 +988,31 @@ cardanoNodeCreateProcess =
 signAndSubmitTx :: CardanoNodeInfo -> SigningKey -> Tx -> IO (Maybe String)
 signAndSubmitTx cninfo sk tx =
   withTempFile "." "tx.draft" $ \draftFile draftHandle -> do
-  LBS.hPut draftHandle $ Aeson.encode tx
-  hClose draftHandle
-  withTempFile "." "tx.signed" $ \signedFile signedHandle -> do
-    hClose signedHandle
-    let cp = (proc cardanoCliPath [ "transaction"
-                                  , "sign"
-                                  , "--tx-body-file"
-                                  , draftFile
-                                  , "--signing-key-file"
-                                  , getSigningKeyFilePath sk
-                                  , "--out-file"
-                                  , signedFile
-                                  ])
-          { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninfo)]
-          }
-    (exitCode, _, stderr) <- readCreateProcessWithExitCode cp ""
-    case exitCode of
-      ExitSuccess -> do
-        submitResult <- submitTx cninfo signedFile
-        case submitResult of
-          Right txid -> do
-            withLogging . waitForTxIn cninfo $ txid
-            pure Nothing
-          Left err -> pure $ Just err
-      _ -> pure $ Just stderr
+    LBS.hPut draftHandle $ Aeson.encode tx
+    hClose draftHandle
+    withTempFile "." "tx.signed" $ \signedFile signedHandle -> do
+      hClose signedHandle
+      let cp = (proc cardanoCliPath [ "transaction"
+                                    , "sign"
+                                    , "--tx-body-file"
+                                    , draftFile
+                                    , "--signing-key-file"
+                                    , getSigningKeyFilePath sk
+                                    , "--out-file"
+                                    , signedFile
+                                    ])
+            { env = Just [( "CARDANO_NODE_SOCKET_PATH" , _nodeSocket cninfo)]
+            }
+      (exitCode, _, stderr) <- readCreateProcessWithExitCode cp ""
+      case exitCode of
+        ExitSuccess -> do
+          submitResult <- submitTx cninfo signedFile
+          case submitResult of
+            Right txid -> do
+              withLogging . waitForTxIn cninfo $ txInput 0 txid
+              pure Nothing
+            Left err -> pure $ Just err
+        _ -> pure $ Just stderr
 
 handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
 handleTaggedMessage conn state (Tagged tid clientMsg) = do
@@ -1101,15 +1104,14 @@ handleClientMessage conn state = \case
 
   ClientHello -> pure $ ServerHello versionStr
 
-  Withdraw addr -> do
+  Withdraw addr takeFuel -> do
     -- Withdraw everything minus fees
-    result <- withdraw state $ WithdrawRequest addr Nothing
+    result <- withdraw state $ WithdrawRequest addr Nothing takeFuel
     case result of
       Right txid -> do
-        cardanoNodeInfo <- getCardanoNodeInfo state
-        waitForTxIn cardanoNodeInfo $ txInput 0 txid
-      _ -> pure ()
-    pure $ either ServerError (const OperationSuccess) result
+        logInfo $ "Withdrawal transaction submitted for " <> (pretty $ addressToString addr) <> pretty txid
+        pure $ WithdrawSubmitted txid
+      Left err-> pure $ ApiError $ tShow err
 
   GetAddTx txtype addr lovelaceAmount -> do
     result <- buildAddTx txtype state addr lovelaceAmount
@@ -1155,14 +1157,14 @@ handleClientMessage conn state = \case
   GetIsManagedDevnet -> pure . IsManagedDevnet . (== ManagedDevnetMode) . getHydraPayMode $ state
   GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state
 
-  GetProxyInfo address' -> do
-    inf <- addOrGetKeyInfo state address'
+  GetProxyInfo addr -> do
+    inf <- addOrGetKeyInfo state addr
     case inf of
       Right (proxyAddr, _) -> do
         balance <- l1Balance state proxyAddr False
         fuel <- fuelBalance state proxyAddr
         pure $ ProxyAddressInfo $ ProxyInfo
-          address'
+          addr
           proxyAddr
           balance
           fuel

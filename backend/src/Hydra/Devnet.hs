@@ -150,8 +150,6 @@ hydraNodePath = $(staticWhich "hydra-node")
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")
 
-type TxId = T.Text
-
 type HydraScriptTxId = T.Text
 
 type DraftTx = FilePath
@@ -381,7 +379,7 @@ getCardanoAddress cninf keyPath = do
                <> cardanoNodeArgs cninf
          ) { env = Just [("CARDANO_NODE_SOCKET_PATH", _nodeSocket cninf)] }
 
--- | Returns Nothing if the address doesn't have enough funds to cover fees.
+-- | Returns an error if the address doesn't have enough funds to cover fees.
 transferAll :: () => CardanoNodeInfo -> SigningKey -> Address -> Address -> IO (Either String TxIn)
 transferAll cninf signingKey fromAddr destAddr = do
   txins <- getAllLovelaceUtxos cninf fromAddr
@@ -508,7 +506,7 @@ buildRawTx cninf txins outAmounts invalidAfter fee = do
     ((proc cardanoCliPath $ ["transaction", "build-raw"
                             ]
                             <> concatMap (\txin -> ["--tx-in", T.unpack txin]) txins
-                            <> concatMap (\(addr,amount) -> [ "--tx-out", [i|#{addr}+#{amount}|] ]) (Map.toList outAmounts)
+                            <> concatMap (\(addr,amount) -> [ "--tx-out", [i|#{addressToString addr}+#{amount}|] ]) (Map.toList outAmounts)
                             <> [ "--invalid-hereafter", show invalidAfter
                                , "--fee", show fee
                                , "--out-file", outFile
@@ -576,7 +574,7 @@ txIdFromSignedTx filename = do
 -- | Try to submit a Tx on the given Node, returns either what went wrong or the TxId submitted
 submitTx :: CardanoNodeInfo -> SignedTx -> IO (Either String TxId)
 submitTx cninf signedFile = runExceptT $ do
-  txid <- txInput 0 <$> (ExceptT $ txIdFromSignedTx signedFile)
+  txid <- ExceptT $ txIdFromSignedTx signedFile
   _ <- ExceptT $ processAdapter $ readCreateProcessWithExitCode cp ""
   pure txid
   where
