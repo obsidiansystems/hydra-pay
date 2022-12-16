@@ -609,16 +609,17 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   headExists <- isJust <$> lookupHead state name
   when headExists $ throwError $ HeadExists name
   statusBTChan <- liftIO newBroadcastTChanIO
-  let hydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
-  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name hydraHead
-  startResult <- startNetwork state hydraHead
+  let potentialHydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
+  startResult <- startNetwork state potentialHydraHead
   case startResult of
     Right network -> do
       logInfo $ pretty $ "Network started for head \"" <> name <> "\""
+      liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name potentialHydraHead
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
-    Left err ->
-      logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
-  pure hydraHead
+      pure potentialHydraHead
+    Left err -> do
+      lift $ logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
+      throwError $ ProcessError err
 
 data HydraTxError =
   HydraTxNotSeen
@@ -700,10 +701,14 @@ removeHead state name = runExceptT $ do
 terminateHead :: (MonadIO m) => State -> HeadName -> m ()
 terminateHead state headName =
   liftIO $ modifyMVar_ (_state_networks state) $ \ns ->
-  flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
+    flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
+      terminateNetwork state n
+      pure (Map.delete headName ns)
+
+terminateNetwork :: MonadIO m => State -> Network -> m ()
+terminateNetwork state n = liftIO $ do
   mapM_ (terminateProcess . _node_handle) . _network_nodes $ n
   _state_freePorts state . concatMap _node_ports . Map.elems . _network_nodes $ n
-  pure (Map.delete headName ns)
 
 -- | Lookup head via name
 lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)
@@ -773,6 +778,8 @@ startNetwork state (Head name participants _ statusBTChan) = do
   case mNetwork of
     Just network -> pure $ Right network
     Nothing -> runExceptT $ do
+      -- Hydra Node has a hard limit of 4 participants, we shouldn't go through the seance of spawning a network when this is known information
+      when (Set.size participants > 4) $ throwError "Hydra Node Error: Maximum number of parties is currently set to: 4"
       proxyMap <- ExceptT $ participantsToProxyMap state participants
       hydraInfo <-lift $ getHydraSharedInfo state
       nodes <- lift $ startHydraNetwork hydraInfo proxyMap (_state_getPorts state)
@@ -784,7 +791,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ withLogging $ do
           liftIO $ threadDelay 3000000
-          logInfo [i|Connecting to WS port #{thePort}|]
+          logInfo [i|Connecting to WS port #{thePort} and other stuff|]
           liftIO $ runClient "127.0.0.1" thePort "/" $ \conn -> withLogging $ do
             logInfo [i|Connected to node on port #{thePort}|]
             -- Fork off "message send" thread
@@ -857,7 +864,21 @@ startNetwork state (Head name participants _ statusBTChan) = do
           , _node_get_listen_chan = atomically $ dupTChan bRcvChan
           , _node_ports = ports
           }
-      logInfo [i|---- Waiting for #{numNodes} nodes to get ready |]
+
+      -- This is finnicky, essentially we need to make sure the node didn't fail
+      -- it may _never_ fail, so we just wait a certain amount of time
+      liftIO $ threadDelay 3000000
+      logInfo [i|---- Checking integrity of #{numNodes} nodes... |]
+      nodeFailure <- fmap (any isJust) $ lift $ flip Map.traverseWithKey (_network_nodes network) $ \addr node -> do
+        result <- liftIO $ getProcessExitCode $ _node_handle node
+        when (isJust result) $ logError [i|--- Node failed inspect #{nodeLogDir}/hydra-node-#{addressToString addr}.error.log for more information|]
+        pure result
+
+      when nodeFailure $ do
+        lift $ terminateNetwork state network
+        throwError "Failed to start network, check Hydra Pay logs for more specific information"
+
+      logInfo [i|---- Integrity sound waiting for #{numNodes} nodes to get ready |]
       let countReadies n = do
             if n == numNodes
               then logInfo [i|---- All nodes ready|]
@@ -896,13 +917,14 @@ startHydraNetwork sharedInfo actors getPorts = do
   liftIO $ createDirectoryIfMissing True nodeLogDir
   nodes :: (Map Address (HydraNodeInfo, [Int])) <- liftIO . fmap Map.fromList . mapM node $ zip [1 ..] (Map.toList actors)
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name (theNode, ports) -> do
-    logHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.log|] WriteMode
-    errHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.error.log|] WriteMode
+    logHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{addressToString name}.log|] WriteMode
+    errHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{addressToString name}.error.log|] WriteMode
     let cp = (mkHydraNodeCP sharedInfo theNode (filter ((/= _nodeId theNode) . _nodeId) (fst <$> Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
              }
     (_,_,_,resultHandle) <- createProcess cp
+
     pure (resultHandle, theNode, ports)
   where
 
