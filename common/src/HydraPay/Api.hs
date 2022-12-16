@@ -113,6 +113,7 @@ data Status
   = Status_Pending
   | Status_Init
   | Status_Committing
+  | Status_Aborted
   | Status_Open
   | Status_Closed
   | Status_Fanout
@@ -170,7 +171,7 @@ data ServerMsg
   | TxConfirmed Pico
   | FundsTx Tx
   | FuelAmount Lovelace
-  | SubscriptionStarted HeadName
+  | SubscriptionStarted HeadStatus
   | AlreadySubscribed HeadName
   | InvalidMessage T.Text
   | UnhandledMessage

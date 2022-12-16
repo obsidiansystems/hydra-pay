@@ -339,7 +339,6 @@ singletonFromTxInfo (TxInInfo addr _ val) =
 l1Balance :: (MonadIO m) => State -> Address -> Bool -> m Lovelace
 l1Balance state addr includeFuel = do
   cninf <- getCardanoNodeInfo state
-  -- TODO: Why get the hydra info only to get the Cardano node info?
   utxos <- queryAddressUTXOs cninf addr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) $ bool filterOutFuel id includeFuel utxos
@@ -499,10 +498,35 @@ fanoutHead = sendToHeadAndWaitFor Fanout $ \case
   HeadIsFinalized {} -> True
   _ -> False
 
-closeHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
-closeHead = sendToHeadAndWaitFor Close $ \case
-  HeadIsClosed {} -> True
-  _ -> False
+closeHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError ())
+closeHead state name = runExceptT $ do
+  HeadStatus _ _ status _ <- ExceptT $ getHeadStatus state name
+  let
+    getInput = \case
+      Status_Init -> pure Abort
+      Status_Committing -> pure Abort
+
+      Status_Open -> pure Close
+
+      Status_Pending -> throwError $ ProcessError "Head is stil pending, you can just terminate/remove it."
+      Status_Closed -> throwError $ ProcessError "Head is already closed."
+      Status_Fanout -> throwError $ ProcessError "Head is fanning out, please wait for it to finish and then simply remove the head."
+      Status_Finalized -> throwError $ ProcessError "Head is finalized, you can just remove it."
+      Status_Aborted -> throwError $ ProcessError "Head is aborted, you can just remove it."
+
+  action <- getInput status
+  output <- ExceptT $ sendToHeadAndWaitForOutput action waitingFor state name
+  case output of
+    CommandFailed {} -> throwError $ ProcessError "Command failed, please check Head Status"
+    HeadIsClosed {} -> pure ()
+    HeadIsAborted {} -> pure ()
+    _ -> throwError $ ProcessError "Internal error: Unexpected command receieved"
+  where
+    waitingFor = \case
+      HeadIsAborted {} -> True
+      HeadIsClosed {} -> True
+      CommandFailed {} -> True
+      _ -> False
 
 sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError HeadStatus)
 sendToHeadAndWaitFor ci fso state headName = do
@@ -510,7 +534,6 @@ sendToHeadAndWaitFor ci fso state headName = do
   case mNetwork of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just network -> do
-      -- TODO: Round robin to prevent exhausting gas of the first participant!
       let firstNode = head $ Map.elems $ _network_nodes network
           sendMsg = _node_send_msg firstNode
           getChan = _node_get_listen_chan firstNode
@@ -530,7 +553,6 @@ sendToHeadAndWaitForOutput ci fso state headName = do
   case mNetwork of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just network -> do
-      -- TODO: Round robin to prevent exhausting gas of the first participant!
       let firstNode = head $ Map.elems $ _network_nodes network
           sendMsg = _node_send_msg firstNode
           getChan = _node_get_listen_chan firstNode
@@ -587,16 +609,17 @@ createHead state (HeadCreate name participants) = runExceptT $ do
   headExists <- isJust <$> lookupHead state name
   when headExists $ throwError $ HeadExists name
   statusBTChan <- liftIO newBroadcastTChanIO
-  let hydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
-  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name hydraHead
-  startResult <- startNetwork state hydraHead
+  let potentialHydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
+  startResult <- startNetwork state potentialHydraHead
   case startResult of
     Right network -> do
       logInfo $ pretty $ "Network started for head \"" <> name <> "\""
+      liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name potentialHydraHead
       liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
-    Left err ->
-      logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
-  pure hydraHead
+      pure potentialHydraHead
+    Left err -> do
+      lift $ logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
+      throwError $ ProcessError err
 
 data HydraTxError =
   HydraTxNotSeen
@@ -660,18 +683,32 @@ broadcastToSubscribers state hname msg = do
       for_ subs $ \subConn ->
       WS.sendTextData subConn . Aeson.encode $ msg
 
-removeHead :: (MonadIO m) => State -> HeadName -> m ()
-removeHead state name = do
-  terminateHead state name
-  liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.delete name
+removeHead :: (MonadIO m) => State -> HeadName -> m (Either String ())
+removeHead state name = runExceptT $ do
+  status <- ExceptT $ fmap (mapLeft show) $ getHeadStatus state name
+  case headStatus_status status of
+    Status_Init -> throwError "Head is Initialized, please Close the head before removing to avoid losing funds."
+    Status_Committing -> throwError "Head is Committing, please Close the head before removing to avoid losing funds."
+    Status_Open -> throwError "Head is Open, please Close the head before removing to avoid losing funds."
+    Status_Closed -> throwError "Head is closing, please wait for the contestation period to be over and the fanout to complete."
+    Status_Fanout -> throwError "Head is waiting for fanout transaction to complete."
+    -- Head is pending or finalized this is fine.
+    _ -> do
+      lift $ terminateHead state name
+      liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.delete name
+      pure ()
 
 terminateHead :: (MonadIO m) => State -> HeadName -> m ()
 terminateHead state headName =
   liftIO $ modifyMVar_ (_state_networks state) $ \ns ->
-  flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
+    flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
+      terminateNetwork state n
+      pure (Map.delete headName ns)
+
+terminateNetwork :: MonadIO m => State -> Network -> m ()
+terminateNetwork state n = liftIO $ do
   mapM_ (terminateProcess . _node_handle) . _network_nodes $ n
   _state_freePorts state . concatMap _node_ports . Map.elems . _network_nodes $ n
-  pure (Map.delete headName ns)
 
 -- | Lookup head via name
 lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)
@@ -741,6 +778,8 @@ startNetwork state (Head name participants _ statusBTChan) = do
   case mNetwork of
     Just network -> pure $ Right network
     Nothing -> runExceptT $ do
+      -- Hydra Node has a hard limit of 4 participants, we shouldn't go through the seance of spawning a network when this is known information
+      when (Set.size participants > 4) $ throwError "Hydra Node Error: Maximum number of parties is currently set to: 4"
       proxyMap <- ExceptT $ participantsToProxyMap state participants
       hydraInfo <-lift $ getHydraSharedInfo state
       nodes <- lift $ startHydraNetwork hydraInfo proxyMap (_state_getPorts state)
@@ -751,9 +790,8 @@ startNetwork state (Head name participants _ statusBTChan) = do
         bRcvChan <- liftIO newBroadcastTChanIO
         sndChan <- liftIO newChan
         monitor <- liftIO $ forkIO $ withLogging $ do
-          -- FIXME: Instead of threadDelay retry connecting to the WS port
           liftIO $ threadDelay 3000000
-          logInfo [i|Connecting to WS port #{thePort}|]
+          logInfo [i|Connecting to WS port #{thePort} and other stuff|]
           liftIO $ runClient "127.0.0.1" thePort "/" $ \conn -> withLogging $ do
             logInfo [i|Connected to node on port #{thePort}|]
             -- Fork off "message send" thread
@@ -771,8 +809,6 @@ startNetwork state (Head name participants _ statusBTChan) = do
             -- Wait until we have seen all other nodes connect to this one
             _ <- flip (iterateUntilM (== (numNodes - 1))) 0 $ \n -> do
               msg <- getParsedMsg
-              -- TODO: Maybe best to actually check which peer rather
-              -- than blindly count?
               pure $ case msg of
                 PeerConnected _ -> n + 1
                 _ -> n
@@ -787,7 +823,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
                     HeadIsOpen utxoz -> (Just Status_Open, Just utxoz)
                     HeadIsClosed {} -> (Just Status_Closed, Nothing)
                     ReadyToFanout {} -> (Just Status_Fanout, Nothing)
-                    HeadIsAborted {} -> (Nothing, Nothing)
+                    HeadIsAborted {} -> (Just Status_Aborted, Nothing)
                     HeadIsFinalized utxoz -> (Just Status_Finalized, Just utxoz)
                     _ -> (Nothing, Nothing)
               case handleMsg msg of
@@ -828,7 +864,21 @@ startNetwork state (Head name participants _ statusBTChan) = do
           , _node_get_listen_chan = atomically $ dupTChan bRcvChan
           , _node_ports = ports
           }
-      logInfo [i|---- Waiting for #{numNodes} nodes to get ready |]
+
+      -- This is finnicky, essentially we need to make sure the node didn't fail
+      -- it may _never_ fail, so we just wait a certain amount of time
+      liftIO $ threadDelay 3000000
+      logInfo [i|---- Checking integrity of #{numNodes} nodes... |]
+      nodeFailure <- fmap (any isJust) $ lift $ flip Map.traverseWithKey (_network_nodes network) $ \addr node -> do
+        result <- liftIO $ getProcessExitCode $ _node_handle node
+        when (isJust result) $ logError [i|--- Node failed inspect #{nodeLogDir}/hydra-node-#{addressToString addr}.error.log for more information|]
+        pure result
+
+      when nodeFailure $ do
+        lift $ terminateNetwork state network
+        throwError "Failed to start network, check Hydra Pay logs for more specific information"
+
+      logInfo [i|---- Integrity sound waiting for #{numNodes} nodes to get ready |]
       let countReadies n = do
             if n == numNodes
               then logInfo [i|---- All nodes ready|]
@@ -867,19 +917,19 @@ startHydraNetwork sharedInfo actors getPorts = do
   liftIO $ createDirectoryIfMissing True nodeLogDir
   nodes :: (Map Address (HydraNodeInfo, [Int])) <- liftIO . fmap Map.fromList . mapM node $ zip [1 ..] (Map.toList actors)
   liftIO $ sequence . flip Map.mapWithKey nodes $ \name (theNode, ports) -> do
-    logHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.log|] WriteMode
-    errHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{name}.error.log|] WriteMode
+    logHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{addressToString name}.log|] WriteMode
+    errHndl <- openFile [iii|#{nodeLogDir}/hydra-node-#{addressToString name}.error.log|] WriteMode
     let cp = (mkHydraNodeCP sharedInfo theNode (filter ((/= _nodeId theNode) . _nodeId) (fst <$> Map.elems nodes)))
              { std_out = UseHandle logHndl
              , std_err = UseHandle errHndl
              }
     (_,_,_,resultHandle) <- createProcess cp
+
     pure (resultHandle, theNode, ports)
   where
 
     node :: forall a. (Int, (a, HydraKeyInfo)) -> IO (a, (HydraNodeInfo, [Int]))
     node (n, (name, keys)) = do
-      -- TODO: Handle lack of ports
       pd <- getTempPath'
       Just ps@[p1,p2,p3] <- getPorts 3
       pure ( name
@@ -1087,7 +1137,8 @@ handleClientMessage conn state = \case
 
   SubscribeTo name -> do
     liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
-    pure $ SubscriptionStarted name
+    status <- getHeadStatus state name
+    pure $ either (ApiError . T.pack . show) SubscriptionStarted status
 
   LiveDocEzSubmitTx tx addr -> do
     isDevnet <- runningDevnet state
@@ -1138,10 +1189,8 @@ handleClientMessage conn state = \case
     pure $ either ServerError (const OperationSuccess) result
 
   CloseHead name -> do
-    _ <- sendToHeadAndWaitFor Close (\case
-      HeadIsFinalized {} -> True
-      _ -> False) state name
-    pure OperationSuccess
+    result <- closeHead state name
+    pure $ either ServerError (const OperationSuccess) result
 
   DoesHeadExist name -> do
     result <- getHeadStatus state name
@@ -1150,9 +1199,14 @@ handleClientMessage conn state = \case
       Right _ -> True
 
   TearDownHead name -> do
-    removeHead state name
-    broadcastToSubscribers state name $ HeadRemoved name
-    pure $ HeadRemoved name
+    result <- removeHead state name
+    case result of
+      Right () -> do
+        let removeMsg = HeadRemoved name
+        broadcastToSubscribers state name removeMsg
+        pure removeMsg
+      Left err -> do
+        pure $ ApiError $ T.pack err
 
   GetIsManagedDevnet -> pure . IsManagedDevnet . (== ManagedDevnetMode) . getHydraPayMode $ state
   GetHydraPayMode -> pure . HydraPayMode . getHydraPayMode $ state

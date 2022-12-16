@@ -286,9 +286,10 @@ activeHeads authenticated _ subscriptions responses =
   dyn_ $ ffor authenticated $ \case
     False -> elClass "span" "text-gray-400" $ text "Authenticate to monitor heads"
     True -> do
-      subscribed <- foldDyn ($)  (mempty :: Set T.Text) $ Set.insert <$> startedSubscription
+      subscribed <- foldDyn ($)  (mempty :: Set T.Text) $ Set.insert . headStatus_name <$> startedSubscription
       heads <- foldDyn ($) (mempty :: Map T.Text HeadStatus) $
         mergeWith (.) [ uncurry Map.insert <$> gotHeadInfo
+                      , uncurry Map.insert . (\x -> (headStatus_name x, x)) <$> startedSubscription
                       , (\(hname, status, balances) -> Map.adjust (\hstatus -> hstatus { headStatus_status = status
                                                                                        , headStatus_balances =
                                                                                           Map.union balances (headStatus_balances hstatus)
@@ -372,6 +373,7 @@ activeHeads authenticated _ subscriptions responses =
       Status_Closed -> "Closed"
       Status_Fanout -> "Fanning Out"
       Status_Finalized -> "Finalized"
+      Status_Aborted -> "Aborted"
 
 header :: DomBuilder t m => T.Text -> m ()
 header name = do
@@ -882,7 +884,9 @@ subscribeTo lastTagId serverMsg = do
   trySection lastTagId serverMsg $
     TrySectionConfig
     input
-    (exampleResponse $ SubscriptionStarted "test")
+    (exampleResponse
+     $ SubscriptionStarted
+     $ HeadStatus "test" True Status_Pending mempty)
     (const Nothing)
     noExtra
 
