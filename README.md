@@ -44,8 +44,6 @@ To use a custom configuration, mount a copy of the `config` directory from this 
 docker run -p 127.0.0.1:8000:8000/tcp --volume /path/to/hydra-pay/config:/hydrapay/config obsidiansys/hydra-pay:latest
 ```
 
-There are command line options to run on your own Cardano network and Hydra Head parameters. These can be listed with the `--help` option and are similar to those of `cardano-node` and [`hydra-node`](https://hydra.family/head-protocol/docs/getting-started).
-
 ### With Nix
 
 1. [Install Nix](https://nixos.org/nix/). If you already have Nix installed, make sure you have version 2.0 or higher. To check your current version, run nix-env --version.
@@ -82,6 +80,55 @@ cp -r config test-app
 ```
 
 Visit the live documentation and confirm your key and requests presented work as expected.
+
+### Running on a Managed Devnet
+
+By default Hydra Pay will run a managed devnet, this devnet allows us to verify the API behavior of hydra pay in an efficient way, and is not for active development. 
+
+When Hydra Pay launches, and you haven't configured it to utilize a cardano node that you are running, it will spawn a node, configure it as a local devnet, and seed 10 addresses with 10k ADA.
+
+These are made readily available to you via the API and the within the Live Docs to get your footing and start using and interacting with Hydra Pay.
+
+### Running on Preview
+
+You can configure Hydra Pay to use an existing node instead of creating a devnet node, and this allows you to interact with other cardano environments like Preview.
+
+To run on preview there is much more involved as Hydra Pay isn't managing address creation, key storage, and funding. To make things easier on developers the Live Documentation will detect it is connected to an external cardano node and adjust its instructions accordingly.
+
+#### Assumptions
+
+We assume you have a cardano node already running on Preview, and that it is running on the same machine you will be running Hydra Pay. As like other tools in the cardano ecosystem, the Hydra Nodes require access to a cardano node socket. Along with the socket you will need the shelley genesis file that was used to bootstrap your node, this should be in the directory your node is running in, and you can also find up to date versions of these genesis files [here](https://book.world.dev.cardano.org/environments.html).
+
+We also assume you have addresses to use in your testing and those addresses have funds, you can use the [Testnets Faucet](https://docs.cardano.org/cardano-testnet/tools/faucet) if you need funds (just remember to send them back when you are done!).
+
+#### Hydra Scripts on Preview
+
+Hydra in part works by using a Plutus smart contract on L1 and that contract must be deployed on the network you are using, here is the txid for the Hydra Scripts on Preview:
+`4081fab39728fa3c05c0edc4dc7c0e8c45129ca6b2b70bf8600c1203a79d2c6d`
+
+#### Hydra Protocol Parameters
+
+Just like a Cardano Node, Hydra Nodes have a set of protocol parameters to control various aspects of the Node and the Network. However the Hydra Node doesn't need to (and usually shouldn't) use the same protocol parameters of the Cardano Node. If you don't know the exact protocol parameters you want, we recommend using the parameters found in hydra-protocol-parameters.json.example in this repo, the give a reasonable default to compliment the benefits of Hydra.
+
+#### Run configuration for Preview
+
+So with all that in mind, and the assumptions met, here is how you run Hydra Pay on Preview:
+
+```bash
+hydra-pay \
+    --testnet-magic 2 \
+    --node-socket cardano-node.socket \
+    --ledger-genesis cardano-node-byron-genesis.json \
+    --hydra-scripts-tx-id 4081fab39728fa3c05c0edc4dc7c0e8c45129ca6b2b70bf8600c1203a79d2c6d \
+    --hydra-ledger-protocol-parameters hydra-protocol-parameters.json \
+    --hydra-ledger-genesis cardano-node-genesis-shelley.json
+```
+
+The testnet magic for `Preview` is `2`. The node socket is commonly found at `/run/cardano-node/node.socket` but this will depend on exactly how your cardano node is configured.
+
+As you can see you must provide some of the configuration files used for your node like the byron genesis file and the shelley genesis file.
+
+Once again we recommend using the Hydra parameters found in hydra-protocol-parameters.json.example unless you know exactly what you are doing.
 
 ### API Key
 
@@ -123,14 +170,14 @@ Foundational:
 - [x] Authentication support
 - [x] Tested on Preview
 - [x] Tested over https and wss
-- [x] Live Documentation
+- [x] Live Documentation: Devnet, Preview
 - [x] Full lifecycle guide
 - [x] Deployment Guide
 - [x] Docker Deployment Guide
 - [x] Best Practices
 - [x] TTL on add funds and fuel pre-built transactions
 - [x] Choice of network: Devnet, Preview
-- [ ] How to Contribute
+- [x] Default Hydra Node configuration
 
 ## 🗝 API
 
