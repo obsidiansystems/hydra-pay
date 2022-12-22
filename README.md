@@ -110,7 +110,7 @@ Hydra in part works by using a Plutus smart contract on L1 and that contract mus
 
 #### Hydra Protocol Parameters
 
-Just like a Cardano Node, Hydra Nodes have a set of protocol parameters to control various aspects of the Node and the Network. However the Hydra Node doesn't need to (and usually shouldn't) use the same protocol parameters of the Cardano Node. If you don't know the exact protocol parameters you want, we recommend using the parameters found in hydra-protocol-parameters.json.example in this repo, the give a reasonable default to compliment the benefits of Hydra.
+Just like a Cardano Node, Hydra Nodes have a set of protocol parameters to control various aspects of the Node and the Network. However the Hydra Node doesn't need to (and usually shouldn't) use the same protocol parameters of the Cardano Node. If you don't know the exact protocol parameters you want, we recommend using the parameters found in hydra-protocol-parameters.json.example in this repo, they give a reasonable default to compliment the benefits of Hydra.
 
 #### Run configuration for Preview
 
@@ -319,7 +319,7 @@ Expected Response:
 
 #### Subscribing to State Changes
 
-A lot of the time the logic for your DApp or Light Wallet will include waiting for certain state changes to take place. To be convenient for developers and to avoid unecessary complications and resource usage of polling, you can subscribe to state changes of certain heads. If you create a head you should subscribe to it as well.
+A lot of the time the logic for your DApp or Light Wallet will include waiting for certain state changes to take place. To be convenient for developers and to avoid unnecessary complications and resource usage of polling, you can subscribe to state changes of certain heads. If you create a head you should subscribe to it as well.
 
 Example payload:
 

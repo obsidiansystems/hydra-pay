@@ -11,7 +11,7 @@ This project's release branch is `master`. This log is written from the perspect
 * Request/Response Websocket API for Head management
 * Live Documentation for education and testing of all Hydra Pay API requests
 * Mutliplexed Websocket realtime status information
-* Manged devnet creation and funding, with automatic transaction submitting
+* Managed devnet creation and funding, with automatic transaction submitting
 * Capability for running on Preview (tested)
 * CIP-30 compatible Transaction generation for use in Light Wallets
 * Proxy address key management
