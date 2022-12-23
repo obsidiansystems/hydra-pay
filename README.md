@@ -259,7 +259,7 @@ Upon opening a websocket connection to your HydraPay instance, you should immedi
 Hydra Pay manages state and does its best to communicate when you issue API requests that are not at appropriate times, or would have no meaning in the current state. When this happens you are likely to get responses like the following:
 
 ``` json
-{ "tag": "ApiError", "contents": ""Head is closing, please wait for the contestation period to be over and the fanout to complete." }
+{ "tag": "ApiError", "contents": "Head is closing, please wait for the contestation period to be over and the fanout to complete." }
 ```
 This error message was generated when trying to remove/terminate a head while the nodes are fanning out funds.
 
