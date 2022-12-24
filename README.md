@@ -17,6 +17,8 @@ This will cover:
   * Fanout
 * A real-world example application
 
+We assume at this time you are knowledgeable about Hydra and the basic Hydra Head lifecycle. If not take some time to familiarize yourself with [here](https://hydra.family/head-protocol/core-concepts/). 
+
 ## 👷🏾‍♂️ Running Hydra Pay
 
 Hydra Pay can be ran via Docker or Nix.
@@ -43,8 +45,6 @@ To use a custom configuration, mount a copy of the `config` directory from this 
 ```bash
 docker run -p 127.0.0.1:8000:8000/tcp --volume /path/to/hydra-pay/config:/hydrapay/config obsidiansys/hydra-pay:latest
 ```
-
-There are command line options to run on your own Cardano network and Hydra Head parameters. These can be listed with the `--help` option and are similar to those of `cardano-node` and [`hydra-node`](https://hydra.family/head-protocol/docs/getting-started).
 
 ### With Nix
 
@@ -82,6 +82,55 @@ cp -r config test-app
 ```
 
 Visit the live documentation and confirm your key and requests presented work as expected.
+
+### Running on a Managed Devnet
+
+By default Hydra Pay will run a managed devnet, this devnet allows us to verify the API behavior of hydra pay in an efficient way, and is not for active development. 
+
+When Hydra Pay launches, and you haven't configured it to utilize a cardano node that you are running, it will spawn a node, configure it as a local devnet, and seed 10 addresses with 10k ADA.
+
+These are made readily available to you via the API and the within the Live Docs to get your footing and start using and interacting with Hydra Pay.
+
+### Running on Preview
+
+You can configure Hydra Pay to use an existing node instead of creating a devnet node, and this allows you to interact with other cardano environments like Preview.
+
+To run on preview there is much more involved as Hydra Pay isn't managing address creation, key storage, and funding. To make things easier on developers the Live Documentation will detect it is connected to an external cardano node and adjust its instructions accordingly.
+
+#### Assumptions
+
+We assume you have a cardano node already running on Preview, and that it is running on the same machine you will be running Hydra Pay. As like other tools in the cardano ecosystem, the Hydra Nodes require access to a cardano node socket. Along with the socket you will need the shelley genesis file that was used to bootstrap your node, this should be in the directory your node is running in, and you can also find up to date versions of these genesis files [here](https://book.world.dev.cardano.org/environments.html).
+
+We also assume you have addresses to use in your testing and those addresses have funds, you can use the [Testnets Faucet](https://docs.cardano.org/cardano-testnet/tools/faucet) if you need funds (just remember to send them back when you are done!).
+
+#### Hydra Scripts on Preview
+
+Hydra in part works by using a Plutus smart contract on L1 and that contract must be deployed on the network you are using, here is the txid for the Hydra Scripts on Preview:
+`4081fab39728fa3c05c0edc4dc7c0e8c45129ca6b2b70bf8600c1203a79d2c6d`
+
+#### Hydra Protocol Parameters
+
+Just like a Cardano Node, Hydra Nodes have a set of protocol parameters to control various aspects of the Node and the Network. However the Hydra Node doesn't need to (and usually shouldn't) use the same protocol parameters of the Cardano Node. If you don't know the exact protocol parameters you want, we recommend using the parameters found in hydra-protocol-parameters.json.example in this repo, they give a reasonable default to compliment the benefits of Hydra.
+
+#### Run configuration for Preview
+
+So with all that in mind, and the assumptions met, here is how you run Hydra Pay on Preview:
+
+```bash
+hydra-pay \
+    --testnet-magic 2 \
+    --node-socket cardano-node.socket \
+    --ledger-genesis cardano-node-byron-genesis.json \
+    --hydra-scripts-tx-id 4081fab39728fa3c05c0edc4dc7c0e8c45129ca6b2b70bf8600c1203a79d2c6d \
+    --hydra-ledger-protocol-parameters hydra-protocol-parameters.json \
+    --hydra-ledger-genesis cardano-node-genesis-shelley.json
+```
+
+The testnet magic for `Preview` is `2`. The node socket is commonly found at `/run/cardano-node/node.socket` but this will depend on exactly how your cardano node is configured.
+
+As you can see you must provide some of the configuration files used for your node like the byron genesis file and the shelley genesis file.
+
+Once again we recommend using the Hydra parameters found in hydra-protocol-parameters.json.example unless you know exactly what you are doing.
 
 ### API Key
 
@@ -123,14 +172,14 @@ Foundational:
 - [x] Authentication support
 - [x] Tested on Preview
 - [x] Tested over https and wss
-- [x] Live Documentation
+- [x] Live Documentation: Devnet, Preview
 - [x] Full lifecycle guide
 - [x] Deployment Guide
 - [x] Docker Deployment Guide
 - [x] Best Practices
 - [x] TTL on add funds and fuel pre-built transactions
 - [x] Choice of network: Devnet, Preview
-- [ ] How to Contribute
+- [x] Default Hydra Node configuration
 
 ## 🗝 API
 
@@ -179,7 +228,6 @@ Information might include a Head changing state, an error or failure, a restart 
 This allows Light Wallet and DApp developers to have their implementation react and respond to these issues in a timely and automatic way.
 
 Example Subscription:
-
 ``` json
 {
     "contents": "test",
@@ -190,11 +238,15 @@ Example Subscription:
 Example Response:
 ``` json
 {
-    "contents": "test",
-    "tag": "SubscriptionStarted"
+    "tag": "SubscriptionStarted",
+    "contents": {
+        "headStatus_name": "test",
+        "headStatus_balances": [],
+        "headStatus_running": true,
+        "headStatus_status": "Status_Pending"
+    }
 }
 ```
-
 
 ### Authentication
 
@@ -202,7 +254,16 @@ When you launch or deploy a Hydra Pay instance you will need to provide an API K
 
 Upon opening a websocket connection to your HydraPay instance, you should immediately Authenticate by sending a Tagged `Authenticate` request (see below).
 
-### Request and Response Payloads
+### Errors and Error Messages
+
+Hydra Pay manages state and does its best to communicate when you issue API requests that are not at appropriate times, or would have no meaning in the current state. When this happens you are likely to get responses like the following:
+
+``` json
+{ "tag": "ApiError", "contents": "Head is closing, please wait for the contestation period to be over and the fanout to complete." }
+```
+This error message was generated when trying to remove/terminate a head while the nodes are fanning out funds.
+
+### Request and Response API
 
 Here is a list of request/response payloads. Remember that you must Tag (see above), these payloads when communicating with the Server. 
 
@@ -228,7 +289,7 @@ This will use the API Key you set up when you deployed the Server.
 { "tag": "Authenticate", "contents": "KbYei/+ymqAeqgXCiS+pfn88xMkkfXHhe8d/YHU3kGM=" }
 ```
 
-Example Response:
+Expected Response:
 ``` json
 { "tag": "AuthResult", "contents": true }
 ```
@@ -241,11 +302,11 @@ Creating the head starts the Hydra network.
 Example payload:
 ``` json
 {
+    "tag": "CreateHead",
     "contents": {
-        "headCreate_participants": ["addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease"],
-        "headCreate_name": "test"
-    },
-    "tag": "CreateHead"
+        "headCreate_name": "test",
+        "headCreate_participants": ["addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease"]
+    }
 }
 ```
 
@@ -256,23 +317,48 @@ Expected Response:
 }
 ```
 
+#### Subscribing to State Changes
+
+A lot of the time the logic for your DApp or Light Wallet will include waiting for certain state changes to take place. To be convenient for developers and to avoid unnecessary complications and resource usage of polling, you can subscribe to state changes of certain heads. If you create a head you should subscribe to it as well.
+
+Example payload:
+
+``` json
+{
+    "tag": "SubscribeTo",
+    "contents": "test"
+}
+```
+
+Example response:
+``` json
+{
+    "tag": "SubscriptionStarted",
+    "contents": {
+        "headStatus_name": "test",
+        "headStatus_balances": [],
+        "headStatus_running": true,
+        "headStatus_status": "Status_Pending"
+    }
+}
+```
+
 #### Head Init
 
-Post the inital state of your Head on chain, and start waiting for Commitments from the participants.
+This creates an L1 transaction (using fuel given to a Proxy Address) that places the initial head state on chain.
 
 Example Payload:
 ``` json
 {
+    "tag": "InitHead",
     "contents": {
         "headInit_name": "test",
         "headInit_contestation": 3
-    },
-    "tag": "InitHead"
+    }
 }
 ```
 
 Expected Response:
-
 ``` json
 {
     "tag": "OperationSuccess"
@@ -317,16 +403,44 @@ Expected Response:
 ```
 
 
-#### Add Funds
+#### Proxy Address Information
 
-Get a CIP-30 compatible CBOR transaction that will fund your Proxy Address.
+Sometimes you want to inspect or be aware of the Proxy Address' funds and fuel, maybe to automate filling those up in your business logic. The Proxy Info includes the address of the proxy address, and the balance and fuel of that proxy address.
+
+Example payload:
+``` json
+{
+    "tag": "GetProxyInfo",
+    "contents": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease"
+}
+```
+
+Example response:
+``` json
+{
+    "tag": "ProxyAddressInfo",
+    "contents": {
+        "proxyInfo_address": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
+        "proxyInfo_proxyAddress": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
+        "proxyInfo_fuel": 50000000,
+        "proxyInfo_balance": 50000000
+    }
+}
+```
+
+#### Funding Proxy Addresses | Funds & Fuel
+To participate in a Hydra Pay managed Head you need to transfer funds from your address to your Proxy Address. You must transfer both regular Ada and a specially tagged Fuel transaction yourself.
+
+For your convenience Hydra Pay provides endpoints which return draft transactions for both types of funds. However, you yourself must sign and submit these transactions with the signing key for your address.
+
+To get a CIP-30 compatible CBOR transaction that will fund your Proxy Address:
 
 Example Payload:
 ``` json
 {
     "contents": [
         "Funds",
-        "",
+        "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
         100000000
     ],
     "tag": "GetAddTx"
@@ -336,16 +450,16 @@ Example Payload:
 Example Response:
 ``` json
 {
+    "tag": "FundsTx",
     "contents": {
-        "type": "Unwitnessed Tx BabbageEra",
         "cborHex": "Ledger Cddl Format",
+        "type": "Unwitnessed Tx BabbageEra",
         "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
-    },
-    "tag": "FundsTx"
+    }
 }
 ```
 
-#### Add Fuel
+#### Adding Fuel to a Proxy Addresses | Funds & Fuel
 
 Get a CIP-30 compatible CBOR transaction that will create a Fuel UTXO at your Proxy Address.
 
@@ -354,29 +468,28 @@ Example Payload:
 {
     "contents": [
         "Fuel",
-        "",
+        "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
         100000000
     ],
     "tag": "GetAddTx"
 }
 ```
 
-
-Example Response:
+Example response:
 ``` json
 {
+    "tag": "FundsTx",
     "contents": {
-        "type": "Unwitnessed Tx BabbageEra",
         "cborHex": "Ledger Cddl Format",
+        "type": "Unwitnessed Tx BabbageEra",
         "description": "84a3008182582005bbe2c33e4bd787a8778b63bfbf007fae7b47b8153e75586df0ab59936d6c3c000182a300581d60e04a63ce5112f1b75c66a13375daf937e5ed9177caa8e9536392119f011a002dc6c00282005820a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3a200581d60d31a9209c0da931b7e72f45bc612dc85fae49249619f5f80639d2f50011b0000000253db8f8b021a00028db5a0f5f6"
-    },
-    "tag": "FundsTx"
+    }
 }
 ```
 
-#### Send funds on Head
+#### Transaction in a Hydra Head
 
-Send funds from your Proxy Address to another participant identified by their L1 Address.
+Once a Head is Open (all participants have commited UTxOs), you are free to move funds around within the head by creating transactions. 
 
 Example Payload:
 ``` json
@@ -385,7 +498,7 @@ Example Payload:
         "",
         {
             "headSubmitTx_name": "test",
-            "headSubmitTx_toAddr": "",
+            "headSubmitTx_toAddr": "addr_test1thisaddressisobviouslyinvaliddonotusethisaddressplease",
             "amount": 3000000
         }
     ],
@@ -393,9 +506,17 @@ Example Payload:
 }
 ```
 
-#### Close
+``` json
+{
+    "tag": "TxConfirmed",
+    "contents": 1.0e-3
+}
+```
+The contents are an amount in seconds that it took to complete the transaction (full roundtrip).
 
-Close the head.
+#### Closing a Head
+
+After you have done all the transactions you needed to in the Hydra Head, you can close it and when Hydra Pay detects the Fanout period has occurred, it will Fanout your Head for you Automatically.
 
 Example Payload:
 ``` json
@@ -413,7 +534,7 @@ Example Response:
 ```
 
 
-#### Withdraw
+#### Withdraw from a Proxy Address
 
 Withdraw funds from your Proxy Address to your main address. Takes the
 Proxy Address and a boolean determining whether to withdraw fuel as well.
@@ -432,9 +553,11 @@ Example Payload:
 Example Response:
 ``` json
 {
-    "tag": "OperationSuccess"
+    "tag": "WithdrawSubmitted",
+    "contents": "e174c1033009de66ccc577743ae4542c9d5e6c8220acfcd55c1c4cf330b7ca04"
 }
 ```
+The contents are a txid you can track on a block explorer like cardanoscan.
 
 ## 🤔 FAQ
 
