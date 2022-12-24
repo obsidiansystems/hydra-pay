@@ -576,3 +576,7 @@ Once Hydra Pay is available, you will simply run either the provided docker cont
 ### Can I run plutus scripts on a Head using Hydra Pay?
 
 Not initially, we will be guaging the need/interest in this feature as Hydra Pay evolves and we get feedback from developers.
+
+## Contributing
+
+Contributions and issue reports are encouraged and appreciated! Refer to the [Contributing](CONTRIBUTING.md) guide for information about getting started.
