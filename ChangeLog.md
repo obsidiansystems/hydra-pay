@@ -2,7 +2,7 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
-##  Unreleased
+##  Version v0.1.0
 
 * Automated spin-up and shut down of Hydra Node networks
 * Proxy addresses to streamline fund managment and enforce security invariants
