@@ -56,9 +56,9 @@ let
     });
 
   hydra-pay-exe = pkgs.runCommandNoCC "hydra-pay" {} ''
-    mkdir -p $out
-    cp -r ${p.exe}/* $out/
-    mv $out/backend $out/hydra-pay
+    mkdir -p $out/bin
+    cp -r ${p.exe}/* $out/bin
+    mv $out/bin/backend $out/bin/hydra-pay
   '';
 
 in
