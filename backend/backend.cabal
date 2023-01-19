@@ -9,6 +9,7 @@ library
     buildable: False
   build-depends: base
                , common
+               , hydra-pay-types
                , frontend
                , obelisk-backend
                , obelisk-route
@@ -92,6 +93,7 @@ executable backend
   build-depends: base
                , backend
                , common
+               , hydra-pay-types
                , frontend
                , obelisk-backend
                , snap-server

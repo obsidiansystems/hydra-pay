@@ -35,6 +35,10 @@ let
       ios.bundleIdentifier = "systems.obsidian.obelisk.examples.minimal";
       ios.bundleName = "Obelisk Minimal Example";
 
+      packages = {
+        hydra-pay-types = ./types;
+      };
+
       overrides = foldExtensions [
         (self: super: {
           reflex-gadt-api = self.callCabal2nix "reflex-gadt-api" deps.reflex-gadt-api {};
