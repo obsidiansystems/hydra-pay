@@ -48,6 +48,7 @@ let
             librarySystemDepends = (drv.librarySystemDepends or []) ++ [
               cardano-node.cardano-node
               cardano-node.cardano-cli
+              cardano-node.cardano-submit-api
               hydra-poc.hsPkgs.hydra-node.components.exes.hydra-node
               hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools
               pkgs.jq

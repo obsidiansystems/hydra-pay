@@ -20,6 +20,7 @@ module Hydra.Devnet
   , generateKeys
   , generateKeysIn
   , cardanoNodePath
+  , cardanoSubmitApiPath
   , hydraNodePath
   , prepareDevnet
   , seedTestAddresses
@@ -146,6 +147,9 @@ cardanoCliPath = $(staticWhich "cardano-cli")
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
+
+cardanoSubmitApiPath :: FilePath
+cardanoSubmitApiPath = $(staticWhich "cardano-submit-api")
 
 jqPath :: FilePath
 jqPath = $(staticWhich "jq")

@@ -116,6 +116,7 @@ data State = State
 -- The Process of the node and the HydraSharedInfo for that node
 data CardanoNodeState = CardanoNodeState
   { cardanoNodeState_processHandles :: Maybe ProcessHandles
+  , cardanoNodeState_submitApiHandles :: Maybe ProcessHandles
   , cardanoNodeState_hydraSharedInfo :: HydraSharedInfo
   }
 
@@ -204,6 +205,7 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
         removePathForcibly nodeLogDir
         withLogging prepareDevnet
       handles <- lift $ createProcess cardanoNodeCreateProcess
+      submitHandles <- lift $ createProcess cardanoSubmitApiProcess
       lift $ threadDelay (seconds 3)
       hydraSharedInfo <- do
         scriptsTxId <- ExceptT $ withLogging $ publishReferenceScripts cardanoDevnetNodeInfo (_signingKey devnetFaucetKeys)
@@ -215,7 +217,7 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
           }
       liftIO $ writeProtocolParameters (_hydraCardanoNodeInfo hydraSharedInfo)
       _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
-      pure $ CardanoNodeState (Just handles) hydraSharedInfo
+      pure $ CardanoNodeState (Just handles) (Just submitHandles) hydraSharedInfo
 
   ConfiguredMode cardanoParams hydraParams -> do
     protocolParametersPath <- liftIO $ snd <$> getTempPath
@@ -225,7 +227,7 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
                              _nodeLedgerGenesis = Config._ledgerGenesis cardanoParams
                            }
     liftIO $ writeProtocolParameters cninf
-    pure $ Right $ CardanoNodeState Nothing $ HydraSharedInfo
+    pure $ Right $ CardanoNodeState Nothing Nothing $ HydraSharedInfo
          { _hydraScriptsTxId = Config._hydraScriptsTxId hydraParams,
            _hydraLedgerGenesis = Config._hydraLedgerGenesis hydraParams,
            _hydraLedgerProtocolParameters = Config._hydraLedgerProtocolParameters hydraParams,
@@ -279,8 +281,9 @@ websocketApiHandler state =
               pure . Aeson.encode $ Tagged t $ InvalidMessage $ T.pack err
 
 stopCardanoNode :: CardanoNodeState -> IO ()
-stopCardanoNode (CardanoNodeState handles _) =
+stopCardanoNode (CardanoNodeState handles submitHandles _) = do
   maybe (pure ()) cleanupProcess handles
+  maybe (pure ()) cleanupProcess submitHandles
 
 teardownDevnet :: CardanoNodeState -> IO ()
 teardownDevnet cnode = do
@@ -1012,6 +1015,20 @@ peerArgs ni =
   , "--cardano-verification-key"
   , getVerificationKeyFilePath $ _verificationKey . _cardanoKeys . _keys $ ni
   ]
+
+cardanoSubmitApiProcess :: CreateProcess
+cardanoSubmitApiProcess =
+  (proc cardanoSubmitApiPath
+    [ "--socket-path"
+    , "devnet/node.socket"
+    , "--port"
+    , "8090"
+    , "--config"
+    , "devnet/submit-api-config.yaml"
+    , "--testnet-magic"
+    , show devnetMagic
+    ]
+  )
 
 cardanoNodeCreateProcess :: CreateProcess
 cardanoNodeCreateProcess =
