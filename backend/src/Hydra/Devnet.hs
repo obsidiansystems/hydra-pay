@@ -106,6 +106,51 @@ addressesPath = "devnet/addresses"
 keysPath :: FilePath
 keysPath = "devnet/keys"
 
+-- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
+-- argument results in "my/keys/alice.cardano.{phrase,prv,vk,sk}" keys being
+-- written.
+generateCardanoKeys :: MonadIO m => String -> m (Either String KeyPair)
+generateCardanoKeys prefix = liftIO $ runExceptT $ do
+  -- Generate phrase
+  phrase <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoWalletPath [ "recovery-phrase"
+                            , "generate"
+                            ]
+    ) ""
+  -- Write phrase
+  liftIO $ writeFile (prefix <> ".cardano.phrase") phrase
+
+  -- Generate cardano-address extended key file from phrase
+  privateKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoWalletPath ["key", "from-recovery-phrase", "Shelley"]) phrase
+  paymentKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoWalletPath ["key", "child", "1852H/1815H/0H/0/0"]) privateKey
+  let
+    cardanoAddressFormatSigningKeyFile = prefix <> ".prv"
+    signingKeyFile = prefix <> ".cardano.sk"
+    verificationKeyFile = prefix <> ".cardano.vk"
+
+  -- Write out cardano-address extended key file to be consumed by cardano-cli conversion
+  liftIO $ writeFile cardanoAddressFormatSigningKeyFile paymentKey
+
+   -- Convert cardano-address extended signing key to shelley format
+  ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoCliPath [ "key"
+                           , "convert-cardano-address-key"
+                           , "--shelley-payment-key"
+                           , "--signing-key-file"
+                           , cardanoAddressFormatSigningKeyFile
+                           , "--out-file"
+                           , signingKeyFile]) privateKey
+  ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoCliPath [ "key"
+                         , "verification-key"
+                         , "--signing-key-file"
+                         , signingKeyFile
+                         , "--verification-key-file"
+                         , verificationKeyFile]) ""
+  pure $ KeyPair (SigningKey signingKeyFile) (VerificationKey verificationKeyFile)
+
 seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
 seedTestAddresses cninf faucetKeys amount = do
   exists <- liftIO $ doesFileExist addressesPath
@@ -117,7 +162,7 @@ seedTestAddresses cninf faucetKeys amount = do
       _ <- removePathForcibly keysPath
       createDirectory keysPath
     result <- for [1 .. amount] $ \n -> runExceptT $ do
-      keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/" <> "addr_" <> show n
+      keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/addr_" <> show n
       addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
       void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
       pure addr
@@ -141,6 +186,9 @@ getTestAddressKeys addr = do
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
+
+cardanoWalletPath :: FilePath
+cardanoWalletPath = $(staticWhich "cardano-wallet")
 
 cardanoCliPath :: FilePath
 cardanoCliPath = $(staticWhich "cardano-cli")
@@ -191,26 +239,6 @@ data HydraKeyInfo = HydraKeyInfo
   }
   deriving (Show, Read)
 
--- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
--- argument results in "my/keys/alice.cardano.{vk,sk}" keys being
--- written.
-generateCardanoKeys :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => String -> m (Either String KeyPair)
-generateCardanoKeys path = do
-  (exitCode, output, stderr) <- liftIO $
-    readCreateProcessWithExitCode
-    (proc cardanoCliPath [ "address"
-                         , "key-gen"
-                         , "--verification-key-file"
-                         , [i|#{path}.cardano.vk|]
-                         , "--signing-key-file"
-                         , [i|#{path}.cardano.sk|]
-                         ])
-    ""
-  when (not . null $ output) $ logWarning $ pretty output
-  case exitCode of
-    ExitSuccess -> do
-      pure $ Right $ mkKeyPair [i|#{path}.cardano.sk|] [i|#{path}.cardano.vk|]
-    _ -> pure $ Left stderr
 -- | Generate Hydra keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.hydra.{vk,sk}" keys being
 -- written.

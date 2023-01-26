@@ -6,6 +6,7 @@ This project's release branch is `master`. This log is written from the perspect
 
 * Moved nix executables to $out/bin to meet nix best practices for automated build input discovery
 * Run cardano-submit-api when running in devnet mode for easier wallet integration and testing
+* Generate mnemonics and cardano-address private keys along with signing and verification keys for devnet
 
 ##  Version v0.1.0
 

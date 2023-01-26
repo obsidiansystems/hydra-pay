@@ -223,6 +223,7 @@ Foundational:
 - [x] Choice of network: Devnet, Preview
 - [x] Default Hydra Node configuration
 - [x] `cardano-submit-api` on custom devnet
+- [x] Mnemonics for wallet testing
 
 ## 🗝 API
 
