@@ -131,6 +131,8 @@ When Hydra Pay launches, and you haven't configured it to utilize a cardano node
 
 These are made readily available to you via the API and the within the Live Docs to get your footing and start using and interacting with Hydra Pay.
 
+In managed devnet mode [`cardano-submit-api`](https://github.com/input-output-hk/cardano-node/tree/master/cardano-submit-api) is running at port 8090 making it easy to connect to various wallets. 
+
 ### Running on Preview
 
 You can configure Hydra Pay to use an existing node instead of creating a devnet node, and this allows you to interact with other cardano environments like Preview.
@@ -220,6 +222,7 @@ Foundational:
 - [x] TTL on add funds and fuel pre-built transactions
 - [x] Choice of network: Devnet, Preview
 - [x] Default Hydra Node configuration
+- [x] `cardano-submit-api` on custom devnet
 
 ## 🗝 API
 

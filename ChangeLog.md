@@ -2,6 +2,11 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
+## Unreleased
+
+* Moved nix executables to $out/bin to meet nix best practices for automated build input discovery
+* Run cardano-submit-api when running in devnet mode for easier wallet integration and testing
+
 ##  Version v0.1.0
 
 * Automated spin-up and shut down of Hydra Node networks
