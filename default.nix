@@ -21,6 +21,7 @@ let
   hydra-poc = import deps.hydra-poc {};
   cardano-node = import deps.cardano-node {};
   cardano-wallet = import deps.cardano-wallet {};
+  cardano-addresses = import deps.cardano-addresses;
 
   pkgs = obelisk.nixpkgs;
   livedoc-devnet-script = pkgs.runCommand "livedoc-devnet-script" { } ''
@@ -50,6 +51,7 @@ let
               cardano-node.cardano-node
               cardano-node.cardano-cli
               cardano-node.cardano-submit-api
+              cardano-addresses.default.package.components.exes.cardano-address
               cardano-wallet.cardano-wallet
               hydra-poc.hsPkgs.hydra-node.components.exes.hydra-node
               hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools

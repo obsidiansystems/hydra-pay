@@ -106,10 +106,28 @@ addressesPath = "devnet/addresses"
 keysPath :: FilePath
 keysPath = "devnet/keys"
 
+{-
+Turn keyphrase into a ''root.xsk'
+cat addr_1.cardano.phrase | cardano-address key from-recovery-phrase Shelley > root.xsk
+
+Generate a public stake key out of that root
+cardano-address key child 1852H/1815H/0H/2/0 < root.xsk | cardano-address key public --with-chain-code > stake.xvk
+
+Generate a payment key
+cardano-address key child 1852H/1815H/0H/0/0 < root.xsk | cardano-address key public --with-chain-code > addr.xvk
+
+Generate a payment address
+cardano-address address payment --network-tag testnet < addr.xvk > payment.addr
+
+Extended Payment Address
+cardano-address address delegation $(cat stake.xvk) < payment.addr > base.addr
+-}
+
+
 -- | Generate Cardano keys. Calling with an e.g. "my/keys/alice"
 -- argument results in "my/keys/alice.cardano.{phrase,prv,vk,sk}" keys being
 -- written.
-generateCardanoKeys :: MonadIO m => String -> m (Either String KeyPair)
+generateCardanoKeys :: MonadIO m => String -> m (Either String (KeyPair, Address))
 generateCardanoKeys prefix = liftIO $ runExceptT $ do
   -- Generate phrase
   phrase <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
@@ -118,20 +136,43 @@ generateCardanoKeys prefix = liftIO $ runExceptT $ do
                             ]
     ) ""
   -- Write phrase
-  liftIO $ writeFile (prefix <> ".cardano.phrase") phrase
+  liftIO $ writeFile (prefix <> ".phrase") phrase
 
   -- Generate cardano-address extended key file from phrase
   privateKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
     (proc cardanoWalletPath ["key", "from-recovery-phrase", "Shelley"]) phrase
-  paymentKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+  paymentVerificationKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
     (proc cardanoWalletPath ["key", "child", "1852H/1815H/0H/0/0"]) privateKey
   let
     cardanoAddressFormatSigningKeyFile = prefix <> ".prv"
-    signingKeyFile = prefix <> ".cardano.sk"
-    verificationKeyFile = prefix <> ".cardano.vk"
+    signingKeyFile = prefix <> ".sk"
+    verificationKeyFile = prefix <> ".vk"
+    extendedPaymentAddressFile = prefix <> ".addr"
 
+  -- Generate root extended private key
+  extendedPrivateKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["key", "from-recovery-phrase", "Shelley"]) phrase
+
+  childStake <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["key", "child", "1852H/1815H/0H/2/0"]) extendedPrivateKey
+  childPayment <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["key", "child", "1852H/1815H/0H/0/0"]) extendedPrivateKey
+
+  stakeKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["key", "public", "--with-chain-code"]) childStake
+  paymentKey <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["key", "public", "--with-chain-code"]) childPayment
+
+  paymentAddress <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["address", "payment", "--network-tag", "testnet"]) paymentKey
+
+  extendedPaymentAddress <- ExceptT $ processAdapter $ readCreateProcessWithExitCode
+    (proc cardanoAddressPath ["address", "delegation", stakeKey]) paymentAddress
+
+  -- Write out the extended payment address
+  liftIO $ writeFile extendedPaymentAddressFile extendedPaymentAddress
   -- Write out cardano-address extended key file to be consumed by cardano-cli conversion
-  liftIO $ writeFile cardanoAddressFormatSigningKeyFile paymentKey
+  liftIO $ writeFile cardanoAddressFormatSigningKeyFile paymentVerificationKey
 
    -- Convert cardano-address extended signing key to shelley format
   ExceptT $ processAdapter $ readCreateProcessWithExitCode
@@ -149,7 +190,7 @@ generateCardanoKeys prefix = liftIO $ runExceptT $ do
                          , signingKeyFile
                          , "--verification-key-file"
                          , verificationKeyFile]) ""
-  pure $ KeyPair (SigningKey signingKeyFile) (VerificationKey verificationKeyFile)
+  pure $ (KeyPair (SigningKey signingKeyFile) (VerificationKey verificationKeyFile), UnsafeToAddress $ T.pack extendedPaymentAddress)
 
 seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
 seedTestAddresses cninf faucetKeys amount = do
@@ -162,8 +203,8 @@ seedTestAddresses cninf faucetKeys amount = do
       _ <- removePathForcibly keysPath
       createDirectory keysPath
     result <- for [1 .. amount] $ \n -> runExceptT $ do
-      keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/addr_" <> show n
-      addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
+      (keypair, addr) <- ExceptT $ generateCardanoKeys $ keysPath <> "/addr_" <> show n <> ".cardano"
+      --addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
       void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
       pure addr
     case sequenceA result of
@@ -186,6 +227,9 @@ getTestAddressKeys addr = do
 
 cardanoNodePath :: FilePath
 cardanoNodePath = $(staticWhich "cardano-node")
+
+cardanoAddressPath :: FilePath
+cardanoAddressPath = $(staticWhich "cardano-address")
 
 cardanoWalletPath :: FilePath
 cardanoWalletPath = $(staticWhich "cardano-wallet")
@@ -210,11 +254,11 @@ type SignedTx = FilePath
 generateKeys :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => m (Either String HydraKeyInfo)
 generateKeys = do
   basePath <- liftIO getTempPath'
-  runExceptT $ HydraKeyInfo <$> (ExceptT $ generateCardanoKeys basePath) <*> (ExceptT $ generateHydraKeys basePath)
+  runExceptT $ HydraKeyInfo <$> (ExceptT $ (fmap . fmap) fst $ generateCardanoKeys basePath) <*> (ExceptT $ generateHydraKeys basePath)
 
 generateKeysIn :: (MonadLog (WithSeverity (Doc ann)) m, MonadIO m) => FilePath -> m (Either String HydraKeyInfo)
 generateKeysIn fp = runExceptT $
-  HydraKeyInfo <$> (ExceptT $ generateCardanoKeys fp) <*> (ExceptT $ generateHydraKeys fp)
+  HydraKeyInfo <$> (ExceptT $ (fmap . fmap) fst $ generateCardanoKeys fp) <*> (ExceptT $ generateHydraKeys fp)
 
 newtype SigningKey = SigningKey
   { getSigningKeyFilePath :: FilePath }
