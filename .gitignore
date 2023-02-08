@@ -22,3 +22,4 @@ static.out
 /config/backend/api-key
 /keystore/
 /node-logs/
+/config/backend/api-keys

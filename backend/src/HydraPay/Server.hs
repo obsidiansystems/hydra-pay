@@ -22,6 +22,7 @@ import qualified Network.WebSockets as WS
 
 import Data.Int
 
+import Data.Time
 import Prelude hiding ((.))
 import Control.Category ((.))
 import System.Process
@@ -86,6 +87,8 @@ import Hydra.Snapshot as Snapshot
 import qualified HydraPay.Config as Config
 import HydraPay.Config (HydraPayMode(..), HydraPayConfig(_hydraPayMode))
 
+type ApiKey = T.Text
+
 -- | The location where we store cardano and hydra keys
 getKeyPath :: IO FilePath
 getKeyPath = do
@@ -93,6 +96,14 @@ getKeyPath = do
   pure path
   where
     path = "keys"
+
+data Instance = Instance
+  { instance_apiKey :: ApiKey
+  , instance_connections :: [WS.Connection]
+  , instance_heads :: Map HeadName Head
+  , instance_networks :: Map HeadName Network
+  , instance_subscribers :: Map HeadName [WS.Connection]
+  }
 
 -- | State we need to run/manage Heads
 data State = State
@@ -109,8 +120,13 @@ data State = State
 
   , _state_getPorts :: Int -> IO (Maybe [Int])
   , _state_freePorts :: [Int] -> IO ()
-  , _state_apiKey :: BS.ByteString
+  , _state_apiKeys :: [BS.ByteString]
   , _state_config :: HydraPayConfig
+
+  , _state_connectedClients :: MVar [(WS.Connection, ApiKey)]
+  , _state_instances :: MVar (Map ApiKey Instance)
+  , _state_instanceAddresses :: MVar (Map ApiKey [(Address, KeyPair)])
+  , _state_nextClearTime :: MVar UTCTime
   }
 
 -- The Process of the node and the HydraSharedInfo for that node
@@ -153,23 +169,29 @@ runningDevnet state =
     ManagedDevnetMode -> True
     _ -> False
 
+apiKeyConfigLocation :: T.Text
+apiKeyConfigLocation = "backend/api-keys"
+
 runHydraPay :: HydraPayConfig -> (State -> IO a) -> IO a
 runHydraPay cfg action = do
   configs <- ConfigIO.getConfigs
   result <- runConfigsT configs $ runMaybeT $
-    MaybeT $ getConfig "backend/api-key"
+    MaybeT $ getConfig apiKeyConfigLocation
 
-  key <- case result of
+  keys <- case (fmap (fmap LBS.toStrict . LBS.lines . LBS.fromStrict) result) of
     Nothing -> do
       -- Generate a key if we don't have one
-      withLogging $ logInfo "No API Key found, generating..."
-      newKey <- Base64.encode <$> getRandomBytes 32
+      withLogging $ logInfo "No API Keys found, generating..."
       createDirectoryIfMissing True "config/backend"
-      BS.writeFile "config/backend/api-key" newKey
-      withLogging $ logInfo "API Key is available in config/backend/api-key"
-      pure newKey
-    Just key ->
-      pure key
+      newKeys <- for [0 .. 100] $ \_ -> do
+        Base64.encode <$> getRandomBytes 32
+      let
+          configFullPath = ("config/" <> T.unpack apiKeyConfigLocation)
+      BS.writeFile configFullPath $ LBS.toStrict $ LBS.unlines $ fmap LBS.fromStrict newKeys
+      withLogging $ logInfo . pretty $ "API Keys are available in " <> configFullPath
+      pure newKeys
+    Just keys ->
+      pure keys
 
   addrs <- liftIO $ newMVar mempty
   subs <- liftIO $ newMVar mempty
@@ -184,14 +206,66 @@ runHydraPay cfg action = do
            then (ps, Nothing)
            else (ys, Just xs)
   let freePorts ps = void $ modifyMVar_ ports (pure . (ps ++))
+
   cardanNodeResult <- withLogging (makeCardanoNodeStateAndRestartDemoDevnet (_hydraPayMode cfg))
+
+  let
+    mkEmptyInstance key = Instance key [] mempty mempty mempty
+    initialInstances = Map.fromList $ fmap ((\k -> (k, mkEmptyInstance k)) . T.decodeUtf8) keys
+
+  instances <- newMVar initialInstances
+  instanceAddresses <- newMVar mempty
+  time <- getCurrentTime
+
+  let
+    devnetLifetime = 120
+
+  timeVar <- newMVar $ addUTCTime (fromIntegral devnetLifetime) time
+  clients <- newMVar mempty
+
   case cardanNodeResult of
     Left err -> do
       withLogging $ logError $ pretty err
       error err
     Right nodeState -> do
       cardanoNodeState <- newMVar nodeState
-      finally (action $ State cardanoNodeState addrs heads networks subs path getPorts freePorts key cfg) $ do
+      let
+        state = State cardanoNodeState addrs heads networks subs path getPorts freePorts keys cfg clients instances instanceAddresses timeVar
+        fullAction = do
+          forkIO $ forever $ do
+            threadDelay $ seconds devnetLifetime
+            instances <- liftIO $ readMVar (_state_instances state)
+            for instances $ \is -> do
+              -- NOTE(skylar): Remember terminating the head removes the network!
+              for_ (Map.keys $ instance_heads is) $ terminateHead state $ instance_apiKey is
+
+            -- Create a new devnet and update the MVar
+            liftIO $ modifyMVar (_state_cardanoNodeState state) $ \oldCns -> do
+              teardownDevnet oldCns
+              result <- withLogging (makeCardanoNodeStateAndRestartDemoDevnet (getHydraPayMode state))
+              case result of
+                Right newstate -> pure (newstate, DevnetRestarted)
+                Left err -> pure (oldCns, ApiError $ "Failed to restart devnet: " <> T.pack err)
+
+            modifyMVar_ (_state_instances state) $ pure . (const initialInstances)
+
+            -- This purges old connections
+            broadcastToAll state DevnetRestarted
+
+            -- Reseed addresses
+            clients <- readMVar (_state_connectedClients state)
+            for_ (fmap snd clients) $ \client -> do
+              noAddresses <- withMVar (_state_instanceAddresses state) $ pure . maybe True null . Map.lookup client
+              when noAddresses $ do--void $ forkIO $ do
+                nodeInfo <- withMVar (_state_cardanoNodeState state) (pure .  _hydraCardanoNodeInfo . cardanoNodeState_hydraSharedInfo)
+                addresses <- withLogging $ seedTestAddresses nodeInfo devnetFaucetKeys 4
+                modifyMVar_ (_state_instanceAddresses state) $ pure . Map.insert client addresses
+
+            nextTime <- getCurrentTime
+            modifyMVar_ timeVar $ pure . const (addUTCTime (fromIntegral devnetLifetime) nextTime)
+
+          action state
+      finally (action state) $ do
         node <- readMVar cardanoNodeState
         stopCardanoNode node
 
@@ -214,7 +288,7 @@ makeCardanoNodeStateAndRestartDemoDevnet = \case
             _hydraCardanoNodeInfo = cardanoDevnetNodeInfo
           }
       liftIO $ writeProtocolParameters (_hydraCardanoNodeInfo hydraSharedInfo)
-      _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys 10
+--      _ <- lift $ withLogging $ seedTestAddresses (_hydraCardanoNodeInfo hydraSharedInfo) devnetFaucetKeys (4 * 100)
       pure $ CardanoNodeState (Just handles) hydraSharedInfo
 
   ConfiguredMode cardanoParams hydraParams -> do
@@ -242,9 +316,9 @@ getHydraPayMode :: State -> HydraPayMode
 getHydraPayMode = Config._hydraPayMode . _state_config
 
 websocketApiHandler :: MonadSnap m => State -> m ()
-websocketApiHandler state =
+websocketApiHandler state = do
   runWebSocketsSnap $ \pendingConn -> do
-  authVar <- newMVar False
+  authVar <- newMVar Nothing
   conn <- WS.acceptRequest pendingConn
   WS.withPingThread conn 30 (pure ()) $ do
     WS.sendTextData conn . Aeson.encode $ ServerHello versionStr
@@ -253,28 +327,37 @@ websocketApiHandler state =
       -- to show them why, so we decode in two steps so we can tag our response with the error message
       -- ensuring it gets routed to the correct place!
       decodeResult :: Either String (Tagged Value) <- Aeson.eitherDecode <$> WS.receiveData conn
-      isAuthenticated <- readMVar authVar
+      who <- readMVar authVar
       WS.sendTextData conn =<< case decodeResult of
         Left err -> pure . Aeson.encode $ InvalidMessage $ T.pack err
         Right (Tagged t val) ->
-          case (isAuthenticated, Aeson.parseEither parseJSON val) of
+          case (who, Aeson.parseEither parseJSON val) of
             -- Handle authentication
-            (False, Right (Authenticate token)) -> do
-              let apiKey = _state_apiKey state
+            (_, Right (Authenticate token)) -> do
+              let apiKeys = _state_apiKeys state
                   sentKey = T.encodeUtf8 token
-                  authResult = apiKey == sentKey
-              modifyMVar_ authVar (pure . const authResult)
+                  authResult = any (sentKey ==) apiKeys
+              modifyMVar_ authVar (\_ -> pure $ bool Nothing (Just token) authResult)
+              modifyMVar_ (_state_connectedClients state) $ pure . ((conn, token) :)
+              -- NOTE(skylar): Thread to populate funded addresses for each instance
+              noAddresses <- withMVar (_state_instanceAddresses state) $ pure . maybe True null . Map.lookup token
+              when noAddresses $ do--void $ forkIO $ do
+                nodeInfo <- withMVar (_state_cardanoNodeState state) (pure .  _hydraCardanoNodeInfo . cardanoNodeState_hydraSharedInfo)
+                addresses <- withLogging $ seedTestAddresses nodeInfo devnetFaucetKeys 4
+                -- for_ addresses $ \(UnsafeToAddress a) -> putStrLn $ T.unpack a
+                modifyMVar_ (_state_instanceAddresses state) $ pure . Map.insert token addresses
               pure . Aeson.encode . Tagged t $ AuthResult authResult
+            -- TODO(skylar): Re-introduce this
             -- Allow GetIsManagedDevnet even when not authenticated to allow the
             -- live docs to make this distinction upon loading.
-            (_, Right GetIsManagedDevnet) ->
-              fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state (Tagged t GetIsManagedDevnet)
+--            (_, Right GetIsManagedDevnet) ->
+--              fmap Aeson.encode $ withLogging $ handleTaggedMessage conn apiKey state (Tagged t GetIsManagedDevnet)
             -- Turn away requests that aren't authenticated
-            (False, Right _) ->
+            (Nothing, Right _) ->
               pure . Aeson.encode . Tagged t $ NotAuthenticated
             -- When authenticated just process as normal
-            (True, Right clientMsg) ->
-              fmap Aeson.encode $ withLogging $ handleTaggedMessage conn state $ Tagged t clientMsg
+            (Just apiKey, Right clientMsg) ->
+              fmap Aeson.encode $ withLogging $ handleTaggedMessage conn apiKey state $ Tagged t clientMsg
             (_, Left err) ->
               pure . Aeson.encode $ Tagged t $ InvalidMessage $ T.pack err
 
@@ -288,22 +371,22 @@ teardownDevnet cnode = do
   exists <- doesPathExist "devnet"
   when exists $ removePathForcibly "devnet"
 
-headBalance :: (MonadIO m) => State -> HeadName -> Address -> m (Either HydraPayError Lovelace)
-headBalance state name addr =
-  withNode state name addr $ \node proxyAddr -> do
+headBalance :: (MonadIO m) => State -> ApiKey -> HeadName -> Address -> m (Either HydraPayError Lovelace)
+headBalance state key name addr =
+  withNode state key name addr $ \node proxyAddr -> do
   utxos <- getNodeUtxos node proxyAddr
   let
     txInAmounts = Map.mapMaybe (Map.lookup "lovelace" . HT.value) utxos
     fullAmount = toInteger $ sum txInAmounts
   pure (Right fullAmount)
 
-headAllBalances :: (MonadIO m) => State -> HeadName -> m (Either HydraPayError (Map Address Lovelace))
-headAllBalances state headname = do
-  mHead <- lookupHead state headname
+headAllBalances :: (MonadIO m) => State -> ApiKey -> HeadName -> m (Either HydraPayError (Map Address Lovelace))
+headAllBalances state key headname = do
+  mHead <- lookupHead state key headname
   case mHead of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just (Head _ participants _ _) ->
-      withAnyNode state headname $ \node -> do
+      withAnyNode state key headname $ \node -> do
       liftIO $ _node_send_msg node GetUTxO
       c <- liftIO $ _node_get_listen_chan node
       untilJust $ do
@@ -422,20 +505,22 @@ buildAddTx tType state fromAddr lovelaceAmount = runExceptT $ do
 withNetwork ::
   MonadIO m =>
   State ->
+  ApiKey ->
   HeadName ->
   (Network -> m (Either HydraPayError b)) ->
   m (Either HydraPayError b)
-withNetwork state name f = maybe (pure $ Left NetworkIsn'tRunning) f =<< getNetwork state name
+withNetwork state key name f = maybe (pure $ Left NetworkIsn'tRunning) f =<< getNetwork state key name
 
 withNode ::
   MonadIO m =>
   State ->
+  ApiKey ->
   HeadName ->
   Address ->
   (Node -> Address -> m (Either HydraPayError b)) ->
   m (Either HydraPayError b)
-withNode state name addr f =
-  withNetwork state name $ \network ->
+withNode state key name addr f =
+  withNetwork state key name $ \network ->
   runExceptT $ do
   (proxyAddr, _) <- ExceptT $ mapLeft ProcessError <$> addOrGetKeyInfo state addr
   case Map.lookup proxyAddr $ _network_nodes network of
@@ -445,21 +530,22 @@ withNode state name addr f =
 withAnyNode ::
   MonadIO m =>
   State ->
+  ApiKey ->
   HeadName ->
   (Node -> m (Either HydraPayError b)) ->
   m (Either HydraPayError b)
-withAnyNode state name f =
-  withNetwork state name $ \network -> do
+withAnyNode state key name f =
+  withNetwork state key name $ \network -> do
   case headMay $ Map.elems (_network_nodes network) of
     Nothing -> pure $ Left NotAParticipant
     Just node -> f node
 
-initHead :: MonadIO m => State -> HeadInit -> m (Either T.Text ())
-initHead state (HeadInit name con) = do
+initHead :: MonadIO m => State -> ApiKey -> HeadInit -> m (Either T.Text ())
+initHead state key (HeadInit name con) = do
   result <- sendToHeadAndWaitForOutput (Init $ fromIntegral con) (\case
     ReadyToCommit {} -> True
     PostTxOnChainFailed {} -> True
-    _ -> False) state name
+    _ -> False) state key name
 
   case result of
     Right ReadyToCommit {} -> pure $ Right ()
@@ -493,14 +579,14 @@ withdraw state (WithdrawRequest addr maybeAmount takeFuel) = runExceptT $ do
   ExceptT $ fmap (mapLeft ProcessError) $
     liftIO $ transferAmount cninf signingKey txInAmounts addr True maybeAmount
 
-fanoutHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
+fanoutHead :: MonadIO m => State -> ApiKey -> HeadName -> m (Either HydraPayError HeadStatus)
 fanoutHead = sendToHeadAndWaitFor Fanout $ \case
   HeadIsFinalized {} -> True
   _ -> False
 
-closeHead :: MonadIO m => State -> HeadName -> m (Either HydraPayError ())
-closeHead state name = runExceptT $ do
-  HeadStatus _ _ status _ <- ExceptT $ getHeadStatus state name
+closeHead :: MonadIO m => State -> ApiKey -> HeadName -> m (Either HydraPayError ())
+closeHead state key name = runExceptT $ do
+  HeadStatus _ _ status _ <- ExceptT $ getHeadStatus state key name
   let
     getInput = \case
       Status_Init -> pure Abort
@@ -515,7 +601,7 @@ closeHead state name = runExceptT $ do
       Status_Aborted -> throwError $ ProcessError "Head is aborted, you can just remove it."
 
   action <- getInput status
-  output <- ExceptT $ sendToHeadAndWaitForOutput action waitingFor state name
+  output <- ExceptT $ sendToHeadAndWaitForOutput action waitingFor state key name
   case output of
     CommandFailed {} -> throwError $ ProcessError "Command failed, please check Head Status"
     HeadIsClosed {} -> pure ()
@@ -528,9 +614,9 @@ closeHead state name = runExceptT $ do
       CommandFailed {} -> True
       _ -> False
 
-sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError HeadStatus)
-sendToHeadAndWaitFor ci fso state headName = do
-  mNetwork <- getNetwork state headName
+sendToHeadAndWaitFor :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> ApiKey -> HeadName -> m (Either HydraPayError HeadStatus)
+sendToHeadAndWaitFor ci fso state key headName = do
+  mNetwork <- getNetwork state key headName
   case mNetwork of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just network -> do
@@ -545,11 +631,11 @@ sendToHeadAndWaitFor ci fso state headName = do
             output <- atomically $ readTChan channel
             if fso output then pure () else waitForCloseHandler
         waitForCloseHandler
-      getHeadStatus state headName
+      getHeadStatus state key headName
 
-sendToHeadAndWaitForOutput :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> HeadName -> m (Either HydraPayError (ServerOutput Value))
-sendToHeadAndWaitForOutput ci fso state headName = do
-  mNetwork <- getNetwork state headName
+sendToHeadAndWaitForOutput :: MonadIO m => ClientInput -> (ServerOutput Value -> Bool) -> State -> ApiKey -> HeadName -> m (Either HydraPayError (ServerOutput Value))
+sendToHeadAndWaitForOutput ci fso state key headName = do
+  mNetwork <- getNetwork state key headName
   case mNetwork of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just network -> do
@@ -565,9 +651,9 @@ sendToHeadAndWaitForOutput ci fso state headName = do
             if fso output then pure $ Right output else waitForCloseHandler
         waitForCloseHandler
 
-commitToHead :: MonadIO m => State -> HeadCommit -> m (Either HydraPayError ())
-commitToHead state (HeadCommit name addr lovelaceAmount) =
-  withNode state name addr $ \node proxyAddr -> do
+commitToHead :: MonadIO m => State -> ApiKey -> HeadCommit -> m (Either HydraPayError ())
+commitToHead state key (HeadCommit name addr lovelaceAmount) =
+  withNode state key name addr $ \node proxyAddr -> do
 
   let
     rightLovelaceAmount (TxInInfo _ _ val) =
@@ -603,19 +689,22 @@ commitToHead state (HeadCommit name addr lovelaceAmount) =
             waitForCloseHandler
 
 -- | Create a head by starting a Hydra network.
-createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> HeadCreate -> m (Either HydraPayError Head)
-createHead state (HeadCreate name participants) = runExceptT $ do
+createHead :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> ApiKey -> HeadCreate -> m (Either HydraPayError Head)
+createHead state key (HeadCreate name participants) = runExceptT $ do
   when (null participants) $ throwError NotEnoughParticipants
-  headExists <- isJust <$> lookupHead state name
+  headExists <- isJust <$> lookupHead state key name
   when headExists $ throwError $ HeadExists name
   statusBTChan <- liftIO newBroadcastTChanIO
   let potentialHydraHead = Head name (Set.fromList participants) Status_Pending statusBTChan
-  startResult <- startNetwork state potentialHydraHead
+  startResult <- startNetwork state key potentialHydraHead
   case startResult of
     Right network -> do
       logInfo $ pretty $ "Network started for head \"" <> name <> "\""
-      liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.insert name potentialHydraHead
-      liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
+      liftIO $ modifyMVar_ (_state_instances state) $ \iss -> do
+        pure $ Map.adjust (\is -> is { instance_heads = Map.insert name potentialHydraHead $ instance_heads is
+                                     -- TODO(skylar): This should already be added
+                                     --, instance_networks = Map.insert name network $ instance_networks is
+                                     } ) key iss
       pure potentialHydraHead
     Left err -> do
       lift $ logError $ pretty $ "Failed to start network for head \"" <> name <> "\": " <> T.pack err
@@ -641,9 +730,9 @@ getNodeUtxos node proxyAddr = do
       _ -> pure Nothing
 
 
-submitTxOnHead :: (MonadIO m) => State -> Address -> HeadSubmitTx -> m (Either HydraPayError Pico)
-submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) =
-  withNode state name addr $ \node proxyAddr -> runExceptT $ do
+submitTxOnHead :: (MonadIO m) => State -> ApiKey -> Address -> HeadSubmitTx -> m (Either HydraPayError Pico)
+submitTxOnHead state key addr (HeadSubmitTx name toAddr lovelaceAmount) =
+  withNode state key name addr $ \node proxyAddr -> runExceptT $ do
   c <- lift $ liftIO $ _node_get_listen_chan node
   senderUtxos :: Map TxIn TxInInfo <- lift $ getNodeUtxos node proxyAddr
   let signingKey = _signingKey . _cardanoKeys . _keys . _node_info $ node
@@ -674,18 +763,31 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) =
       _ -> pure Nothing
 
 -- | Send a Server Message to all subscribers of a particular Head
-broadcastToSubscribers :: MonadIO m => State -> HeadName -> ServerMsg -> m ()
-broadcastToSubscribers state hname msg = do
-  subsPerHead <- liftIO $ readMVar (_state_subscribers state)
+broadcastToSubscribers :: MonadIO m => State -> ApiKey -> HeadName -> ServerMsg -> m ()
+broadcastToSubscribers state key hname msg = do
+  subsPerHead <- liftIO $ withMVar (_state_instances state) $ pure . maybe mempty instance_subscribers . Map.lookup key
   case Map.lookup hname subsPerHead of
     Nothing -> pure ()
     Just subs -> liftIO $
       for_ subs $ \subConn ->
       WS.sendTextData subConn . Aeson.encode $ msg
 
-removeHead :: (MonadIO m) => State -> HeadName -> m (Either String ())
-removeHead state name = runExceptT $ do
-  status <- ExceptT $ fmap (mapLeft show) $ getHeadStatus state name
+-- | Broadcast to all connected clients
+broadcastToAll :: MonadIO m => State -> ServerMsg -> m ()
+broadcastToAll state msg = liftIO $ do
+  modifyMVar_ (_state_connectedClients state) $ \connected -> do
+    fmap catMaybes $ for connected $ \(conn, key) -> do
+      err  :: (Either SomeException ()) <- try $ WS.sendTextData conn . Aeson.encode $ msg
+      case err of
+        -- Something went wrong with this connection we should remove it
+        Left _ -> do
+          liftIO $ putStrLn "Failed to send to client"
+          pure $ Nothing
+        _ -> pure $ Just (conn, key)
+
+removeHead :: (MonadIO m) => State -> ApiKey -> HeadName -> m (Either String ())
+removeHead state key name = runExceptT $ do
+  status <- ExceptT $ fmap (mapLeft show) $ getHeadStatus state key name
   case headStatus_status status of
     Status_Init -> throwError "Head is Initialized, please Close the head before removing to avoid losing funds."
     Status_Committing -> throwError "Head is Committing, please Close the head before removing to avoid losing funds."
@@ -694,26 +796,32 @@ removeHead state name = runExceptT $ do
     Status_Fanout -> throwError "Head is waiting for fanout transaction to complete."
     -- Head is pending or finalized this is fine.
     _ -> do
-      lift $ terminateHead state name
-      liftIO $ modifyMVar_ (_state_heads state) $ pure . Map.delete name
+      lift $ terminateHead state key name
+      liftIO $ modifyMVar_ (_state_instances state) $ \iss -> do
+        pure $ Map.adjust (\inst -> inst { instance_heads = Map.delete name $ instance_heads inst }) key iss
       pure ()
 
-terminateHead :: (MonadIO m) => State -> HeadName -> m ()
-terminateHead state headName =
-  liftIO $ modifyMVar_ (_state_networks state) $ \ns ->
-    flip (maybe (pure ns)) (Map.lookup headName ns) $ \n -> do
-      terminateNetwork state n
-      pure (Map.delete headName ns)
+terminateHead :: (MonadIO m) => State -> ApiKey -> HeadName -> m ()
+terminateHead state key headName =
+  liftIO $ modifyMVar_ (_state_instances state) $ \is -> do
+    let
+      mNetwork :: Maybe Network = (Map.lookup headName . instance_networks <=< Map.lookup key) $ is
+    case mNetwork of
+      Just network -> do
+        terminateNetwork state key network
+        pure $ Map.adjust (\inst -> inst { instance_networks = Map.delete headName (instance_networks inst) }) key is
+      Nothing ->
+        pure is
 
-terminateNetwork :: MonadIO m => State -> Network -> m ()
-terminateNetwork state n = liftIO $ do
+terminateNetwork :: MonadIO m => State -> ApiKey -> Network -> m ()
+terminateNetwork state key n = liftIO $ do
   mapM_ (terminateProcess . _node_handle) . _network_nodes $ n
   _state_freePorts state . concatMap _node_ports . Map.elems . _network_nodes $ n
 
 -- | Lookup head via name
-lookupHead :: MonadIO m => State -> HeadName -> m (Maybe Head)
-lookupHead state name =
-  liftIO $ withMVar (_state_heads state) (pure . Map.lookup name)
+lookupHead :: MonadIO m => State -> ApiKey -> HeadName -> m (Maybe Head)
+lookupHead state key name = do
+  liftIO $ withMVar (_state_instances state) (pure . (Map.lookup name . instance_heads <=< Map.lookup key))
 
 -- NOTE(skylar): Idempotent
 -- | Generate a proxy address with keys,
@@ -738,19 +846,19 @@ addOrGetKeyInfo state addr = do
     where
       keystore = "keystore"
 
-getHeadStatus :: MonadIO m => State -> HeadName -> m (Either HydraPayError HeadStatus)
-getHeadStatus state name = liftIO $ do
-  mHead <- lookupHead state name
+getHeadStatus :: MonadIO m => State -> ApiKey -> HeadName -> m (Either HydraPayError HeadStatus)
+getHeadStatus state key name = liftIO $ do
+  mHead <- lookupHead state key name
   case mHead of
     Nothing -> pure $ Left HeadDoesn'tExist
     Just (Head hname participants status _) -> do
-      running <- isJust <$> getNetwork state hname
+      running <- isJust <$> getNetwork state key hname
 
       -- Balances only really exist/are relevant during the Open phase
       -- don't even query them otherwise
       balances <- case status of
         Status_Open ->
-          headAllBalances state name
+          headAllBalances state key name
         _ ->
           pure $ Right $ Map.fromList $ (,0) <$> Set.toList participants
 
@@ -759,9 +867,9 @@ getHeadStatus state name = liftIO $ do
 
 -- | Wait for a head to change to or past a state. Returns 'Nothing'
 -- if the head was not found, otherwise 'Just SomeStatus'.
-waitForHeadStatus :: (MonadIO m) => State -> HeadName -> Status -> m (Maybe Status)
-waitForHeadStatus state name status = runMaybeT $ do
-  hd <- MaybeT $ lookupHead state name
+waitForHeadStatus :: (MonadIO m) => State -> ApiKey -> HeadName -> Status -> m (Maybe Status)
+waitForHeadStatus state key name status = runMaybeT $ do
+  hd <- MaybeT $ lookupHead state key name
   c <- liftIO . atomically $ dupTChan $ _head_status_bchan hd
   if _head_status hd >= status
     then pure $ _head_status hd
@@ -772,9 +880,9 @@ waitForHeadStatus state name status = runMaybeT $ do
         else pure Nothing
 
 -- | Start a network for a given Head, trying to start a network that already exists is a no-op and you will just get the existing network
-startNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> Head -> m (Either String Network)
-startNetwork state (Head name participants _ statusBTChan) = do
-  mNetwork <- getNetwork state name
+startNetwork :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => State -> ApiKey -> Head -> m (Either String Network)
+startNetwork state key (Head name participants _ statusBTChan) = do
+  mNetwork <- getNetwork state key name
   case mNetwork of
     Just network -> pure $ Right network
     Nothing -> runExceptT $ do
@@ -828,17 +936,17 @@ startNetwork state (Head name participants _ statusBTChan) = do
                     _ -> (Nothing, Nothing)
               case handleMsg msg of
                 (Just status, mbalance) -> do
-                  liftIO $ modifyMVar_ (_state_heads state) $ \current -> do
-                    case _head_status <$> Map.lookup name current of
+                  liftIO $ modifyMVar_ (_state_instances state) $ \iss -> do
+                    case _head_status <$> (Map.lookup name . instance_heads <=< Map.lookup key) iss of
                       Just currentStatus ->
                         when (currentStatus /= status && status == Status_Fanout) $ void $ forkIO $ do
-                       _ <- fanoutHead state name
+                       _ <- fanoutHead state key name
                        pure ()
                       _ -> pure ()
                     atomically $ writeTChan statusBTChan status
-                    pure . Map.adjust (\h -> h { _head_status = status }) name $ current
+                    pure $ Map.adjust (\is -> is { instance_heads = Map.adjust (\h -> h { _head_status = status }) name $ instance_heads is }) key iss
 
-                  subsPerHead <- liftIO $ readMVar (_state_subscribers state)
+                  subsPerHead <- liftIO $ withMVar (_state_instances state) $ pure . maybe mempty instance_subscribers . Map.lookup key
                   case Map.lookup name subsPerHead of
                     Nothing -> pure ()
                     Just subs -> liftIO $
@@ -875,7 +983,7 @@ startNetwork state (Head name participants _ statusBTChan) = do
         pure result
 
       when nodeFailure $ do
-        lift $ terminateNetwork state network
+        lift $ terminateNetwork state key network
         throwError "Failed to start network, check Hydra Pay logs for more specific information"
 
       logInfo [i|---- Integrity sound waiting for #{numNodes} nodes to get ready |]
@@ -889,7 +997,8 @@ startNetwork state (Head name participants _ statusBTChan) = do
       countReadies 0
 
       -- Add the network to the running networks mvar
-      liftIO $ modifyMVar_ (_state_networks state) $ pure . Map.insert name network
+      liftIO $ modifyMVar_ (_state_instances state) $ \iss -> do
+        pure $ Map.adjust (\inst -> inst { instance_networks = Map.insert name network $ instance_networks inst }) key iss
       pure network
 
 -- | This takes the set participants in a Head and gets their proxy equivalents as actual addresses
@@ -900,9 +1009,9 @@ participantsToProxyMap state participants = runExceptT $
   ExceptT $ liftIO $ addOrGetKeyInfo state x
 
 -- | Lookup the network associated with a head name
-getNetwork :: MonadIO m => State -> HeadName -> m (Maybe Network)
-getNetwork state name =
-  liftIO $ withMVar (_state_networks state) (pure . Map.lookup name)
+getNetwork :: MonadIO m => State -> ApiKey -> HeadName -> m (Maybe Network)
+getNetwork state key name =
+  liftIO $ withMVar (_state_instances state) (pure . (Map.lookup name  . instance_networks <=< Map.lookup key))
 
 -- | Where the nodes log their output
 nodeLogDir :: FilePath
@@ -1064,44 +1173,48 @@ signAndSubmitTx cninfo sk tx =
             Left err -> pure $ Just err
         _ -> pure $ Just stderr
 
-handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
-handleTaggedMessage conn state (Tagged tid clientMsg) = do
-  serverMsg <- handleClientMessage conn state clientMsg
+handleTaggedMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> T.Text -> State -> Tagged ClientMsg -> m (Tagged ServerMsg)
+handleTaggedMessage conn apiKey state (Tagged tid clientMsg) = do
+  serverMsg <- handleClientMessage conn apiKey state clientMsg
   pure $ Tagged tid serverMsg
 
-handleClientMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> State -> ClientMsg -> m ServerMsg
-handleClientMessage conn state = \case
+handleClientMessage :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => WS.Connection -> T.Text -> State -> ClientMsg -> m ServerMsg
+handleClientMessage conn key state = \case
+  GetRestartTime -> do
+    t <- liftIO $ readMVar (_state_nextClearTime state)
+    pure $ RestartTime t
+
   Authenticate token -> do
-    let apiKey = _state_apiKey state
+    let apiKeys = _state_apiKeys state
         sentKey = T.encodeUtf8 token
 
-    pure $ AuthResult $ apiKey == sentKey
+    pure $ AuthResult $ any (sentKey ==) apiKeys
 
   GetHeadBalance headname addr -> do
-    result <- headBalance state headname addr
+    result <- headBalance state key headname addr
     pure $ case result of
       Left err -> ServerError err
       Right balance -> HeadBalance balance
 
   SubmitHeadTx addr hstx@(HeadSubmitTx hname _ _) -> do
-    result <- submitTxOnHead state addr hstx
+    result <- submitTxOnHead state key addr hstx
     case result of
       Left err -> pure $ ServerError err
       Right pico -> do
-        ebs <- headAllBalances state hname
+        ebs <- headAllBalances state key hname
         case ebs of
           Left _ ->
             logWarning $ "Failed to get Whole UTxO for head : " <> pretty hname <> " even though the a transaction successfully submitted..."
           Right bs ->
-            broadcastToSubscribers state hname $ BalanceChange hname bs
+            broadcastToSubscribers state key hname $ BalanceChange hname bs
         pure $ TxConfirmed pico
 
   GetL1Balance addr -> do
     L1Balance <$> l1Balance state addr False
 
   GetStats -> do
-    numHeads <- toInteger . Map.size <$> liftIO (readMVar (_state_heads state))
-    networks <- liftIO $ readMVar (_state_networks state)
+    numHeads <- toInteger . maybe 0 id . fmap (Map.size . instance_heads) . Map.lookup key <$> liftIO (readMVar (_state_instances state))
+    networks <- maybe mempty instance_networks . Map.lookup key <$> (liftIO $ readMVar (_state_instances state))
 
     let
       numNodes :: Integer
@@ -1113,9 +1226,12 @@ handleClientMessage conn state = \case
     case getHydraPayMode state of
       ConfiguredMode {} -> pure $ ApiError "Hydra Pay is currently not running a Devnet"
       ManagedDevnetMode -> do
-        heads <- Map.keys <$> liftIO (readMVar (_state_heads state))
-        -- Terminate all the heads!
-        for_ heads $ terminateHead state
+        instances <- liftIO $ readMVar (_state_instances state)
+        for instances $ \is -> do
+          -- NOTE(skylar): Remember terminating the head removes the network!
+          for_ (Map.keys $ instance_heads is) $ terminateHead state $ instance_apiKey is
+
+        broadcastToAll state DevnetRestarted
 
         -- Create a new devnet and update the MVar
         liftIO $ modifyMVar (_state_cardanoNodeState state) $ \oldCns -> do
@@ -1125,33 +1241,31 @@ handleClientMessage conn state = \case
             Right newstate -> pure (newstate, DevnetRestarted)
             Left err -> pure (oldCns, ApiError $ "Failed to restart devnet: " <> T.pack err)
 
-  GetDevnetAddresses lovelaceAmount -> do
-    mAddrs <- liftIO $ getDevnetAddresses [1 .. fromIntegral lovelaceAmount]
-    case mAddrs of
+  GetDevnetAddresses count -> do
+    mAddrs <- liftIO $ withMVar (_state_instanceAddresses state) (pure . (fmap . fmap) fst . Map.lookup key)
+    case fmap (take (fromIntegral count)) mAddrs of
       Just addrs ->
         pure $ DevnetAddresses addrs
       Nothing ->
         pure $
         RequestError
-        "Unable to open seeded address file, restart devnet or wait for seeding to complete"
+        "Seeding is in progress: please wait for your instance addresses to be created and funded"
 
   SubscribeTo name -> do
-    liftIO $ modifyMVar_ (_state_subscribers state) $ pure . Map.insertWith (<>) name (pure conn)
-    status <- getHeadStatus state name
+    liftIO $ modifyMVar_ (_state_instances state) $ pure . Map.adjust (\i -> i {instance_subscribers = Map.insertWith (<>) name (pure conn) $ instance_subscribers i}) key
+    status <- getHeadStatus state key name
     pure $ either (ApiError . T.pack . show) SubscriptionStarted status
 
   LiveDocEzSubmitTx tx addr -> do
-    isDevnet <- runningDevnet state
-    if isDevnet then (do
-      mKeys <- liftIO $ getTestAddressKeys addr
-      case mKeys of
-        Nothing -> pure $ ApiError "Address is not a Devnet test address"
-        Just (KeyPair sk _) -> do
-          cardanoNodeInfo <- getCardanoNodeInfo state
-          result <- liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
-          pure $ case result of
-            Just err -> ApiError $ T.pack err
-            Nothing -> OperationSuccess) else pure $ ApiError "This endpoint is only available when Hydra Pay is running a Devnet"
+    addrs <- liftIO $ withMVar (_state_instanceAddresses state) $ pure . maybe mempty id . Map.lookup key
+    case lookup addr addrs of
+      Nothing -> pure $ ApiError "Address is not a Devnet test address"
+      Just (KeyPair sk _) -> do
+        cardanoNodeInfo <- getCardanoNodeInfo state
+        result <- liftIO $ signAndSubmitTx cardanoNodeInfo sk tx
+        pure $ case result of
+          Just err -> ApiError $ T.pack err
+          Nothing -> OperationSuccess
 
   ClientHello -> pure $ ServerHello versionStr
 
@@ -1174,36 +1288,36 @@ handleClientMessage conn state = \case
     pure $ either (ApiError . T.pack) FuelAmount fuel
 
   CreateHead hc@(HeadCreate name _) -> do
-    result <- createHead state hc
+    result <- createHead state key hc
     case result of
       Left err -> pure $ ServerError err
       Right _ ->
-        either ServerError HeadInfo <$> getHeadStatus state name
+        either ServerError HeadInfo <$> getHeadStatus state key name
 
   InitHead hi -> do
-    result <- initHead state hi
+    result <- initHead state key hi
     pure $ either ApiError (const OperationSuccess) result
 
   CommitHead hc -> do
-    result <- commitToHead state hc
+    result <- commitToHead state key hc
     pure $ either ServerError (const OperationSuccess) result
 
   CloseHead name -> do
-    result <- closeHead state name
+    result <- closeHead state key name
     pure $ either ServerError (const OperationSuccess) result
 
   DoesHeadExist name -> do
-    result <- getHeadStatus state name
+    result <- getHeadStatus state name key
     pure $ HeadExistsResult $ case result of
       Left _ -> False
       Right _ -> True
 
   TearDownHead name -> do
-    result <- removeHead state name
+    result <- removeHead state key name
     case result of
       Right () -> do
         let removeMsg = HeadRemoved name
-        broadcastToSubscribers state name removeMsg
+        broadcastToSubscribers state key name removeMsg
         pure removeMsg
       Left err -> do
         pure $ ApiError $ T.pack err

@@ -4,6 +4,7 @@ module HydraPay.Api where
 
 import Data.Map
 import Data.Int
+import Data.Time
 import GHC.Generics
 import Data.Aeson as Aeson
 import qualified Data.Text as T
@@ -131,6 +132,7 @@ data ClientMsg
   | InitHead HeadInit
   | CommitHead HeadCommit
   | CloseHead HeadName
+  | GetRestartTime
 
   | TearDownHead HeadName
   -- ^ Kills network and removes head
@@ -168,6 +170,7 @@ data ServerMsg
   = ServerHello Version
   | OperationSuccess
   | HeadInfo HeadStatus
+  | RestartTime UTCTime
   | TxConfirmed Pico
   | FundsTx Tx
   | FuelAmount Lovelace

@@ -44,7 +44,8 @@ hydraPayRouteEncoder = pathComponentEncoder $ \case
 
 data FrontendRoute :: * -> * where
   -- This is for managing Hydra Pay
-  FrontendRoute_Monitor :: FrontendRoute ()
+  FrontendRoute_Login :: FrontendRoute ()
+  FrontendRoute_App :: FrontendRoute ()
 
   -- This type is used to define frontend routes, i.e. ones for which the backend will serve the frontend.
 
@@ -58,7 +59,8 @@ fullRouteEncoder = mkFullRouteEncoder
       BackendRoute_HydraPay -> PathSegment "hydra" hydraPayRouteEncoder
   )
   (\case
-      FrontendRoute_Monitor -> PathEnd $ unitEncoder mempty
+      FrontendRoute_App -> PathSegment "app" $ unitEncoder mempty
+      FrontendRoute_Login -> PathEnd $ unitEncoder mempty
   )
 
 concat <$> mapM deriveRouteComponent

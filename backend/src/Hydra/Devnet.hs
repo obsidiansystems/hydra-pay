@@ -69,6 +69,7 @@ import qualified Data.Map as Map
 import Data.String.Interpolate (i)
 import Paths
 
+import HydraPay.Logging
 import Control.Monad.Except
 
 import qualified Data.ByteString.Lazy.Char8 as BS
@@ -105,25 +106,24 @@ addressesPath = "devnet/addresses"
 keysPath :: FilePath
 keysPath = "devnet/keys"
 
-seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m ()
+seedTestAddresses :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => CardanoNodeInfo -> KeyPair -> Int -> m [(Address, KeyPair)]
 seedTestAddresses cninf faucetKeys amount = do
-  exists <- liftIO $ doesFileExist addressesPath
-  unless exists $ do
-    -- Remove the Cardano keys for the devnet
-    liftIO $ do
-      -- NOTE removePathForcibly does nothing if the path doesn't exist,
-      -- and doesn't throw exceptions when the path contains files
-      _ <- removePathForcibly keysPath
-      createDirectory keysPath
-    result <- for [1 .. amount] $ \n -> runExceptT $ do
-      keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/" <> "addr_" <> show n
-      addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
-      void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 10000) False
-      pure addr
-    case sequenceA result of
-      Right seededAddresses ->
-        liftIO $ T.writeFile addressesPath $ T.intercalate "\n" $ fmap unAddress seededAddresses
-      Left err -> logError $ pretty err
+  -- Remove the Cardano keys for the devnet
+  liftIO $ do
+    -- NOTE removePathForcibly does nothing if the path doesn't exist,
+    -- and doesn't throw exceptions when the path contains files
+    createDirectoryIfMissing False keysPath
+  result <- for [1 .. amount] $ \n -> runExceptT $ do
+    uuid <- liftIO $ show <$> UUIDV4.nextRandom
+    keypair <- ExceptT $ generateCardanoKeys $ keysPath <> "/" <> "addr_" <> uuid
+    addr <- ExceptT $ liftIO $ getCardanoAddress cninf $ _verificationKey keypair
+    void $ seedAddressFromFaucetAndWait cninf faucetKeys addr (ada 1000) False
+    pure (addr, keypair)
+  case sequenceA result of
+    Right seededAddresses -> pure seededAddresses
+    Left err -> do
+      logError $ pretty err
+      pure []
 
 getTestAddressKeys :: Address -> IO (Maybe KeyPair)
 getTestAddressKeys addr = do
