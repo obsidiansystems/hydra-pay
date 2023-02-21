@@ -42,7 +42,7 @@
 
 ## :dango: Introduction
 
-The **Hydra Pay** project will provide an open-source library and framework for cardano light wallet developers to make use of [Hydra (Head)](https://hydra.family/head-protocol/).
+The **Hydra Pay** project will provide an open-source library and framework for cardano developers to make use of [Hydra (Head)](https://hydra.family/head-protocol/).
 
 This will cover:
 
@@ -603,7 +603,7 @@ The contents are a txid you can track on a block explorer like cardanoscan.
 
 ### What is Hydra Pay?
 
-A library and service for Light Wallet (and eventually DApp developers) to integrate payment channels allowing them fast finality and low fees through the use of Hydra Heads.
+A library and service for Light Wallet and DApp developers to integrate payment channels allowing them fast finality and low fees through the use of Hydra Heads.
 
 ### I am a developer and have feature that I want to implement that uses Hydra. Should I use Hydra Heads directly or Hydra Pay?
 
