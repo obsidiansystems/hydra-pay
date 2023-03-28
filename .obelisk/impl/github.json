@@ -1,8 +1,8 @@
 {
   "owner": "obsidiansystems",
   "repo": "obelisk",
-  "branch": "develop",
+  "branch": "so/fix-macos",
   "private": false,
-  "rev": "bc7cb5e422e289e594005605fb27ab2babf8b009",
-  "sha256": "0j1z9w7fd80c7mfymlg7g67n45q8pylv2h4dzzp653knpwfccbwz"
+  "rev": "df98ef41683f2ac84d354dc04313869f72fb3d56",
+  "sha256": "04hvrhqw1a1baw2v7cj5p14f0i7vzsjzlw3nw8c0zg6xldcvnsm5"
 }
