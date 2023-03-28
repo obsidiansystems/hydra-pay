@@ -57,6 +57,7 @@ obviouslyInvalidAddress = UnsafeToAddress "addr_test1thisaddressisobviouslyinval
 type Lovelace = Integer
 
 type NodeId = T.Text
+type HeadId = T.Text
 
 type TxId = T.Text
 type TxIn = T.Text
@@ -106,12 +107,12 @@ instance FromJSON Host
 
 
 newtype Party = Party {vkey :: T.Text}
-  deriving (Eq, Show, Read, Generic)
+  deriving (Eq, Ord, Show, Read, Generic)
 
 instance ToJSON Party
 instance FromJSON Party
 
-type UTxOType tx = Value
+type UTxOType tx = WholeUTXO
 type MultiSignature x = Value
 type PostChainTx tx = Value 
 type PostTxError tx = Value
