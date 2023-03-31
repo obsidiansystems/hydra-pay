@@ -87,7 +87,9 @@ data Tagged a = Tagged
 instance ToJSON a => ToJSON (Tagged a)
 instance FromJSON a => FromJSON (Tagged a)
 
-data HydraPayError
+type HydraPayError = HydraPayError' WholeUTXO
+
+data HydraPayError' tx
   = InvalidPayload
   | HeadCreationFailed
   | NotEnoughParticipants
@@ -102,7 +104,7 @@ data HydraPayError
   | NoValidUTXOToCommit
   | InsufficientFunds
   | FanoutNotPossible
-  | TxInvalid {utxo :: WholeUTXO, transaction :: Value, validationError :: ValidationError}
+  | TxInvalid {headId :: HeadId, utxo :: UTxOType tx, transaction :: Value, validationError :: ValidationError}
   deriving (Eq, Show, Generic)
 
 instance ToJSON HydraPayError

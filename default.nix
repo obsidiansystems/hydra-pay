@@ -18,8 +18,12 @@ with obelisk;
 let
   foldExtensions = lib.foldr lib.composeExtensions (_: _: {});
   deps = obelisk.nixpkgs.thunkSet ./dep;
-  hydra-poc = import deps.hydra-poc {};
-  cardano-node = import deps.cardano-node {};  
+  flake-compat = import deps.flake-compat;
+  hydra-poc = (flake-compat {
+    inherit system;
+    src = deps.hydra-poc;
+  }).defaultNix.packages.${system};
+  cardano-node = import deps.cardano-node {};
 
   pkgs = obelisk.nixpkgs;
   livedoc-devnet-script = pkgs.runCommand "livedoc-devnet-script" { } ''
@@ -44,8 +48,8 @@ let
             librarySystemDepends = (drv.librarySystemDepends or []) ++ [
               cardano-node.cardano-node
               cardano-node.cardano-cli
-              hydra-poc.hsPkgs.hydra-node.components.exes.hydra-node
-              hydra-poc.hsPkgs.hydra-node.components.exes.hydra-tools
+              hydra-poc.hydra-node.package.components.exes.hydra-node
+              hydra-poc.hydra-node.package.components.exes.hydra-tools
               pkgs.jq
               pkgs.coreutils
               livedoc-devnet-script

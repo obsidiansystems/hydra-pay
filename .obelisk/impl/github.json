@@ -1,8 +1,8 @@
 {
   "owner": "obsidiansystems",
   "repo": "obelisk",
-  "branch": "develop",
+  "branch": "dylang/update-nix",
   "private": false,
-  "rev": "bc7cb5e422e289e594005605fb27ab2babf8b009",
-  "sha256": "0j1z9w7fd80c7mfymlg7g67n45q8pylv2h4dzzp653knpwfccbwz"
+  "rev": "2d9c236a0256bd3bd81c51137617d5dd36a0f210",
+  "sha256": "0vb2pzrqy8ng75055w0sfnchrgmi80hzcwgw12fb3ddgq4dzr4cx"
 }

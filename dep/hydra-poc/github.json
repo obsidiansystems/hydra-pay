@@ -1,7 +1,8 @@
 {
   "owner": "input-output-hk",
   "repo": "hydra-poc",
+  "branch": "master",
   "private": false,
-  "rev": "d4f242b68069765117e7c615101df17708de40a2",
-  "sha256": "0h0ymcw6h3lggvsmyxyvj5582mhmkv6d937qmz0px40gwjjcly05"
+  "rev": "0fab58f97b7ac955e8578215848e30b444cef8cb",
+  "sha256": "071qj948bjcr0dly3zm10cdad0a4axsfcq92n1139svdq3ffxmdz"
 }

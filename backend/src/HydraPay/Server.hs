@@ -309,7 +309,7 @@ headAllBalances state headname = do
       untilJust $ do
         x <- liftIO . atomically $ readTChan c
         case x of
-          GetUTxOResponse utxoz ->
+          GetUTxOResponse _headId utxoz ->
             Just . mapLeft ProcessError <$> reverseMapProxyBalances state participants (wholeUtxoToBalanceMap utxoz)
 
           CommandFailed {} -> pure $ Just $ Right mempty
@@ -457,12 +457,12 @@ withAnyNode state name f =
 initHead :: MonadIO m => State -> HeadInit -> m (Either T.Text ())
 initHead state (HeadInit name con) = do
   result <- sendToHeadAndWaitForOutput (Init $ fromIntegral con) (\case
-    ReadyToCommit {} -> True
+    HeadIsInitializing {} -> True
     PostTxOnChainFailed {} -> True
     _ -> False) state name
 
   case result of
-    Right ReadyToCommit {} -> pure $ Right ()
+    Right HeadIsInitializing {} -> pure $ Right ()
     Right PostTxOnChainFailed {} -> pure $ Left "Failed to submit tx, check participants fuel"
     Left err -> pure $ Left $ tShow err
     _ -> pure $ Left "Impossible error"
@@ -635,7 +635,7 @@ getNodeUtxos node proxyAddr = do
   untilJust $ do
     x <- liftIO . atomically $ readTChan c
     case x of
-      GetUTxOResponse utxoz ->
+      GetUTxOResponse _headId utxoz ->
         pure $ Just (filterUtxos proxyAddr utxoz)
       CommandFailed {} -> pure $ Just mempty
       _ -> pure Nothing
@@ -666,9 +666,9 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) =
             pure . Just $ nominalDiffTimeToSeconds $ diffUTCTime endTime startTime
           else pure Nothing
 
-      ServerOutput.TxInvalid theUtxo tx valError -> do
+      ServerOutput.TxInvalid headId theUtxo tx valError -> do
         let
-          parsedError = HydraPay.Api.TxInvalid theUtxo tx valError <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
+          parsedError = HydraPay.Api.TxInvalid headId theUtxo tx valError <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
         _ <- throwError $ fromMaybe (ProcessError "Tx Invalid") parsedError
         pure Nothing
       _ -> pure Nothing
@@ -818,13 +818,13 @@ startNetwork state (Head name participants _ statusBTChan) = do
               msg <- getParsedMsg
               -- Process state changes and balance changes
               let handleMsg = \case
-                    ReadyToCommit {} -> (Just Status_Init, Nothing)
+                    HeadIsInitializing {} -> (Just Status_Init, Nothing)
                     Committed {} -> (Just Status_Committing, Nothing)
-                    HeadIsOpen utxoz -> (Just Status_Open, Just utxoz)
+                    HeadIsOpen _headId utxoz -> (Just Status_Open, Just utxoz)
                     HeadIsClosed {} -> (Just Status_Closed, Nothing)
                     ReadyToFanout {} -> (Just Status_Fanout, Nothing)
                     HeadIsAborted {} -> (Just Status_Aborted, Nothing)
-                    HeadIsFinalized utxoz -> (Just Status_Finalized, Just utxoz)
+                    HeadIsFinalized _headId utxoz -> (Just Status_Finalized, Just utxoz)
                     _ -> (Nothing, Nothing)
               case handleMsg msg of
                 (Just status, mbalance) -> do
