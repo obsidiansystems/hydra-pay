@@ -1,0 +1,29 @@
+name: hydra-pay
+version: 0.1
+cabal-version: >= 1.10
+build-type: Simple
+
+library
+  hs-source-dirs: src
+  build-depends: base
+               , process
+               , which
+
+  default-extensions:
+    DeriveGeneric
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    LambdaCase
+    MultiParamTypeClasses
+    OverloadedStrings
+    QuantifiedConstraints
+    RecursiveDo
+    ScopedTypeVariables
+    TypeFamilies
+    UndecidableInstances
+
+  exposed-modules:
+    HydraPay
+
+  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
