@@ -21,9 +21,9 @@ let
   foldExtensions = lib.foldr lib.composeExtensions (_: _: {});
   deps = obelisk.nixpkgs.thunkSet ./dep;
   flake-compat = import deps.flake-compat;
-  hydra-poc = (flake-compat {
+  hydra = (flake-compat {
     inherit system;
-    src = deps.hydra-poc;
+    src = deps.hydra;
   }).defaultNix.packages.${system};
   cardano-node = import deps.cardano-node {};
 
@@ -41,6 +41,11 @@ let
       ios.bundleIdentifier = "systems.obsidian.obelisk.examples.minimal";
       ios.bundleName = "Obelisk Minimal Example";
 
+      packages =
+      {
+        hydra-pay = ./hydra-pay;
+      };
+
       overrides = foldExtensions [
         (self: super: {
           aeson-gadt-th = haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme";
@@ -51,8 +56,8 @@ let
             librarySystemDepends = (drv.librarySystemDepends or []) ++ [
               cardano-node.cardano-node
               cardano-node.cardano-cli
-              hydra-poc.hydra-node.package.components.exes.hydra-node
-              hydra-poc.hydra-node.package.components.exes.hydra-tools
+              hydra.hydra-node.package.components.exes.hydra-node
+              hydra.hydra-node.package.components.exes.hydra-tools
               pkgs.jq
               pkgs.coreutils
               livedoc-devnet-script
