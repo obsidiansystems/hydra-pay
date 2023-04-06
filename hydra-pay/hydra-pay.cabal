@@ -15,6 +15,9 @@ library
                , bytestring
                , aeson
                , transformers
+               , fsnotify
+               , reflex
+               , reflex-fsnotify
 
   default-extensions:
     DeriveGeneric
@@ -33,5 +36,7 @@ library
   exposed-modules:
     HydraPay
     HydraPay.Cardano.Cli
+    HydraPay.Host
+    HydraPay.Watch
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
