@@ -18,6 +18,13 @@ library
                , fsnotify
                , reflex
                , reflex-fsnotify
+               , directory
+               , stm
+               , mtl
+               , dependent-sum
+               , containers
+               , cardano-api
+               , cardano-transaction
 
   default-extensions:
     DeriveGeneric
@@ -25,6 +32,8 @@ library
     FlexibleInstances
     GADTs
     LambdaCase
+    ConstraintKinds
+    RankNTypes
     MultiParamTypeClasses
     OverloadedStrings
     QuantifiedConstraints

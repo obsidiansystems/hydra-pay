@@ -1,9 +1,10 @@
 module HydraPay.Watch where
 
+import Control.Monad
 import Control.Concurrent
 import Control.Monad.IO.Class
 import Reflex
-import Reflex.FSNotify
+import Reflex.FSNotify hiding (wrapWatch, watchDir)
 import qualified System.FSNotify as FS
 
 import HydraPay.Host
@@ -27,4 +28,4 @@ watchDir
   -> FilePath
   -> FS.ActionPredicate
   -> m (Event t FSEvent)
-watchDir cfg path evFilter = wrapWatch' (\mgr p action -> FS.watchDir mgr p evFilter action) cfg path
+watchDir cfg path evFilter = wrapWatch (\mgr p action -> FS.watchDir mgr p evFilter action) cfg path
