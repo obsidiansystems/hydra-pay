@@ -8,6 +8,13 @@ library
   build-depends: base
                , process
                , which
+               , text
+               , lens
+               , monad-logger
+               , monad-logger-extras
+               , bytestring
+               , aeson
+               , transformers
 
   default-extensions:
     DeriveGeneric
@@ -25,5 +32,6 @@ library
 
   exposed-modules:
     HydraPay
+    HydraPay.Cardano.Cli
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

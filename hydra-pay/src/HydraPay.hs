@@ -2,18 +2,26 @@
 
 module HydraPay where
 
+import Data.Int
+
+import System.IO
+import System.Exit
 import System.Which
 import System.Process
 
-cardanoNodePath :: FilePath
-cardanoNodePath = $(staticWhich "cardano-node")
+import Control.Lens
+import Control.Monad.Logger
+import Control.Monad.Logger.Extras
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Except
 
-cardanoCliPath :: FilePath
-cardanoCliPath = $(staticWhich "cardano-cli")
+import qualified Data.Aeson as Aeson
+
+import HydraPay.Cardano.Cli
+import HydraPay.Cardano.Node
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
-runHydraPay :: IO a -> IO a
-runHydraPay action = do
-  withCreateProcess _ (\_ _ _ _ _ -> action)
+runHydraPay :: NodeConfig -> (NodeInfo -> IO a) -> IO a
+runHydraPay = withCardanoNode
