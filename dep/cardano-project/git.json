@@ -1,0 +1,8 @@
+{
+  "url": "ssh://git@code.obsidian.systems/lodewallet/cardano-project-definition.git",
+  "rev": "df1c35cb01cb864c5147653128232642f76a9cbe",
+  "sha256": "0kl8604prg0ych17bn3fqgslvm3czngy8ivdcvb2clcz52fqq4s2",
+  "private": true,
+  "fetchSubmodules": false,
+  "branch": "develop"
+}

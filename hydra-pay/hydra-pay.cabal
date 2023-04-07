@@ -27,6 +27,7 @@ library
                , containers
                , cardano-api
                , cardano-transaction
+               , temporary
 
   default-extensions:
     DeriveGeneric
