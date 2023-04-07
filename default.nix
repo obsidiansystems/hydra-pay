@@ -80,4 +80,4 @@ let
   '';
 
 in
-p // {  exe = hydra-pay-exe; }
+p // {  exe = hydra-pay-exe; inherit cardano-node hydra deps;}
