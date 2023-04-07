@@ -44,6 +44,7 @@ let
       packages =
       {
         hydra-pay = ./hydra-pay;
+        cardano-transaction = ./hydra-pay/dep/cardano-transaction-builder;
       };
 
       overrides = foldExtensions [
@@ -51,6 +52,12 @@ let
           aeson-gadt-th = haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme";
           reflex-gadt-api = self.callCabal2nix "reflex-gadt-api" deps.reflex-gadt-api {};
           string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
+
+          cardano-transaction = haskellLib.overrideCabal super.cardano-transaction (drv: {
+            librarySystemDepends = (drv.librarySystemDepends or []) ++ [
+              cardano-node.cardano-cli
+            ];
+          });
 
           backend = haskellLib.overrideCabal super.backend (drv: {
             librarySystemDepends = (drv.librarySystemDepends or []) ++ [
