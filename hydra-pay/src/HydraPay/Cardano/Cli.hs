@@ -79,12 +79,14 @@ runCardanoCli a command = do
         addrStr <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ maybeToEither "Failed to deserialize to Any Address" $ Api.deserialiseAddress Api.AsAddressAny . T.pack $ addrStr
 
-    CardanoCliCommand_KeyGen kgc@(KeyGenConfig path fileStart) -> do
+    CardanoCliCommand_KeyGen kgc -> do
       -- NOTE: cardano-cli address key-gen doesn't fail if the folder doesn't exist, though no keys will be produced...
       liftIO $ createDirectoryIfMissing True $ kgc ^. keyGenConfig_path
       runExceptT $ do
         _ <- eitherReadProcess cp
-        pure (path <> fileStart <> ".cardano.vk", path <> fileStart <> ".cardano.sk")
+        pure (path <> ".cardano.vk", path <> ".cardano.sk")
+      where
+        path = keyGenConfigPathPrefix kgc
   where
     cp = makeCliProcess (a ^. nodeInfo) command
 

@@ -75,7 +75,7 @@ runHydraPay ncfg action = withCardanoNode ncfg $ \ni -> do
 
 withTMVar :: MonadIO m => TMVar a -> (a -> m (a, b)) -> m b
 withTMVar var action = do
-  val <- liftIO $ atomically $ readTMVar var
+  val <- liftIO $ atomically $ takeTMVar var
   (a, b) <- action val
   liftIO $ atomically $ putTMVar var a
   pure b
@@ -114,7 +114,7 @@ queryProxyInfo a addr = withTMVar proxyVar $ \proxies -> do
   case Map.lookup addr proxies of
     Nothing -> do
       result <- runExceptT $ do
-        (vk, sk) <- ExceptT $ runCardanoCli hps $ keyGen $ KeyGenConfig "proxy" "test"
+        (vk, sk) <- ExceptT $ runCardanoCli hps $ keyGen $ KeyGenConfig "proxy-keys" $ T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr
         proxyAddr <- ExceptT $ runCardanoCli hps $ buildAddress vk
         pure $ ProxyInfo proxyAddr vk sk
       case result of
