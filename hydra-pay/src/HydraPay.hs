@@ -11,8 +11,6 @@ import Data.Aeson.Lens
 
 import Control.Lens
 import Control.Monad
-import Control.Monad.Logger
-import Control.Monad.Logger.Extras
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
 
@@ -21,14 +19,15 @@ import qualified Data.Aeson as Aeson
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
 
+import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
+import qualified HydraPay.Database as DB
 
 import Control.Concurrent.STM
 
-import Data.String
-
 import Data.Int
+import Data.String
 import qualified Data.Text as T
 
 import qualified Data.ByteString as BS
@@ -39,6 +38,13 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 
 import Cardano.Transaction
+
+import Data.Pool
+import Database.PostgreSQL.Simple (Connection, withTransaction)
+import Gargoyle.PostgreSQL.Connect
+import Database.Beam
+import Database.Beam.Postgres
+import Database.Beam.Backend.SQL.BeamExtensions
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
@@ -55,6 +61,8 @@ makeLenses ''ProxyInfo
 data HydraPayState = HydraPayState
   { _hydraPay_proxies :: TMVar (Map Api.AddressAny ProxyInfo)
   , _hydraPay_nodeInfo :: NodeInfo
+  , _hydraPay_databaseConnectionPool :: Pool Connection
+  , _hydraPay_logger :: Logger
   }
 
 makeLenses ''HydraPayState
@@ -68,10 +76,21 @@ class HasHydraPay a where
 instance HasHydraPay HydraPayState where
   hydraPay = id
 
-runHydraPay :: NodeConfig -> (HydraPayState -> IO a) -> IO a
-runHydraPay ncfg action = withCardanoNode ncfg $ \ni -> do
-  proxies <- newTMVarIO mempty
-  action $ HydraPayState proxies ni
+instance HasLogger HydraPayState where
+  getLogger = hydraPay_logger
+
+data HydraPayConfig = HydraPayConfig
+  { hydraPaySettings_database :: FilePath
+  , hydraPaySettings_logSettings :: LogConfig
+  , hydraPaySettings_nodeConfig :: NodeConfig
+  }
+
+runHydraPay :: HydraPayConfig -> (HydraPayState -> IO a) -> IO a
+runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db $ \pool -> do
+  withResource pool DB.doAutomigrate
+  withCardanoNode ncfg $ \ni -> do
+    proxies <- newTMVarIO mempty
+    action $ HydraPayState proxies ni pool l
 
 withTMVar :: MonadIO m => TMVar a -> (a -> m (a, b)) -> m b
 withTMVar var action = do
@@ -105,25 +124,58 @@ payToProxyTx addr lovelace proxy = do
   void $ selectInputs oValue addrStr
   changeAddress addrStr
   void $ balanceNonAdaAssets addrStr
-  pure ()
   where
     addrStr = addressString addr
 
-queryProxyInfo :: (HasHydraPay a, MonadIO m) => a -> Api.AddressAny -> m (Either String ProxyInfo)
-queryProxyInfo a addr = withTMVar proxyVar $ \proxies -> do
-  case Map.lookup addr proxies of
+queryProxyInfo :: (HasNodeInfo a, HasHydraPay a, MonadIO m) => a -> Api.AddressAny -> m (Either String ProxyInfo)
+queryProxyInfo a addr = do
+  result <- runQueryInTransaction a $ getProxyInfo addr
+  case result of
     Nothing -> do
-      result <- runExceptT $ do
-        (vk, sk) <- ExceptT $ runCardanoCli hps $ keyGen $ KeyGenConfig "proxy-keys" $ T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr
-        proxyAddr <- ExceptT $ runCardanoCli hps $ buildAddress vk
-        pure $ ProxyInfo proxyAddr vk sk
-      case result of
-        Right newProxy ->
-          pure (Map.insert addr newProxy proxies, Right newProxy)
-        Left err ->
-          pure (proxies, Left err)
-    Just a -> do
-      pure (proxies, Right a)
+      runExceptT $ do
+        (vk, sk) <- ExceptT $ runCardanoCli a $ keyGen $ KeyGenConfig "proxy-keys" $ T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr
+        proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
+        let newInfo = ProxyInfo proxyAddr vk sk
+        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ runQueryInTransaction a $ addProxyInfo addr newInfo
+    Just info -> do
+      pure $ Right info
+
+runQueryInTransaction :: (HasHydraPay a, MonadIO m) => a -> (Connection -> IO b) -> m b
+runQueryInTransaction a action = liftIO $ withResource pool $ \conn -> do
+  withTransaction conn (action conn)
   where
-    hps = a ^. hydraPay
-    proxyVar = hps ^. hydraPay_proxies
+    pool = a ^. hydraPay . hydraPay_databaseConnectionPool
+
+getProxyInfo :: MonadIO m => Api.AddressAny -> Connection -> m (Maybe ProxyInfo)
+getProxyInfo addr conn = liftIO $ do
+  proxy <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
+    proxy <- all_ (DB.db ^. DB.db_proxies)
+    guard_ (proxy ^. DB.proxy_chainAddress ==.  val_ (Api.serialiseAddress addr))
+    pure proxy
+  pure $ proxy >>= dbProxyInfoToProxyInfo
+
+addProxyInfo :: MonadIO m => Api.AddressAny -> ProxyInfo -> Connection -> m (Maybe ProxyInfo)
+addProxyInfo addr pinfo conn = liftIO $ do
+  result <- runBeamPostgres conn
+    $ runInsertReturningList
+    $ insertOnConflict (DB.db ^. DB.db_proxies)
+    (insertValues [ DB.ProxyInfo
+                    (Api.serialiseAddress addr)
+                    (pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
+                    (pinfo ^. proxyInfo_verificationKey . to (T.pack))
+                    (pinfo ^. proxyInfo_signingKey . to (T.pack))
+                  ])
+    -- If somehow we had someone insert before we did, we should get the information back out and use that
+    anyConflict onConflictDoNothing
+  pure $ headMaybe result >>= dbProxyInfoToProxyInfo
+
+headMaybe :: [a] -> Maybe a
+headMaybe [] = Nothing
+headMaybe (x:_) = Just x
+
+dbProxyInfoToProxyInfo :: DB.ProxyInfo -> Maybe ProxyInfo
+dbProxyInfoToProxyInfo pinfo =
+  ProxyInfo
+  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_chainAddress)
+  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_verificationKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_signingKeyPath)

@@ -28,8 +28,19 @@ library
                , cardano-api
                , cardano-transaction
                , temporary
+               , postgresql-simple
+               , gargoyle-postgresql
+               , gargoyle-postgresql-connect
+               , gargoyle-postgresql-nix
+               , gargoyle
+               , resource-pool
+               , beam-core
+               , beam-postgres
+               , beam-automigrate
+               , time
 
   default-extensions:
+    DerivingStrategies
     DeriveGeneric
     FlexibleContexts
     FlexibleInstances
@@ -43,13 +54,17 @@ library
     RecursiveDo
     ScopedTypeVariables
     TypeFamilies
+    TypeApplications
+    DataKinds
     UndecidableInstances
 
   exposed-modules:
     HydraPay
     HydraPay.Cardano.Cli
+    HydraPay.Logging
     HydraPay.Cardano.Node
     HydraPay.Host
     HydraPay.Watch
+    HydraPay.Database
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

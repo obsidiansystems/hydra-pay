@@ -113,7 +113,7 @@ eitherReadProcess cp = do
     ExitFailure _ -> pure $ Left err
 
 makeCliProcess :: NodeInfo -> CardanoCliCommand a -> CreateProcess
-makeCliProcess nodeInfo command =
+makeCliProcess ni command =
   addSocketPath process
   where
     process = case command of
@@ -147,10 +147,10 @@ makeCliProcess nodeInfo command =
     base = proc cardanoCliPath
 
     addSocketPath p =
-      p { env = Just [("CARDANO_NODE_SOCKET_PATH", nodeInfo ^. nodeInfo_socketPath)]
+      p { env = Just [("CARDANO_NODE_SOCKET_PATH", ni ^. nodeInfo_socketPath)]
         }
 
-    magic = show $ nodeInfo ^. nodeInfo_magic
+    magic = show $ ni ^. nodeInfo_magic
 
 cardanoCliPath :: FilePath
 cardanoCliPath = $(staticWhich "cardano-cli")
