@@ -2,12 +2,16 @@
 
 module HydraPay.Cardano.Cli where
 
+import HydraPay.Types
+import HydraPay.Utils
 import HydraPay.Cardano.Node
 
+import Data.Bifunctor
 import System.Exit
 import System.Which
 import System.Process
 import System.Directory
+import System.FilePath
 
 import Control.Lens
 
@@ -16,111 +20,161 @@ import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except
 import qualified Data.Aeson as Aeson
 
+import Data.Text (Text)
 import qualified Data.Text as T
-
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
 
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
 
-data KeyGenConfig = KeyGenConfig
-  { _keyGenConfig_path :: FilePath
-  , _keyGenConfig_name :: String
+-- | Provide a path and a name to use as a prefix for your signing and verification keys
+data KeyGenTemplate = KeyGenTemplate
+  { _keyGenTemplate_path :: FilePath
+  , _keyGenTemplate_name :: FilePath
   }
   deriving (Eq, Show)
 
-makeLenses ''KeyGenConfig
+data KeyGenConfig
+  = KeyGenConfigFromTemplate KeyGenTemplate
+  -- ^ Use the generation template to create the paths
+  | KeyGenConfig FilePath FilePath
+  -- ^ Use these paths directly
+  deriving (Eq, Show)
 
-keyGenConfigPathPrefix :: KeyGenConfig -> FilePath
-keyGenConfigPathPrefix (KeyGenConfig path name) =
-  pathStart <> name
-  where
-    pathStart = case endsWithSlash path of
-      True -> path
-      False -> path <> "/"
+-- | Get the paths to the keys
+keyGenConfigPaths :: KeyGenConfig -> (FilePath, FilePath)
+keyGenConfigPaths = \case
+  KeyGenConfigFromTemplate (KeyGenTemplate path name) -> (path, path)
+  KeyGenConfig vk sk -> (takeDirectory vk, takeDirectory sk)
 
-    endsWithSlash :: String -> Bool
-    endsWithSlash ('/':[]) = True
-    endsWithSlash (_:[]) = False
-    endsWithSlash ([]) = False
-    endsWithSlash (_:rest) = endsWithSlash rest
+-- | Get the full filenames for each key
+keyGenConfigFiles :: KeyGenConfig -> (FilePath, FilePath)
+keyGenConfigFiles = \case
+  KeyGenConfigFromTemplate (KeyGenTemplate path name) -> (path </> name <> ".vk", path </> name <> ".sk")
+  KeyGenConfig vk sk -> (vk, sk)
+
+keyGenFiles :: FilePath -> FilePath -> KeyGenConfig
+keyGenFiles = KeyGenConfig
+
+keyGenTemplate :: FilePath -> String -> KeyGenConfig
+keyGenTemplate fp n = KeyGenConfigFromTemplate $ KeyGenTemplate fp n
+
+makePrisms ''KeyGenConfig
+makeLenses ''KeyGenTemplate
 
 data CardanoCliCommand :: * -> * where
-  CardanoCliCommand_QueryTip :: CardanoCliCommand (Either String Aeson.Value)
-  CardanoCliCommand_GetProtocolParams :: CardanoCliCommand (Either String Api.ProtocolParameters)
-  CardanoCliCommand_QueryUTXOs :: Api.AddressAny -> CardanoCliCommand (Either String (Api.UTxO Api.BabbageEra))
+  CardanoCliCommand_QueryTip :: CardanoCliCommand (Either Text Aeson.Value)
+  CardanoCliCommand_GetProtocolParams :: CardanoCliCommand (Either Text Api.ProtocolParameters)
+  CardanoCliCommand_QueryUTXOs :: Api.AddressAny -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))
 
   -- | Generate private and public keys in a directory
-  CardanoCliCommand_KeyGen :: KeyGenConfig -> CardanoCliCommand (Either String (FilePath, FilePath))
-  CardanoCliCommand_BuildAddress :: FilePath -> CardanoCliCommand (Either String Api.AddressAny)
+  CardanoCliCommand_KeyGen :: KeyGenConfig -> CardanoCliCommand (Either Text (FilePath, FilePath))
+  CardanoCliCommand_BuildAddress :: FilePath -> CardanoCliCommand (Either Text Api.AddressAny)
+  CardanoCliCommand_SubmitTxFile :: FilePath -> CardanoCliCommand (Either Text Text)
+  CardanoCliCommand_GetTxId :: FilePath -> CardanoCliCommand (Either Text TxId)
+  CardanoCliCommand_TxInExists :: TxInput -> CardanoCliCommand (Either Text Bool)
 
 runCardanoCli :: (HasNodeInfo a, MonadIO m) => a -> CardanoCliCommand b -> m b
 runCardanoCli a command = do
   ensureNodeSocket a
   case command of
     CardanoCliCommand_QueryTip -> do
-      runExceptT $ do
+      fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
 
     CardanoCliCommand_GetProtocolParams -> do
-      runExceptT $ do
+      fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
 
     CardanoCliCommand_QueryUTXOs _ -> do
-      runExceptT $ do
+      fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
 
     CardanoCliCommand_BuildAddress vkPath -> do
-      runExceptT $ do
+      fmap (first T.pack) $ runExceptT $ do
         addrStr <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ maybeToEither "Failed to deserialize to Any Address" $ Api.deserialiseAddress Api.AsAddressAny . T.pack $ addrStr
 
+    CardanoCliCommand_SubmitTxFile _ -> do
+      fmap (bimap T.pack T.pack) $ runExceptT $ do
+        ExceptT $ eitherReadProcess cp
+
+    CardanoCliCommand_GetTxId _ -> do
+      fmap (bimap T.pack (TxId . T.pack)) $ runExceptT $ do
+        ExceptT $ eitherReadProcess cp
+
+    CardanoCliCommand_TxInExists _ -> do
+      fmap (bimap T.pack parseResult) $ runExceptT $ do
+        ExceptT $ eitherReadProcess cp
+      where
+        parseResult "{}" = False
+        parseResult _ = True
+
     CardanoCliCommand_KeyGen kgc -> do
       -- NOTE: cardano-cli address key-gen doesn't fail if the folder doesn't exist, though no keys will be produced...
-      liftIO $ createDirectoryIfMissing True $ kgc ^. keyGenConfig_path
-      runExceptT $ do
+      liftIO $ createDirectoryIfMissing True vkPath
+      liftIO $ createDirectoryIfMissing True skPath
+      fmap (first T.pack) $ runExceptT $ do
         _ <- eitherReadProcess cp
-        pure (path <> ".cardano.vk", path <> ".cardano.sk")
+        pure (vk, sk)
       where
-        path = keyGenConfigPathPrefix kgc
+        (vkPath, skPath) = keyGenConfigPaths kgc
+        (vk, sk) = keyGenConfigFiles kgc
+        -- path = keyGenConfigPathPrefix kgc
   where
     cp = makeCliProcess (a ^. nodeInfo) command
 
-buildAddress :: FilePath -> CardanoCliCommand (Either String Api.AddressAny)
+buildAddress :: FilePath -> CardanoCliCommand (Either Text Api.AddressAny)
 buildAddress = CardanoCliCommand_BuildAddress
 
-queryTip :: CardanoCliCommand (Either String Aeson.Value)
+queryTip :: CardanoCliCommand (Either Text Aeson.Value)
 queryTip = CardanoCliCommand_QueryTip
 
-getProtocolParameters :: CardanoCliCommand (Either String Api.ProtocolParameters)
+getProtocolParameters :: CardanoCliCommand (Either Text Api.ProtocolParameters)
 getProtocolParameters = CardanoCliCommand_GetProtocolParams
 
-queryUTxOs :: Api.AddressAny -> CardanoCliCommand (Either String (Api.UTxO Api.BabbageEra))
+queryUTxOs :: Api.AddressAny -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))
 queryUTxOs = CardanoCliCommand_QueryUTXOs
 
-keyGen :: KeyGenConfig -> CardanoCliCommand (Either String (FilePath, FilePath))
+keyGen :: KeyGenConfig -> CardanoCliCommand (Either Text (FilePath, FilePath))
 keyGen = CardanoCliCommand_KeyGen
 
-eitherReadProcess :: MonadIO m => CreateProcess -> m (Either String String)
-eitherReadProcess cp = do
-  (code, out, err) <- liftIO $ readCreateProcessWithExitCode cp ""
-  case code of
-    ExitSuccess -> pure $ Right out
-    ExitFailure _ -> pure $ Left err
+submitTxFile :: FilePath -> CardanoCliCommand (Either Text Text)
+submitTxFile = CardanoCliCommand_SubmitTxFile
+
+getTxId :: FilePath -> CardanoCliCommand (Either Text TxId)
+getTxId = CardanoCliCommand_GetTxId
+
+txInExists :: TxInput -> CardanoCliCommand (Either Text Bool)
+txInExists = CardanoCliCommand_TxInExists
 
 makeCliProcess :: NodeInfo -> CardanoCliCommand a -> CreateProcess
 makeCliProcess ni command =
   addSocketPath process
   where
     process = case command of
+      CardanoCliCommand_TxInExists txinput ->
+        base [ "query"
+             , "utxo"
+             , "--tx-in"
+             , T.unpack $ txInputToText txinput
+             , "--testnet-magic"
+             , magic
+             , "--out-file"
+             , "/dev/stdout"
+             ]
+
       CardanoCliCommand_QueryTip ->
         base ["query", "tip", "--testnet-magic", magic]
+
       CardanoCliCommand_GetProtocolParams ->
-        base  ["query", "protocol-parameters", "--testnet-magic", magic]
+        base ["query", "protocol-parameters", "--testnet-magic", magic]
+
       CardanoCliCommand_QueryUTXOs addr ->
         base [ "query"
              , "utxo"
@@ -131,18 +185,26 @@ makeCliProcess ni command =
              , "--out-file"
              , "/dev/stdout"
              ]
+
       CardanoCliCommand_BuildAddress vkPath ->
         base ["address", "build", "--verification-key-file", vkPath, "--testnet-magic", magic]
+
       CardanoCliCommand_KeyGen kgc ->
-        base ["address"
+        base [ "address"
              , "key-gen"
              , "--verification-key-file"
-             , path <> ".cardano.vk"
+             , vk
              , "--signing-key-file"
-             , path <> ".cardano.sk"
+             , sk
              ]
         where
-          path = keyGenConfigPathPrefix kgc
+          (vk, sk) = keyGenConfigFiles kgc
+
+      CardanoCliCommand_SubmitTxFile file ->
+        base ["transaction", "submit", "--testnet-magic", magic, "--tx-file", file]
+
+      CardanoCliCommand_GetTxId file ->
+        base ["transaction", "txid", "--tx-file", file]
 
     base = proc cardanoCliPath
 
@@ -154,7 +216,3 @@ makeCliProcess ni command =
 
 cardanoCliPath :: FilePath
 cardanoCliPath = $(staticWhich "cardano-cli")
-
-maybeToEither :: a -> Maybe b -> Either a b
-maybeToEither _ (Just b)  = Right b
-maybeToEither a _ = Left a
