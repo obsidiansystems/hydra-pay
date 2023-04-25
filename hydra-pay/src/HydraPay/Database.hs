@@ -15,6 +15,8 @@ data ProxiesT f = ProxyInfo
    , _proxy_hydraAddress :: C f Text
    , _proxy_verificationKeyPath :: C f Text
    , _proxy_signingKeyPath :: C f Text
+   , _proxy_hydraVerificationKeyPath :: C f Text
+   , _proxy_hydraSigningKeyPath :: C f Text
    }
    deriving (Generic)
 
