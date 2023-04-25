@@ -225,20 +225,6 @@ generateHydraKeys path = do
       pure $ Right $ mkKeyPair [i|#{path}.hydra.sk|] [i|#{path}.hydra.vk|]
     _ -> pure $ Left stderr
 
--- | Publishes the reference scripts if they don't exist on chain, will read them otherwise
--- getReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => FilePath -> SigningKey -> m (Either String HydraScriptTxId)
--- getReferenceScripts scriptPath sk = runExceptT $ do
---   exists <- liftIO $ doesFileExist scriptPath
---   case exists of
---     True -> liftIO $ T.readFile scriptPath
---     False -> do
---       scripts <- ExceptT $ publishReferenceScripts sk
---       lift $ liftIO $ T.writeFile scriptPath scripts
---       pure scripts
---
--- -- TODO: Make this generic over Cardano node socket path/network id?
--- publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m) => SigningKey -> m (Either String HydraScriptTxId)
--- publishReferenceScripts sk = do
 publishReferenceScripts :: (MonadIO m, MonadLog (WithSeverity (Doc ann)) m)
   => CardanoNodeInfo
   -> SigningKey
