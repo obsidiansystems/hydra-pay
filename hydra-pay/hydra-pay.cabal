@@ -12,8 +12,10 @@ library
                , lens
                , monad-logger
                , monad-logger-extras
+               , websockets
                , bytestring
                , bytestring-aeson-orphans
+               , exceptions
                , aeson
                , lens-aeson
                , transformers
@@ -21,6 +23,7 @@ library
                , reflex
                , reflex-fsnotify
                , directory
+               , filepath
                , stm
                , mtl
                , dependent-sum
@@ -37,6 +40,7 @@ library
                , beam-core
                , beam-postgres
                , beam-automigrate
+               , network
                , time
 
   default-extensions:
@@ -60,11 +64,21 @@ library
 
   exposed-modules:
     HydraPay
+    HydraPay.Orphans
+    HydraPay.PaymentChannel
     HydraPay.Cardano.Cli
     HydraPay.Logging
     HydraPay.Cardano.Node
+    HydraPay.Cardano.Hydra
+    HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Tools
     HydraPay.Host
     HydraPay.Watch
+    HydraPay.PortRange
     HydraPay.Database
+    HydraPay.Utils
+    HydraPay.Types
+    HydraPay.Proxy
+
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
