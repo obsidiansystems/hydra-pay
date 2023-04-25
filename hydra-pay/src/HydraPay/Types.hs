@@ -4,7 +4,6 @@ module HydraPay.Types where
 
 import Data.Int
 import Data.Text (Text)
-import Data.Text as T
 import HydraPay.Utils
 import Control.Lens
 

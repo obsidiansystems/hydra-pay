@@ -7,8 +7,6 @@ import Reflex
 import Reflex.FSNotify hiding (wrapWatch, watchDir)
 import qualified System.FSNotify as FS
 
-import HydraPay.Host
-
 wrapWatch
   :: (MonadIO m, TriggerEvent t m)
   => (FS.WatchManager -> pathinfo -> FS.Action -> IO a)

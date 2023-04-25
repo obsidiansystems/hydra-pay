@@ -38,7 +38,7 @@ let
       };
 
       overrides = self: super: pd.overrides self super // {
-        aeson-gadt-th = haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme";
+        aeson-gadt-th = haskellLib.doJailbreak (haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme");
         reflex-gadt-api = self.callCabal2nix "reflex-gadt-api" deps.reflex-gadt-api {};
         string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
 

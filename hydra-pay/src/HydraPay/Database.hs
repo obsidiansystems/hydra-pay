@@ -13,8 +13,7 @@ import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Backend.SQL
 import qualified Database.Beam.AutoMigrate as BA
-import Database.PostgreSQL.Simple (Connection, withTransaction)
-import qualified Cardano.Api as Api
+import Database.PostgreSQL.Simple (withTransaction)
 
 data ProxiesT f = ProxyInfo
    { _proxy_chainAddress :: C f Text

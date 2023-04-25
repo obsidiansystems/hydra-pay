@@ -4,12 +4,8 @@ module HydraPay.Cardano.Hydra.Api where
 
 import GHC.Generics
 import Data.Aeson
-import Data.String
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Set (Set)
-import qualified Data.Set as Set
-import qualified Data.ByteString as BS
 
 data ClientInput
   = Init

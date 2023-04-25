@@ -7,7 +7,6 @@ import HydraPay.Utils
 import HydraPay.Cardano.Node
 
 import Data.Bifunctor
-import System.Exit
 import System.Which
 import System.Process
 import System.Directory
@@ -16,13 +15,11 @@ import System.FilePath
 import Control.Lens
 
 import Control.Monad.IO.Class
-import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except
 import qualified Data.Aeson as Aeson
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
 
@@ -46,7 +43,7 @@ data KeyGenConfig
 -- | Get the paths to the keys
 keyGenConfigPaths :: KeyGenConfig -> (FilePath, FilePath)
 keyGenConfigPaths = \case
-  KeyGenConfigFromTemplate (KeyGenTemplate path name) -> (path, path)
+  KeyGenConfigFromTemplate (KeyGenTemplate path _) -> (path, path)
   KeyGenConfig vk sk -> (takeDirectory vk, takeDirectory sk)
 
 -- | Get the full filenames for each key
@@ -95,7 +92,7 @@ runCardanoCli a command = do
         str <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
 
-    CardanoCliCommand_BuildAddress vkPath -> do
+    CardanoCliCommand_BuildAddress _ -> do
       fmap (first T.pack) $ runExceptT $ do
         addrStr <- ExceptT $ eitherReadProcess cp
         ExceptT $ pure $ maybeToEither "Failed to deserialize to Any Address" $ Api.deserialiseAddress Api.AsAddressAny . T.pack $ addrStr

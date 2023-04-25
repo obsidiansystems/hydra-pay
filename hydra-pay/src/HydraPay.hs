@@ -5,7 +5,6 @@ module HydraPay where
 
 import System.Which
 import System.Directory
-import System.FilePath
 import System.IO
 import System.IO.Temp
 
@@ -27,8 +26,6 @@ import HydraPay.Logging
 import HydraPay.PaymentChannel
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
-import HydraPay.Cardano.Hydra
-import HydraPay.Cardano.Hydra.Tools
 import HydraPay.Proxy
 import qualified HydraPay.Database as DB
 
@@ -38,26 +35,19 @@ import Control.Concurrent.STM
 import Data.Int
 import Data.String
 import Data.Text (Text)
-import Data.Bifunctor
 import qualified Data.Text as T
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import ByteString.Aeson.Orphans
 
 import Data.Map (Map)
 import qualified Data.Map as Map
 
-import Cardano.Ledger.SafeHash as Hash
-import Cardano.Crypto.Hash.Class as Hash
 import Cardano.Transaction hiding (TxId)
 
 import Data.Pool
-import Database.PostgreSQL.Simple (Connection, withTransaction)
 import Gargoyle.PostgreSQL.Connect
-import Database.Beam
 import Database.Beam.Postgres
-import Database.Beam.Backend.SQL.BeamExtensions
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
@@ -114,10 +104,10 @@ mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just .
     ni = a ^. nodeInfo
 
 sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
-sendFuelTo a pparams from skPath to amount = do
+sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a socketPath paramsPath
-    fmap (TxId . T.pack) $ eval cfg $ payFuelTo from skPath to amount
+    fmap (TxId . T.pack) $ eval cfg $ payFuelTo fromAddr skPath toAddr amount
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
@@ -130,7 +120,7 @@ withProtocolParamsFile pparams action = do
     Aeson.encodeFile paramsPath pparams
     action paramsPath
 
-getProxyTx :: (HasHydraPay a, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
+getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams addr lovelace = runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
@@ -152,7 +142,7 @@ assumeWitnessed bs = do
              , "}"
              ]
 
-submitTxCbor :: (HasLogger a, HasHydraPay a, HasNodeInfo a, MonadIO m) => a -> BS.ByteString -> m (Either Text TxId)
+submitTxCbor :: (HasLogger a, HasNodeInfo a, MonadIO m) => a -> BS.ByteString -> m (Either Text TxId)
 submitTxCbor state cbor = runExceptT $ do
   liftIO $ createDirectoryIfMissing True tempTxDir
   ExceptT $ liftIO $ withTempFile tempTxDir "tx" $ \fp handle -> do
@@ -174,14 +164,14 @@ waitForTxInput state txin = runExceptT $ do
       ExceptT $ waitForTxInput state txin
 
 payFuelTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
-payFuelTo from skPath to lovelace = do
-  Output {..} <- outputWithDatumHash (addressString to) (fromString $ show lovelace <> " lovelace") (BS.unpack fuelMarkerDatumHash)
+payFuelTo fromAddr skPath toAddr lovelace = do
+  Output {..} <- outputWithDatumHash (addressString toAddr) (fromString $ show lovelace <> " lovelace") (BS.unpack fuelMarkerDatumHash)
   void $ selectInputs oValue fromStr
   changeAddress fromStr
   void $ balanceNonAdaAssets fromStr
   sign skPath
   where
-    fromStr = addressString from
+    fromStr = addressString fromAddr
 
 payToProxyTx :: Api.AddressAny -> Int32 -> ProxyInfo -> Tx ()
 payToProxyTx addr lovelace proxy = do
@@ -215,3 +205,4 @@ txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
 
 txOutValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Api.Lovelace
 txOutValue (Api.TxOut _ (Api.TxOutValue _ value) _ _) = Api.selectLovelace value
+txOutValue _ = 0

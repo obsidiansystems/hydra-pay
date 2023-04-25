@@ -8,7 +8,6 @@ import Control.Monad.Trans.Except
 import qualified Cardano.Api as Api
 import Database.Beam
 import Database.Beam.Postgres
-import Database.PostgreSQL.Simple (Connection, withTransaction)
 import Database.Beam.Backend.SQL.BeamExtensions
 
 import Data.Text (Text)

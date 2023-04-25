@@ -28,7 +28,6 @@ library
                , mtl
                , dependent-sum
                , containers
-               , cardano-api
                , cardano-transaction
                , temporary
                , postgresql-simple
@@ -42,6 +41,23 @@ library
                , beam-automigrate
                , network
                , time
+               , aeson-gadt-th
+               , hexstring
+               , constraints-extras
+
+               , cardano-addresses
+               , cardano-api
+               , cardano-binary
+               , cardano-crypto
+               , cardano-crypto-class
+               , cardano-ledger-alonzo
+               , cardano-ledger-babbage
+               , cardano-ledger-core
+               , cardano-ledger-shelley
+               , cardano-ledger-shelley-ma
+               , cardano-slotting
+               , cardano-wallet
+               , cardano-wallet-coin-selection
 
   default-extensions:
     DerivingStrategies

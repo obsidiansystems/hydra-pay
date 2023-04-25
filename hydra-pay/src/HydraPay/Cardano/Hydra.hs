@@ -10,12 +10,9 @@ import Data.Int
 import Data.Word
 import Data.Maybe
 import Data.Text (Text)
-import Data.Set (Set)
 import Data.Traversable
 import Data.Aeson (encode, eitherDecode)
-import qualified Data.Set as Set
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
 import Data.Map (Map)
 import qualified Data.Map as Map
 
@@ -33,10 +30,9 @@ import Control.Concurrent
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Concurrent.STM
+import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Cardano.Api as Api
 
 import Network.WebSockets
 
@@ -107,47 +103,48 @@ hydraNodePath = $(staticWhich "hydra-node")
 mkTwoPartyHydraNodeConfigs :: (HasNodeInfo a, HasLogger a, MonadIO m) => a -> TxId -> PortRange -> HydraChainConfig -> TwoPartyHeadConfig -> m (Either Text [HydraNodeConfig])
 mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparams) (TwoPartyHeadConfig p1 p2 p1dir p2dir p1log p2log p1LogErr p2LogErr p1tlog p2tlog) = runExceptT $ do
   pa <- ExceptT $ allocatePorts a prange 6
-  let
-    [firstPort, firstApiPort, firstMonitorPort, secondPort, secondApiPort, secondMonitorPort] = allocatedPorts pa
-  pure [ HydraNodeConfig
-         1
-         firstPort
-         firstApiPort
-         firstMonitorPort
-         [mkLocalPeer secondPort]
-         (p1 ^. proxyInfo_hydraSigningKey)
-         [p2 ^. proxyInfo_hydraVerificationKey]
-         scriptsTxId
-         (p1 ^. proxyInfo_signingKey)
-         [p2 ^. proxyInfo_verificationKey]
-         genesis
-         pparams
-         (ninfo ^. nodeInfo_magic)
-         (ninfo ^. nodeInfo_socketPath)
-         p1dir
-         p1log
-         p1LogErr
-         p1tlog
-       , HydraNodeConfig
-         2
-         secondPort
-         secondApiPort
-         secondMonitorPort
-         [mkLocalPeer firstPort]
-         (p2 ^. proxyInfo_hydraSigningKey)
-         [p1 ^. proxyInfo_hydraVerificationKey]
-         scriptsTxId
-         (p2 ^. proxyInfo_signingKey)
-         [p1 ^. proxyInfo_verificationKey]
-         genesis
-         pparams
-         (ninfo ^. nodeInfo_magic)
-         (ninfo ^. nodeInfo_socketPath)
-         p2dir
-         p2log
-         p2LogErr
-         p2tlog
-       ]
+  case allocatedPorts pa of
+    [firstPort, firstApiPort, firstMonitorPort, secondPort, secondApiPort, secondMonitorPort] -> do
+      pure [ HydraNodeConfig
+             1
+             firstPort
+             firstApiPort
+             firstMonitorPort
+             [mkLocalPeer secondPort]
+             (p1 ^. proxyInfo_hydraSigningKey)
+             [p2 ^. proxyInfo_hydraVerificationKey]
+             scriptsTxId
+             (p1 ^. proxyInfo_signingKey)
+             [p2 ^. proxyInfo_verificationKey]
+             genesis
+             pparams
+             (ninfo ^. nodeInfo_magic)
+             (ninfo ^. nodeInfo_socketPath)
+             p1dir
+             p1log
+             p1LogErr
+             p1tlog
+           , HydraNodeConfig
+             2
+             secondPort
+             secondApiPort
+             secondMonitorPort
+             [mkLocalPeer firstPort]
+             (p2 ^. proxyInfo_hydraSigningKey)
+             [p1 ^. proxyInfo_hydraVerificationKey]
+             scriptsTxId
+             (p2 ^. proxyInfo_signingKey)
+             [p1 ^. proxyInfo_verificationKey]
+             genesis
+             pparams
+             (ninfo ^. nodeInfo_magic)
+             (ninfo ^. nodeInfo_socketPath)
+             p2dir
+             p2log
+             p2LogErr
+             p2tlog
+           ]
+    _ -> throwError "Failed to allocate ports"
   where
     ninfo = a ^. nodeInfo
 
@@ -214,10 +211,10 @@ spawnHydraNodeApiConnectionThread a config status pendingRequests inputs =
     waitForApi apiPort
     logInfo a "communicationThread" "API available connecting..."
     runClient "127.0.0.1" (fromIntegral apiPort) "/" $ \conn -> forever $ do
-      forkIO $ forever $ do
-        input <- atomically $ readTBQueue inputs
-        logInfo a "sendingThread" $ "Sending input: " <> tShow input
-        sendDataMessage conn $ Text (encode input) Nothing
+      _ <- forkIO $ forever $ do
+        cInput <- atomically $ readTBQueue inputs
+        logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
+        sendDataMessage conn $ Text (encode cInput) Nothing
       withPingThread conn 60 (pure ()) $ do
         payload <- receiveDataMessage conn
         let
@@ -254,7 +251,7 @@ handleRequests requests output = do
     pure (newMap, ())
 
 isResponse :: ServerOutput -> ClientInput -> Bool
-isResponse (CommandFailed offending) input = offending == input
+isResponse (CommandFailed offending) cInput = offending == cInput
 isResponse (HeadIsInitializing _ _) Init = True
 isResponse _ _ = False
 
@@ -265,19 +262,20 @@ sendHydraHeadCommand (HydraHead (node:_)) = \case
     -- Submit the request
     withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
       let
-        input = Init
+        cInput = Init
 
         nextId = case Map.null current of
           True -> 0
           False -> fst $ Map.findMax current
-        req = HydraNodeRequest nextId input mailbox
-      liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) input
+        req = HydraNodeRequest nextId cInput mailbox
+      liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) cInput
       pure (Map.insert nextId req current, ())
     output <- liftIO $ atomically $ takeTMVar mailbox
     case output of
       CommandFailed _ -> pure $ Left "Command Failed"
       HeadIsInitializing _ _ -> pure $ Right ()
       _ -> pure $ Left $ "Invalid response received" <> tShow output
+sendHydraHeadCommand (HydraHead _) = error "Invalid head encountered"
 
 logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
 logTo out err cp =

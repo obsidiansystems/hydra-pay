@@ -4,11 +4,9 @@ module HydraPay.PaymentChannel where
 
 import Data.Int
 import Data.Aeson
-import Data.Time
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Data.Traversable
 import Data.Foldable
 
 import Control.Monad.IO.Class
@@ -26,7 +24,6 @@ import System.FilePath
 import Control.Lens
 
 import HydraPay.Proxy
-import HydraPay.Orphans
 import HydraPay.Logging
 import HydraPay.PortRange
 import HydraPay.Cardano.Node
@@ -42,7 +39,6 @@ import qualified HydraPay.Database as Db
 import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Backend.SQL
-import qualified Database.Beam.AutoMigrate as BA
 import Database.Beam.Backend.SQL.BeamExtensions
 
 data PaymentChannelConfig = PaymentChannelConfig
@@ -87,14 +83,14 @@ instance FromJSON PaymentChannelInfo
 makeLenses ''PaymentChannelInfo
 
 paymentChannelDisplayName :: PaymentChannelInfo -> Text
-paymentChannelDisplayName pi =
-  case paymentChannelCanHandle pi of
+paymentChannelDisplayName pinfo =
+  case paymentChannelCanHandle pinfo of
     True -> "New Request"
-    False -> pi ^. paymentChannelInfo_name
+    False -> pinfo ^. paymentChannelInfo_name
 
 paymentChannelCanHandle :: PaymentChannelInfo -> Bool
-paymentChannelCanHandle pi =
-  pi ^. paymentChannelInfo_status == PaymentChannelPending && not (pi ^. paymentChannelInfo_initiator)
+paymentChannelCanHandle pinfo =
+  pinfo ^. paymentChannelInfo_status == PaymentChannelPending && not (pinfo ^. paymentChannelInfo_initiator)
 
 withPaymentChannelManager :: (PaymentChannelManager -> IO a) -> IO a
 withPaymentChannelManager action = do
@@ -107,13 +103,13 @@ terminateRunningPaymentChannels :: MonadIO m => PaymentChannelManager -> m ()
 terminateRunningPaymentChannels (PaymentChannelManager channels) = do
   withTMVar channels $ \running -> do
     for_ (Map.elems running) $ \headVar -> do
-      withTMVar headVar $ \head@(HydraHead handles) -> do
-        for_ handles $ \(HydraNode _ handle@(_, out, err, ph) thread _ _ _) -> liftIO $ do
-          cleanupProcess handle
+      withTMVar headVar $ \hydraHead@(HydraHead handles) -> do
+        for_ handles $ \(HydraNode _ nodeHandle@(_, out, err, _) thread _ _ _) -> liftIO $ do
+          cleanupProcess nodeHandle
           maybe (pure ()) hClose out
           maybe (pure ()) hClose err
           killThread thread
-        pure (head, ())
+        pure (hydraHead, ())
     pure (running, ())
 
 getRunningHead :: (MonadIO m, HasLogger a, HasPaymentChannelManager a) => a -> Int32 -> m (Either Text (TMVar HydraHead))
@@ -127,22 +123,22 @@ getRunningHead a hid = do
     runningChannels = a ^. paymentChannelManager . paymentChannelManager_runningChannels
 
 trackRunningHead :: (MonadIO m, HasLogger a, HasPaymentChannelManager a) => a -> Int32 -> HydraHead -> m (Either Text ())
-trackRunningHead a hid head = do
+trackRunningHead a hid hydraHead = do
   logInfo a "addRunningHeadToManager" $ "Adding a running head to the payment channel manager"
   liftIO $ withTMVar runningChannels $ \running -> do
     case Map.lookup hid running of
-      Just headVar -> do
+      Just _ -> do
         let errMsg = "Running head already found under" <> tShow hid
         logWarn a "addRunningHeadToManager" errMsg
         pure (running, Left errMsg)
       Nothing -> do
         logInfo a "addRunningHeadToManager" $ "New head added to payment channel manager under " <> tShow hid
-        headVar <- newTMVarIO head
+        headVar <- newTMVarIO hydraHead
         pure (Map.insert hid headVar running, Right ())
   where
     runningChannels = a ^. paymentChannelManager . paymentChannelManager_runningChannels
 
-initializePaymentChannel :: (MonadIO m, HasLogger a, HasPortRange a, HasNodeInfo a, HasPaymentChannelManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+initializePaymentChannel :: (MonadIO m, HasLogger a, HasPaymentChannelManager a) => a -> Int32 -> m (Either Text ())
 initializePaymentChannel a pid = do
   logInfo a "initializePaymentChannel" $ "Attempting to Init channel " <> tShow pid
   result <- runExceptT $ do
@@ -243,10 +239,10 @@ createPaymentChannel a (PaymentChannelConfig name first second chain) = runExcep
         createDirectoryIfMissing True persistSecond
 
       nodeConfigs <- ExceptT $ mkTwoPartyHydraNodeConfigs a previewScriptTxId (a ^. portRange) chain headConfig
-      head <- runHydraHead a nodeConfigs
+      hydraHead <- runHydraHead a nodeConfigs
       let
         headId = Db.paymentChannelId dbChan
-      ExceptT $ trackRunningHead a headId head
+      ExceptT $ trackRunningHead a headId hydraHead
       pure headId
   where
     firstText = Api.serialiseAddress first
