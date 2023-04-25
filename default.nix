@@ -15,7 +15,7 @@ let
     src = deps.hydra;
   }).defaultNix.packages.${system};
   cardano-node = import deps.cardano-node {};
-  pkgs = obelisk.nixpkgs;
+  pkgs = nixpkgs;
   livedoc-devnet-script = pkgs.runCommand "livedoc-devnet-script" { } ''
     cp -r ${./livedoc-devnet} $out
   '';
@@ -39,7 +39,7 @@ let
 
       overrides = self: super: pd.overrides self super // {
         aeson-gadt-th = haskellLib.doJailbreak (haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme");
-        reflex-gadt-api = self.callCabal2nix "reflex-gadt-api" deps.reflex-gadt-api {};
+        reflex-gadt-api = haskellLib.doJailbreak (self.callCabal2nix "reflex-gadt-api" deps.reflex-gadt-api {});
         string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
 
         bytestring-aeson-orphans = haskellLib.doJailbreak super.bytestring-aeson-orphans;
