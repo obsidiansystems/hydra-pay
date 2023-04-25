@@ -1,5 +1,6 @@
 # <p align="center">Hydra for Payments (Hydra Pay)</p>
 * [:dango: Introduction](#dango-introduction)
+* [Haskell Library](#haskell-library)
 * [👷🏾‍♂️ Running Hydra Pay](#-running-hydra-pay)
   * [With Docker](#with-docker)
   * [With Nix](#with-nix)
@@ -57,7 +58,31 @@ This will cover:
   * Fanout
 * A real-world example application
 
-We assume at this time you are knowledgeable about Hydra and the basic Hydra Head lifecycle. If not take some time to familiarize yourself with [here](https://hydra.family/head-protocol/core-concepts/). 
+We assume at this time you are knowledgeable about Hydra and the basic Hydra Head lifecycle. If not take some time to familiarize yourself with [here](https://hydra.family/head-protocol/core-concepts/).
+
+## Haskell Library
+
+A first party haskell library `hydra-pay` provides direct access to powerful features like:
+* A simple, powerful, and customizable logger with automatic rotation, file size limits, and file management.
+* Automated node management with integrated logging and error tracking, providing a convenient interface for interaction and information.
+* A typesafe GADT based interface into cardano-cli that allows easy:
+  * Tip and Protocol Parameter queries
+  * Balance and UTxO queries
+  * Key/Address generation
+  * Transaction submission
+  * Transaction completion detection and waiting
+  This part of the library plays nice with any cardano-nodes you run, by intelligently waiting for the cardano node's
+  socket before performing any actions.
+* Handy Orphans for communicating cardano and hydra node information over json.
+* Drop in database backing for proxies, hydra heads, and payment channels, with customizable persistence and simple 
+  typeclasses .
+* Direct payment channel API
+  This API gives you first party payment channels, and if this fits your usecase, greatly simplifies your experience interacting with Hydra Heads.
+* Port allocation utilities, used for the node and the various payment channels, but can simplify logic within a dapp or light wallet. Simply ask for ports, and they are automatically returned.
+
+This library helps you kickstart DApp or LightWallet development by handling logging, state management, persistence, node and head interactions, and even port allocation. 
+
+**Important** Very soon these new and upgraded features will be available through the websocket interface for those who aren't using Haskell to develop their DApp or LightWallet, with all the same convenience, ease of use, power, and strong guarantees. 
 
 ## 👷🏾‍♂️ Running Hydra Pay
 
@@ -220,6 +245,11 @@ Foundational:
 - [x] TTL on add funds and fuel pre-built transactions
 - [x] Choice of network: Devnet, Preview
 - [x] Default Hydra Node configuration
+- [x] Haskell library for direct integration
+- [ ] First party Payment Channel Api over the websocket api
+- [ ] Proxy, Head, and Payment Channel persistence for all over the websocket api
+- [ ] Access to logging and persistence faculties over websocket api
+- [ ] Simplied websocket tagged types
 
 ## 🗝 API
 
