@@ -380,7 +380,6 @@ header name = do
   elClass "div" "text-xl mt-8 mb-2 font-semibold" $ text name
   elClass "div" "my-2 w-full h-px bg-gray-200" blank
 
--- TODO(skylar): Use Requester from reflex
 requester :: (Reflex t, EventWriter t [ClientMsg] m, MonadHold t m) => Dynamic t Int64 -> Event t (Tagged ServerMsg) -> Event t ClientMsg -> m (Event t (Tagged ServerMsg))
 requester lastTagId serverMsg clientMsg = do
   waitingTag <- holdDyn Nothing $ current (Just <$> lastTagId) <@ clientMsg
@@ -661,8 +660,6 @@ fundingProxyAddresses lastTagId serverMsg isManagedDevnet = do
         pure $ fromMaybe (ada 3) . readMaybe . T.unpack <$> _inputElement_value ie
 
       pure $ GetAddTx <$> txType <*> addr <*> amount
-
-  -- TODO: make sure we say that this has to be an address with funds
 
   let
     shellCommands cardanoParams = \case

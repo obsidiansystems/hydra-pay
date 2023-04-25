@@ -2,6 +2,10 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
+## Version v0.1.1
+
+* First party haskell library with extensible logging, payment channel api, upgraded persistence, upgraded node and head management, wallet and key generation facilities
+
 ##  Version v0.1.0
 
 * Automated spin-up and shut down of Hydra Node networks

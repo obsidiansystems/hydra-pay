@@ -1,0 +1,100 @@
+name: hydra-pay
+version: 0.1
+cabal-version: >= 1.10
+build-type: Simple
+
+library
+  hs-source-dirs: src
+  build-depends: base
+               , process
+               , which
+               , text
+               , lens
+               , monad-logger
+               , monad-logger-extras
+               , websockets
+               , bytestring
+               , bytestring-aeson-orphans
+               , exceptions
+               , aeson
+               , lens-aeson
+               , transformers
+               , fsnotify
+               , reflex
+               , reflex-fsnotify
+               , directory
+               , filepath
+               , stm
+               , mtl
+               , dependent-sum
+               , containers
+               , cardano-transaction
+               , temporary
+               , postgresql-simple
+               , gargoyle-postgresql
+               , gargoyle-postgresql-connect
+               , gargoyle-postgresql-nix
+               , gargoyle
+               , resource-pool
+               , beam-core
+               , beam-postgres
+               , beam-automigrate
+               , network
+               , time
+               , aeson-gadt-th
+               , hexstring
+               , constraints-extras
+
+               , cardano-addresses
+               , cardano-api
+               , cardano-binary
+               , cardano-crypto
+               , cardano-crypto-class
+               , cardano-ledger-alonzo
+               , cardano-ledger-babbage
+               , cardano-ledger-core
+               , cardano-ledger-shelley
+               , cardano-ledger-shelley-ma
+               , cardano-slotting
+               , cardano-wallet
+               , cardano-wallet-coin-selection
+
+  default-extensions:
+    DerivingStrategies
+    DeriveGeneric
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    LambdaCase
+    ConstraintKinds
+    RankNTypes
+    MultiParamTypeClasses
+    OverloadedStrings
+    QuantifiedConstraints
+    RecursiveDo
+    ScopedTypeVariables
+    TypeFamilies
+    TypeApplications
+    DataKinds
+    UndecidableInstances
+
+  exposed-modules:
+    HydraPay
+    HydraPay.Orphans
+    HydraPay.PaymentChannel
+    HydraPay.Cardano.Cli
+    HydraPay.Logging
+    HydraPay.Cardano.Node
+    HydraPay.Cardano.Hydra
+    HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Tools
+    HydraPay.Host
+    HydraPay.Watch
+    HydraPay.PortRange
+    HydraPay.Database
+    HydraPay.Utils
+    HydraPay.Types
+    HydraPay.Proxy
+
+
+  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
