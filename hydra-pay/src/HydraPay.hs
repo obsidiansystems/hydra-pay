@@ -4,6 +4,8 @@
 module HydraPay where
 
 import System.Which
+import System.Directory
+import System.FilePath
 import System.IO
 import System.IO.Temp
 
@@ -19,25 +21,36 @@ import qualified Data.Aeson as Aeson
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
 
+import HydraPay.Types
+import HydraPay.Utils
 import HydraPay.Logging
+import HydraPay.PaymentChannel
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
+import HydraPay.Cardano.Hydra
+import HydraPay.Cardano.Hydra.Tools
+import HydraPay.Proxy
 import qualified HydraPay.Database as DB
 
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
 
 import Data.Int
 import Data.String
+import Data.Text (Text)
+import Data.Bifunctor
 import qualified Data.Text as T
 
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import ByteString.Aeson.Orphans
 
 import Data.Map (Map)
 import qualified Data.Map as Map
 
-import Cardano.Transaction
+import Cardano.Ledger.SafeHash as Hash
+import Cardano.Crypto.Hash.Class as Hash
+import Cardano.Transaction hiding (TxId)
 
 import Data.Pool
 import Database.PostgreSQL.Simple (Connection, withTransaction)
@@ -49,26 +62,21 @@ import Database.Beam.Backend.SQL.BeamExtensions
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
-data ProxyInfo = ProxyInfo
-  { _proxyInfo_address :: Api.AddressAny
-  , _proxyInfo_verificationKey :: FilePath
-  , _proxyInfo_signingKey :: FilePath
-  }
-  deriving (Eq, Show)
-
-makeLenses ''ProxyInfo
-
 data HydraPayState = HydraPayState
   { _hydraPay_proxies :: TMVar (Map Api.AddressAny ProxyInfo)
   , _hydraPay_nodeInfo :: NodeInfo
   , _hydraPay_databaseConnectionPool :: Pool Connection
   , _hydraPay_logger :: Logger
+  , _hydraPay_paymentChannelManager :: PaymentChannelManager
   }
 
 makeLenses ''HydraPayState
 
 instance HasNodeInfo HydraPayState where
   nodeInfo = hydraPay_nodeInfo
+
+instance DB.HasDbConnectionPool HydraPayState where
+  dbConnectionPool = hydraPay_databaseConnectionPool
 
 class HasHydraPay a where
   hydraPay :: Lens' a HydraPayState
@@ -78,6 +86,9 @@ instance HasHydraPay HydraPayState where
 
 instance HasLogger HydraPayState where
   getLogger = hydraPay_logger
+
+instance HasPaymentChannelManager HydraPayState where
+  paymentChannelManager = hydraPay_paymentChannelManager
 
 data HydraPayConfig = HydraPayConfig
   { hydraPaySettings_database :: FilePath
@@ -89,34 +100,89 @@ runHydraPay :: HydraPayConfig -> (HydraPayState -> IO a) -> IO a
 runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db $ \pool -> do
   withResource pool DB.doAutomigrate
   withCardanoNode ncfg $ \ni -> do
-    proxies <- newTMVarIO mempty
-    action $ HydraPayState proxies ni pool l
-
-withTMVar :: MonadIO m => TMVar a -> (a -> m (a, b)) -> m b
-withTMVar var action = do
-  val <- liftIO $ atomically $ takeTMVar var
-  (a, b) <- action val
-  liftIO $ atomically $ putTMVar var a
-  pure b
+    withPaymentChannelManager $ \manager -> do
+      proxies <- newTMVarIO mempty
+      action $ HydraPayState proxies ni pool l manager
 
 addressString :: Api.AddressAny -> String
 addressString = T.unpack . Api.serialiseAddress
 
--- | Given node information, and a path to the protocol parameters create an EvalConfig for running the Tx monad
-mkEvalConfig :: HasNodeInfo a => a -> FilePath -> EvalConfig
-mkEvalConfig a ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False
+-- | Given node information, and a path to the node socket and protocol parameters create an EvalConfig for running the Tx monad
+mkEvalConfig :: HasNodeInfo a => a -> FilePath -> FilePath -> EvalConfig
+mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just nsFp)
   where
     ni = a ^. nodeInfo
 
-getProxyTx :: (HasHydraPay a, HasNodeInfo a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either String BS.ByteString)
-getProxyTx a pparams addr lovelace = runExceptT $ do
-  proxyInfo <- ExceptT $ queryProxyInfo a addr
-  ExceptT $ liftIO $ withTempFile "proxy-tx" "params" $ \paramsPath handle -> do
+sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+sendFuelTo a pparams from skPath to amount = do
+  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath paramsPath
+    fmap (TxId . T.pack) $ eval cfg $ payFuelTo from skPath to amount
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath
+
+-- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
+withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
+withProtocolParamsFile pparams action = do
+  createDirectoryIfMissing True tempTxDir
+  withTempFile tempTxDir "params" $ \paramsPath handle -> do
     hClose handle
     Aeson.encodeFile paramsPath pparams
-    let cfg = mkEvalConfig a paramsPath
+    action paramsPath
+
+getProxyTx :: (HasHydraPay a, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
+getProxyTx a pparams addr lovelace = runExceptT $ do
+  proxyInfo <- ExceptT $ queryProxyInfo a addr
+  ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath paramsPath
     txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
-    pure $ fmap LBS.toStrict $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _JSON
+    -- NOTE(skylar): For some reason the _JSON key doesn't work in this case, maybe it has to do with the instance for ByteString
+    pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath
+
+tempTxDir :: FilePath
+tempTxDir = "tx"
+
+assumeWitnessed :: BS.ByteString -> BS.ByteString
+assumeWitnessed bs = do
+  BS.unlines [ "{"
+             , "\"type\": \"Tx BabbageEra\","
+             , "\"description\": \"Ledger Cddl Format\","
+             , "\"cborHex\": \"" <> bs <> "\""
+             , "}"
+             ]
+
+submitTxCbor :: (HasLogger a, HasHydraPay a, HasNodeInfo a, MonadIO m) => a -> BS.ByteString -> m (Either Text TxId)
+submitTxCbor state cbor = runExceptT $ do
+  liftIO $ createDirectoryIfMissing True tempTxDir
+  ExceptT $ liftIO $ withTempFile tempTxDir "tx" $ \fp handle -> do
+    logInfo state "submitTxCbor" $ "This is the CBOR: " <> tShow cbor
+    BS.hPutStr handle $ assumeWitnessed cbor
+    hClose handle
+    logInfo state "submitTxCbor" "Submitting signed transaction"
+    _ <- runCardanoCli state $ submitTxFile fp
+    runCardanoCli state $ getTxId fp
+
+waitForTxInput :: (HasLogger a, HasHydraPay a, HasNodeInfo a, MonadIO m) => a -> TxInput -> m (Either Text ())
+waitForTxInput state txin = runExceptT $ do
+  logInfo state "waitForTxInput" $ "Waiting for transaction " <> txInputToText txin
+  exists <- ExceptT $ runCardanoCli state $ txInExists txin
+  case exists of
+    True -> pure ()
+    False -> do
+      liftIO $ threadDelay 100000
+      ExceptT $ waitForTxInput state txin
+
+payFuelTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
+payFuelTo from skPath to lovelace = do
+  Output {..} <- outputWithDatumHash (addressString to) (fromString $ show lovelace <> " lovelace") (BS.unpack fuelMarkerDatumHash)
+  void $ selectInputs oValue fromStr
+  changeAddress fromStr
+  void $ balanceNonAdaAssets fromStr
+  sign skPath
+  where
+    fromStr = addressString from
 
 payToProxyTx :: Api.AddressAny -> Int32 -> ProxyInfo -> Tx ()
 payToProxyTx addr lovelace proxy = do
@@ -127,55 +193,26 @@ payToProxyTx addr lovelace proxy = do
   where
     addrStr = addressString addr
 
-queryProxyInfo :: (HasNodeInfo a, HasHydraPay a, MonadIO m) => a -> Api.AddressAny -> m (Either String ProxyInfo)
-queryProxyInfo a addr = do
-  result <- runQueryInTransaction a $ getProxyInfo addr
-  case result of
-    Nothing -> do
-      runExceptT $ do
-        (vk, sk) <- ExceptT $ runCardanoCli a $ keyGen $ KeyGenConfig "proxy-keys" $ T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr
-        proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
-        let newInfo = ProxyInfo proxyAddr vk sk
-        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ runQueryInTransaction a $ addProxyInfo addr newInfo
-    Just info -> do
-      pure $ Right info
+totalLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
+totalLovelace = sum . fmap (txOutValue) . filter (not . txOutIsFuel) . Map.elems . Api.unUTxO
 
-runQueryInTransaction :: (HasHydraPay a, MonadIO m) => a -> (Connection -> IO b) -> m b
-runQueryInTransaction a action = liftIO $ withResource pool $ \conn -> do
-  withTransaction conn (action conn)
-  where
-    pool = a ^. hydraPay . hydraPay_databaseConnectionPool
+totalLovelace' :: Api.UTxO Api.BabbageEra -> Api.Lovelace
+totalLovelace' = sum . fmap (txOutValue) . Map.elems . Api.unUTxO
 
-getProxyInfo :: MonadIO m => Api.AddressAny -> Connection -> m (Maybe ProxyInfo)
-getProxyInfo addr conn = liftIO $ do
-  proxy <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
-    proxy <- all_ (DB.db ^. DB.db_proxies)
-    guard_ (proxy ^. DB.proxy_chainAddress ==.  val_ (Api.serialiseAddress addr))
-    pure proxy
-  pure $ proxy >>= dbProxyInfoToProxyInfo
+totalFuelLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
+totalFuelLovelace = sum . fmap (txOutValue) . filter txOutIsFuel . Map.elems . Api.unUTxO
 
-addProxyInfo :: MonadIO m => Api.AddressAny -> ProxyInfo -> Connection -> m (Maybe ProxyInfo)
-addProxyInfo addr pinfo conn = liftIO $ do
-  result <- runBeamPostgres conn
-    $ runInsertReturningList
-    $ insertOnConflict (DB.db ^. DB.db_proxies)
-    (insertValues [ DB.ProxyInfo
-                    (Api.serialiseAddress addr)
-                    (pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
-                    (pinfo ^. proxyInfo_verificationKey . to (T.pack))
-                    (pinfo ^. proxyInfo_signingKey . to (T.pack))
-                  ])
-    -- If somehow we had someone insert before we did, we should get the information back out and use that
-    anyConflict onConflictDoNothing
-  pure $ headMaybe result >>= dbProxyInfoToProxyInfo
+fuelMarkerDatumHash :: BS.ByteString
+fuelMarkerDatumHash =
+  "a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3"
 
-headMaybe :: [a] -> Maybe a
-headMaybe [] = Nothing
-headMaybe (x:_) = Just x
+txOutDatumIsFuel :: Api.TxOutDatum ctx era -> Bool
+txOutDatumIsFuel (Api.TxOutDatumHash _ datumHash) =
+  Aeson.encode datumHash == LBS.fromStrict ("\"" <> fuelMarkerDatumHash <> "\"")
+txOutDatumIsFuel _ = False
 
-dbProxyInfoToProxyInfo :: DB.ProxyInfo -> Maybe ProxyInfo
-dbProxyInfoToProxyInfo pinfo =
-  ProxyInfo
-  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_chainAddress)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_verificationKeyPath)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_signingKeyPath)
+txOutIsFuel :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Bool
+txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
+
+txOutValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Api.Lovelace
+txOutValue (Api.TxOut _ (Api.TxOutValue _ value) _ _) = Api.selectLovelace value
