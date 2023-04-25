@@ -136,7 +136,6 @@ getProxyTx a pparams addr lovelace = runExceptT $ do
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a socketPath paramsPath
     txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
-    -- NOTE(skylar): For some reason the _JSON key doesn't work in this case, maybe it has to do with the instance for ByteString
     pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
