@@ -2,7 +2,7 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
-## Version v0.2.0
+## Version v0.1.1
 
 * First party haskell library with extensible logging, payment channel api, upgraded persistence, upgraded node and head management, wallet and key generation facilities
 
