@@ -5,6 +5,7 @@ module HydraPay.Database where
 import Control.Lens
 import Control.Monad.IO.Class
 
+import Data.Time
 import Data.Int
 import Data.Pool
 import Data.Proxy (Proxy(..))
@@ -14,6 +15,26 @@ import Database.Beam.Postgres
 import Database.Beam.Backend.SQL
 import qualified Database.Beam.AutoMigrate as BA
 import Database.PostgreSQL.Simple (withTransaction)
+
+data HydraHeadsT f = HydraHead
+  { _hydraHead_id :: C f (SqlSerial Int32)
+  , _hydraHead_first :: C f Text
+  , _hydraHead_second :: C f Text
+  , _hydraHead_ledgerGenesis :: C f Text
+  , _hydraHead_ledgerProtocolParams :: C f Text
+  }
+  deriving (Generic)
+
+instance Beamable HydraHeadsT
+
+instance Table HydraHeadsT where
+  data PrimaryKey HydraHeadsT f = HeadID (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = HeadID . _hydraHead_id
+
+instance Beamable (PrimaryKey HydraHeadsT)
+
+type HydraHead = HydraHeadsT Identity
 
 data ProxiesT f = ProxyInfo
    { _proxy_chainAddress :: C f Text
@@ -39,8 +60,8 @@ type ProxyInfo = ProxiesT Identity
 data PaymentChannelsT f = PaymentChannel
   { _paymentChannel_id :: C f (SqlSerial Int32)
   , _paymentChannel_name :: C f Text
-  , _paymentChannel_first :: C f Text
-  , _paymentChannel_second :: C f Text
+  , _paymentChannel_head :: PrimaryKey HydraHeadsT f
+  , _paymentChannel_createTime :: C f UTCTime
   }
   deriving (Generic)
 
@@ -55,13 +76,9 @@ instance Beamable (PrimaryKey PaymentChannelsT)
 
 type PaymentChannel = PaymentChannelsT Identity
 
-makeLenses ''PaymentChannelsT
-
-paymentChannelId :: PaymentChannel -> Int32
-paymentChannelId = unSerial . _paymentChannel_id
-
 data Db f = Db
   { _db_proxies :: f (TableEntity ProxiesT)
+  , _db_heads :: f (TableEntity HydraHeadsT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   }
   deriving (Generic)
@@ -73,6 +90,20 @@ class HasDbConnectionPool a where
 
 instance HasDbConnectionPool (Pool Connection) where
   dbConnectionPool = id
+
+newtype HeadId =
+  HeadId Int32
+
+makeLenses ''PaymentChannelsT
+makeLenses ''HydraHeadsT
+makeLenses ''ProxiesT
+makeLenses ''Db
+
+hydraHeadId :: HydraHead -> Int32
+hydraHeadId = unSerial . _hydraHead_id
+
+paymentChannelId :: PaymentChannel -> Int32
+paymentChannelId = unSerial . _paymentChannel_id
 
 db :: DatabaseSettings Postgres Db
 db = defaultDbSettings
@@ -86,9 +117,6 @@ schema = BA.fromAnnotatedDbSettings annotatedDb (Proxy @'[])
 doAutomigrate :: Connection -> IO ()
 doAutomigrate =
   BA.tryRunMigrationsWithEditUpdate annotatedDb
-
-makeLenses ''ProxiesT
-makeLenses ''Db
 
 runQueryInTransaction :: (HasDbConnectionPool a, MonadIO m) => a -> (Connection -> IO b) -> m b
 runQueryInTransaction a action = liftIO $ withResource pool $ \conn -> do

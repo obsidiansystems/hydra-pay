@@ -105,45 +105,49 @@ renderLog :: LogMessage -> T.Text
 renderLog (LogMessage l p c) =
   "[" <> (T.pack . show) l <> "] " <> p <> " - " <> c <> "\n"
 
-logReader :: LogConfig -> TBQueue LogMessage -> IO ()
-logReader settings queue = do
+logReader :: IORef (Handle, FilePath) -> LogConfig -> TBQueue LogMessage -> IO ()
+logReader logFileRef settings queue = do
   time <- getLocalTime
-  let
-    getLogFile = do
-      logFile <- aquireLogFile settings time
-      logFileRef <- newIORef logFile
-      pure logFileRef
-  bracket getLogFile (\ref -> do
-                       (h, _) <- readIORef ref
-                       hClose h) $ \logFileRef -> do
-    forever $ do
-      (fileHandle, filePath) <- readIORef logFileRef
-      msg <- atomically $ readTBQueue queue
-      let
-        handle = logHandle $ logMessage_level msg
-        renderered = renderLog msg
+  forever $ do
+    (fileHandle, filePath) <- readIORef logFileRef
+    msg <- atomically $ readTBQueue queue
+    let
+      handle = logHandle $ logMessage_level msg
+      renderered = renderLog msg
 
-      -- Log to the std stream and file handle
-      T.hPutStr handle renderered
-      T.hPutStr fileHandle renderered
+    -- Log to the std stream and file handle
+    T.hPutStr handle renderered
+    T.hPutStr fileHandle renderered
 
-      -- Check if we should rotate, because enough time has passed, or the log is too big
-      currentTime <- getLocalTime
-      let
-        isSameDay = diffDays (localDay time) (localDay currentTime) == 0
+    -- Check if we should rotate, because enough time has passed, or the log is too big
+    currentTime <- getLocalTime
+    let
+      isSameDay = diffDays (localDay time) (localDay currentTime) == 0
 
-      logSize <- getFileSize filePath
-      when (not isSameDay || logSize >= logConfig_maxFileSize settings) $ do
-        newLogFile <- aquireLogFile settings currentTime
-        hClose fileHandle
-        writeIORef logFileRef newLogFile
-      pure ()
+    logSize <- getFileSize filePath
+    when (not isSameDay || logSize >= logConfig_maxFileSize settings) $ do
+      hClose fileHandle
+      newLogFile <- aquireLogFile settings currentTime
+      writeIORef logFileRef newLogFile
+    pure ()
 
 withLogger :: LogConfig -> (Logger -> IO a) -> IO a
 withLogger settings action = do
   queue <- newTBQueueIO $ logConfig_maxQueueSize settings
-  bracket (forkIO $ logReader settings queue) killThread $ \_ -> do
+
+  -- Get the log file
+  time <- getLocalTime
+  logFile <- aquireLogFile settings time
+  logFileRef <- newIORef logFile
+
+  let
+    cleanupLogFileRef = do
+      (h, _) <- readIORef logFileRef
+      hClose h
+
+  bracket (forkIO $ logReader logFileRef settings queue) (\x -> cleanupLogFileRef >> killThread x) $ \_ -> do
     action $ Logger queue
+
 
 logM :: (MonadIO m, HasLogger a) => a -> LogLevel -> Text -> Text -> m ()
 logM a level subsystem msg = liftIO $ do

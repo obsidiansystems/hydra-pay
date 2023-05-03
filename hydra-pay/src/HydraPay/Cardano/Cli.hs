@@ -122,7 +122,6 @@ runCardanoCli a command = do
       where
         (vkPath, skPath) = keyGenConfigPaths kgc
         (vk, sk) = keyGenConfigFiles kgc
-        -- path = keyGenConfigPathPrefix kgc
   where
     cp = makeCliProcess (a ^. nodeInfo) command
 

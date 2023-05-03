@@ -26,6 +26,7 @@ import HydraPay.Logging
 import HydraPay.PaymentChannel
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
+import HydraPay.Cardano.Hydra
 import HydraPay.Proxy
 import qualified HydraPay.Database as DB
 
@@ -57,7 +58,7 @@ data HydraPayState = HydraPayState
   , _hydraPay_nodeInfo :: NodeInfo
   , _hydraPay_databaseConnectionPool :: Pool Connection
   , _hydraPay_logger :: Logger
-  , _hydraPay_paymentChannelManager :: PaymentChannelManager
+  , _hydraPay_hydraHeadManager :: HydraHeadManager
   }
 
 makeLenses ''HydraPayState
@@ -77,8 +78,8 @@ instance HasHydraPay HydraPayState where
 instance HasLogger HydraPayState where
   getLogger = hydraPay_logger
 
-instance HasPaymentChannelManager HydraPayState where
-  paymentChannelManager = hydraPay_paymentChannelManager
+instance HasHydraHeadManager HydraPayState where
+  hydraHeadManager = hydraPay_hydraHeadManager
 
 data HydraPayConfig = HydraPayConfig
   { hydraPaySettings_database :: FilePath
@@ -90,7 +91,7 @@ runHydraPay :: HydraPayConfig -> (HydraPayState -> IO a) -> IO a
 runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db $ \pool -> do
   withResource pool DB.doAutomigrate
   withCardanoNode ncfg $ \ni -> do
-    withPaymentChannelManager $ \manager -> do
+    withHydraHeadManager $ \manager -> do
       proxies <- newTMVarIO mempty
       action $ HydraPayState proxies ni pool l manager
 
@@ -181,28 +182,3 @@ payToProxyTx addr lovelace proxy = do
   void $ balanceNonAdaAssets addrStr
   where
     addrStr = addressString addr
-
-totalLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace = sum . fmap (txOutValue) . filter (not . txOutIsFuel) . Map.elems . Api.unUTxO
-
-totalLovelace' :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace' = sum . fmap (txOutValue) . Map.elems . Api.unUTxO
-
-totalFuelLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalFuelLovelace = sum . fmap (txOutValue) . filter txOutIsFuel . Map.elems . Api.unUTxO
-
-fuelMarkerDatumHash :: BS.ByteString
-fuelMarkerDatumHash =
-  "a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3"
-
-txOutDatumIsFuel :: Api.TxOutDatum ctx era -> Bool
-txOutDatumIsFuel (Api.TxOutDatumHash _ datumHash) =
-  Aeson.encode datumHash == LBS.fromStrict ("\"" <> fuelMarkerDatumHash <> "\"")
-txOutDatumIsFuel _ = False
-
-txOutIsFuel :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Bool
-txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
-
-txOutValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Api.Lovelace
-txOutValue (Api.TxOut _ (Api.TxOutValue _ value) _ _) = Api.selectLovelace value
-txOutValue _ = 0

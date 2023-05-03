@@ -77,7 +77,7 @@ queryProxyInfo a addr = do
 dbProxyInfoToProxyInfo :: DB.ProxyInfo -> Maybe ProxyInfo
 dbProxyInfoToProxyInfo pinfo =
   ProxyInfo
-  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_chainAddress)
+  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_hydraAddress)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_verificationKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_signingKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_hydraVerificationKeyPath)
