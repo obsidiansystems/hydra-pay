@@ -168,8 +168,8 @@ makeLenses ''CommsThreadConfig
 -- | Should this comms thread update the Head Status?
 commsThreadIsHeadStateReporter :: CommsThreadConfig -> Bool
 commsThreadIsHeadStateReporter cfg =
+  -- NOTE currently we just make the first node the state reported
   cfg ^. commsThreadConfig_hydraNodeConfig . hydraNodeConfig_nodeId . to (==1)
-  -- ^ currently we just make the first node the state reported
 
 -- | Transaction ID on preview from the Hydra 9.0 release
 -- https://github.com/input-output-hk/hydra/releases/tag/0.9.0
