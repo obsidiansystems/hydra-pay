@@ -47,6 +47,7 @@ data PaymentChannelConfig = PaymentChannelConfig
   { _paymentChannelConfig_name :: Text
   , _paymentChannelConfig_first :: Api.AddressAny
   , _paymentChannelConfig_second :: Api.AddressAny
+  , _paymentChannelConfig_commitAmount :: Int32
   , _paymentChannelConfig_hydraChainConfig :: HydraChainConfig
   }
 
@@ -62,8 +63,9 @@ data PaymentChannelManager = PaymentChannelManager
 
 makeLenses ''PaymentChannelManager
 
-data PaymentChannelStatus =
-  PaymentChannelOpen | PaymentChannelPending
+data PaymentChannelStatus
+  = PaymentChannelOpen
+  | PaymentChannelPending UTCTime
   deriving (Eq, Show, Generic)
 
 instance ToJSON PaymentChannelStatus
@@ -73,7 +75,6 @@ data PaymentChannelInfo = PaymentChannelInfo
   { _paymentChannelInfo_id :: Int32
   , _paymentChannelInfo_name :: Text
   , _paymentChannelInfo_other :: Text
-  , _paymentChannelInfo_expiry :: UTCTime
   , _paymentChannelInfo_status :: PaymentChannelStatus
   , _paymentChannelInfo_initiator :: Bool
   }
@@ -82,17 +83,39 @@ data PaymentChannelInfo = PaymentChannelInfo
 instance ToJSON PaymentChannelInfo
 instance FromJSON PaymentChannelInfo
 
+data TransactionDirection =
+  TransactionReceived | TransactionSent
+  deriving (Eq, Show, Enum, Generic)
+
+instance ToJSON TransactionDirection
+instance FromJSON TransactionDirection
+
+data TransactionInfo = TransactionInfo
+  { _transactionInfo_id :: Int32
+  , _transactionInfo_amount :: Int32
+  , _transactionInfo_direction :: TransactionDirection
+  }
+  deriving (Eq, Show, Generic)
+
+instance ToJSON TransactionInfo
+instance FromJSON TransactionInfo
+
+makeLenses ''TransactionInfo
 makeLenses ''PaymentChannelInfo
 
 paymentChannelDisplayName :: PaymentChannelInfo -> Text
 paymentChannelDisplayName pinfo =
-  case paymentChannelCanHandle pinfo of
+  case paymentChannelNeedsMyAcceptance pinfo of
     True -> "New Request"
     False -> pinfo ^. paymentChannelInfo_name
 
-paymentChannelCanHandle :: PaymentChannelInfo -> Bool
-paymentChannelCanHandle pinfo =
-  pinfo ^. paymentChannelInfo_status == PaymentChannelPending && not (pinfo ^. paymentChannelInfo_initiator)
+paymentChannelNeedsMyAcceptance :: PaymentChannelInfo -> Bool
+paymentChannelNeedsMyAcceptance pinfo =
+  pinfo ^. paymentChannelInfo_status . to isPending && not (pinfo ^. paymentChannelInfo_initiator)
+
+isPending :: PaymentChannelStatus -> Bool
+isPending (PaymentChannelPending _) = True
+isPending _ = False
 
 getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> m (Map Int32 PaymentChannelInfo)
 getPaymentChannelsInfo a addr = do
@@ -122,10 +145,14 @@ dbPaymentChannelToInfo addr hh pc =
   (pc ^. Db.paymentChannel_id . to unSerial)
   (pc ^. Db.paymentChannel_name)
   other
-  (pc ^. Db.paymentChannel_createTime)
-  PaymentChannelPending
+  status
   isInitiator
   where
+    status =
+      case hh ^. Db.hydraHead_secondBalance of
+        Just _ -> PaymentChannelOpen
+        Nothing -> (PaymentChannelPending $ pc ^. Db.paymentChannel_expiry)
+
     isInitiator = addrStr == hh ^. Db.hydraHead_first
 
     other = case isInitiator of
@@ -134,19 +161,118 @@ dbPaymentChannelToInfo addr hh pc =
 
     addrStr = Api.serialiseAddress addr
 
+getPaymentChannelDetails :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
+getPaymentChannelDetails a addr hid = do
+  Db.runBeam a $ runExceptT $ do
+    mHead <- runSelectReturningOne $ select $ do
+      h <- all_ (Db.db ^. Db.db_heads)
+      guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
+      pure h
+
+    case mHead of
+      Nothing -> throwError $ "Invalid head " <> tShow hid
+      Just h -> do
+        let
+          isFirst = h ^. Db.hydraHead_first == Api.serialiseAddress addr
+
+          currentBalance =
+            case isFirst of
+              True -> h ^. Db.hydraHead_firstBalance
+              False -> maybe (error "Invalid payment channel") id $ h ^. Db.hydraHead_secondBalance
+
+        transactions <- runSelectReturningList $ select $ do
+          ts <- all_ (Db.db ^. Db.db_transactions)
+          guard_ (ts ^. Db.transaction_head ==. val_ (primaryKey h))
+          pure ts
+
+        let
+          infos = Map.fromList $ fmap ((\x -> (x ^. transactionInfo_id, x)) . (dbTransactionToTransactionInfo addr)) transactions
+
+        pure (currentBalance, infos)
+
+dbTransactionToTransactionInfo :: Api.AddressAny -> Db.Transaction -> TransactionInfo
+dbTransactionToTransactionInfo addr t =
+  TransactionInfo
+  (t ^. Db.transaction_id . to unSerial)
+  (t ^. Db.transaction_amount)
+  (if Api.serialiseAddress addr == (t ^. Db.transaction_party)
+   then TransactionSent
+   else TransactionReceived
+  )
+
+sendAdaInChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
+sendAdaInChannel a hid you amount = runExceptT $ do
+  now <- liftIO $ getCurrentTime
+  ExceptT $ Db.runBeam a $ runExceptT $ do
+    mHead <- runSelectReturningOne $ select $ do
+      h <- all_ (Db.db ^. Db.db_heads)
+      guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
+      pure h
+
+    case mHead of
+      Nothing -> throwError $ "Invalid head " <> tShow hid
+      Just h -> do
+        let
+          isFirst = h ^. Db.hydraHead_first == Api.serialiseAddress you
+
+          newBalance =
+            case isFirst of
+              True -> h ^. Db.hydraHead_firstBalance - amount
+              False -> maybe (error "Invalid payment channel") (subtract amount) $ h ^. Db.hydraHead_secondBalance
+
+        runUpdate $
+          update (Db.db ^. Db.db_heads)
+          (case isFirst of
+             True ->
+               (\channel -> mconcat [ channel ^. Db.hydraHead_firstBalance <-. val_ (h ^. Db.hydraHead_firstBalance - amount)
+                                    , channel ^. Db.hydraHead_secondBalance <-. val_ (fmap (+ amount) $ h ^. Db.hydraHead_secondBalance)
+                                    ]
+               )
+             False ->
+               (\channel -> mconcat [ channel ^. Db.hydraHead_secondBalance <-. val_ (fmap (subtract amount) $ h ^. Db.hydraHead_secondBalance)
+                                    , channel ^. Db.hydraHead_firstBalance <-. val_ (h ^. Db.hydraHead_firstBalance + amount)
+                                    ]
+               )
+             )
+          (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
+
+        results <- runInsertReturningList $ insert (Db.db ^. Db.db_transactions) $
+          insertExpressions [ Db.Transaction
+                              default_
+                              (val_ $ primaryKey h)
+                              (val_ $ Api.serialiseAddress you)
+                              (val_ now)
+                              (val_ amount)
+                            ]
+        pure (newBalance, dbTransactionToTransactionInfo you $ head results)
+
+joinPaymentChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Int32 -> m (Either Text ())
+joinPaymentChannel a hid amount = runExceptT $ do
+  -- TODO(skylar): Do we 'try' to get a useful error message here?
+  Db.runBeam a $ do
+    runUpdate $
+      update
+      (Db.db ^. Db.db_heads)
+      (\channel -> channel ^. Db.hydraHead_secondBalance <-. val_ (Just amount))
+      (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
+  pure ()
+
 createPaymentChannel :: (MonadIO m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> PaymentChannelConfig -> m (Either Text Int32)
-createPaymentChannel a (PaymentChannelConfig name first second chain) = runExceptT $ do
-  now <- liftIO $ do
-    getCurrentTime
+createPaymentChannel a (PaymentChannelConfig name first second amount chain) = runExceptT $ do
+  expiry <- liftIO $ do
+    t <- getCurrentTime
+    pure $ addUTCTime nominalDay t
 
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
-  dbHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
+  dbHead <- Db.runBeam a $ do
     [newHead] <- runInsertReturningList $ insert (Db.db ^. Db.db_heads) $
       insertExpressions [ Db.HydraHead
                           default_
                           (val_ firstText)
                           (val_ secondText)
+                          (val_ amount)
+                          (val_ Nothing)
                           (val_ $ chain ^. hydraChainConfig_ledgerGenesis . to T.pack)
                           (val_ $ chain ^. hydraChainConfig_ledgerProtocolParams . to T.pack)
                         ]
@@ -155,15 +281,16 @@ createPaymentChannel a (PaymentChannelConfig name first second chain) = runExcep
                           default_
                           (val_ name)
                           (val_ $ primaryKey newHead)
-                          (val_ now)
+                          (val_ expiry)
                         ]
     pure newHead
-  nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
-  hydraHead <- lift $ runHydraHead a nodeConfigs
-  let
-    headId = Db.hydraHeadId dbHead
-  ExceptT $ trackRunningHead a headId hydraHead
-  pure headId
+  -- TODO(skylar): Should creation imply spinning up nodes etc? I don't think so
+  -- nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
+  -- hydraHead <- lift $ runHydraHead a nodeConfigs
+  -- let
+  --   headId = Db.hydraHeadId dbHead
+  -- ExceptT $ trackRunningHead a headId hydraHead
+  pure $ Db.hydraHeadId dbHead
   where
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second

@@ -20,6 +20,8 @@ data HydraHeadsT f = HydraHead
   { _hydraHead_id :: C f (SqlSerial Int32)
   , _hydraHead_first :: C f Text
   , _hydraHead_second :: C f Text
+  , _hydraHead_firstBalance :: C f Int32
+  , _hydraHead_secondBalance :: C f (Maybe Int32)
   , _hydraHead_ledgerGenesis :: C f Text
   , _hydraHead_ledgerProtocolParams :: C f Text
   }
@@ -61,7 +63,7 @@ data PaymentChannelsT f = PaymentChannel
   { _paymentChannel_id :: C f (SqlSerial Int32)
   , _paymentChannel_name :: C f Text
   , _paymentChannel_head :: PrimaryKey HydraHeadsT f
-  , _paymentChannel_createTime :: C f UTCTime
+  , _paymentChannel_expiry :: C f UTCTime
   }
   deriving (Generic)
 
@@ -76,10 +78,31 @@ instance Beamable (PrimaryKey PaymentChannelsT)
 
 type PaymentChannel = PaymentChannelsT Identity
 
+data TransactionsT f = Transaction
+  { _transaction_id :: C f (SqlSerial Int32)
+  , _transaction_head :: PrimaryKey HydraHeadsT f
+  , _transaction_party :: C f Text
+  , _transaction_time :: C f UTCTime
+  , _transaction_amount :: C f Int32
+  }
+  deriving (Generic)
+
+instance Beamable TransactionsT
+
+instance Table TransactionsT where
+  data PrimaryKey TransactionsT f = TransactionID (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = TransactionID . _transaction_id
+
+instance Beamable (PrimaryKey TransactionsT)
+
+type Transaction = TransactionsT Identity
+
 data Db f = Db
   { _db_proxies :: f (TableEntity ProxiesT)
   , _db_heads :: f (TableEntity HydraHeadsT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
+  , _db_transactions :: f (TableEntity TransactionsT)
   }
   deriving (Generic)
 
@@ -95,6 +118,7 @@ newtype HeadId =
   HeadId Int32
 
 makeLenses ''PaymentChannelsT
+makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT
 makeLenses ''ProxiesT
 makeLenses ''Db
@@ -123,3 +147,6 @@ runQueryInTransaction a action = liftIO $ withResource pool $ \conn -> do
   withTransaction conn (action conn)
   where
     pool = a ^. dbConnectionPool
+
+runBeam :: (HasDbConnectionPool a, MonadIO m) => a -> Pg b -> m b
+runBeam a action = runQueryInTransaction a $ \conn -> runBeamPostgres conn action

@@ -568,6 +568,20 @@ startupExistingHeads a = do
     ExceptT $ trackRunningHead a headId hydraHead
   pure $ fmap (sum . fmap (const 1)) $ sequenceA results
 
+spinUpHead :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+spinUpHead a hid = runExceptT $ do
+  mHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
+    runSelectReturningOne $ select $ do
+      h <- all_ (Db.db ^. Db.db_heads)
+      guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
+      pure h
+  case mHead of
+    Nothing -> throwError $ "Invalid head id" <> tShow hid
+    Just dbHead -> do
+      nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
+      hydraHead <- lift $ runHydraHead a nodeConfigs
+      ExceptT $ trackRunningHead a hid hydraHead
+
 newHydraHeadManager :: MonadIO m => m HydraHeadManager
 newHydraHeadManager = HydraHeadManager <$> (liftIO . newTMVarIO) mempty
 
