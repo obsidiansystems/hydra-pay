@@ -54,8 +54,7 @@ hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
 data HydraPayState = HydraPayState
-  { _hydraPay_proxies :: TMVar (Map Api.AddressAny ProxyInfo)
-  , _hydraPay_nodeInfo :: NodeInfo
+  { _hydraPay_nodeInfo :: NodeInfo
   , _hydraPay_databaseConnectionPool :: Pool Connection
   , _hydraPay_logger :: Logger
   , _hydraPay_hydraHeadManager :: HydraHeadManager
@@ -92,8 +91,7 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
   withResource pool DB.doAutomigrate
   withCardanoNode ncfg $ \ni -> do
     withHydraHeadManager $ \manager -> do
-      proxies <- newTMVarIO mempty
-      action $ HydraPayState proxies ni pool l manager
+      action $ HydraPayState ni pool l manager
 
 addressString :: Api.AddressAny -> String
 addressString = T.unpack . Api.serialiseAddress
