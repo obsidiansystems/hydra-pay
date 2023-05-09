@@ -102,7 +102,7 @@ runCardanoCli a command = do
         ExceptT $ eitherReadProcess cp
 
     CardanoCliCommand_GetTxId _ -> do
-      fmap (bimap T.pack (TxId . T.pack)) $ runExceptT $ do
+      fmap (bimap T.pack (TxId . T.strip . T.pack)) $ runExceptT $ do
         ExceptT $ eitherReadProcess cp
 
     CardanoCliCommand_TxInExists _ -> do
