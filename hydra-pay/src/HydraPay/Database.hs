@@ -64,6 +64,7 @@ data PaymentChannelsT f = PaymentChannel
   , _paymentChannel_name :: C f Text
   , _paymentChannel_head :: PrimaryKey HydraHeadsT f
   , _paymentChannel_expiry :: C f UTCTime
+  , _paymentChannel_open :: C f Bool
   }
   deriving (Generic)
 

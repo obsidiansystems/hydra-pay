@@ -5,11 +5,13 @@ module HydraPay.PaymentChannel where
 import Data.Time
 import Data.Int
 import Data.Aeson
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
 import Data.Foldable
 
+import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Error.Class
 import Control.Monad.Trans.Class
@@ -40,6 +42,7 @@ import qualified HydraPay.Database as Db
 
 import Database.Beam
 import Database.Beam.Postgres
+import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
 
@@ -92,6 +95,7 @@ instance FromJSON TransactionDirection
 
 data TransactionInfo = TransactionInfo
   { _transactionInfo_id :: Int32
+  , _transactionInfo_time :: UTCTime
   , _transactionInfo_amount :: Int32
   , _transactionInfo_direction :: TransactionDirection
   }
@@ -190,10 +194,36 @@ getPaymentChannelDetails a addr hid = do
 
         pure (currentBalance, infos)
 
+-- | Retrieve the total balance locked in hydra heads filtering ones that have expired.
+getHydraBalanceSlow :: (MonadBeam Postgres m) => Api.AddressAny -> m (Either Text Api.Lovelace)
+getHydraBalanceSlow addr = do
+  let addrText = Api.serialiseAddress addr
+  mbalanceFirst <- runSelectReturningOne $ select $ fmap snd $
+    aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
+      heads_ <- all_ (Db.db ^. Db.db_heads)
+      paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
+      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_expiry >. current_timestamp_)
+      pure heads_
+  mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
+    aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
+      heads_ <- all_ (Db.db ^. Db.db_heads)
+      paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
+      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_expiry >. current_timestamp_)
+      pure heads_
+  pure $ Right $ mconcat
+    [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
+    , fromIntegral $ fromMaybe 0 (join mbalanceSecond)
+    ]
+
+-- | Postgres @current_timestamp()@ function. Returns the server's timestamp
+current_timestamp_ :: QExpr Postgres s UTCTime
+current_timestamp_ = QExpr (\_ -> PgExpressionSyntax (emit "current_timestamp"))
+
 dbTransactionToTransactionInfo :: Api.AddressAny -> Db.Transaction -> TransactionInfo
 dbTransactionToTransactionInfo addr t =
   TransactionInfo
   (t ^. Db.transaction_id . to unSerial)
+  (t ^. Db.transaction_time)
   (t ^. Db.transaction_amount)
   (if Api.serialiseAddress addr == (t ^. Db.transaction_party)
    then TransactionSent
@@ -282,6 +312,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = r
                           (val_ name)
                           (val_ $ primaryKey newHead)
                           (val_ expiry)
+                          (val_ True)
                         ]
     pure newHead
   -- TODO(skylar): Should creation imply spinning up nodes etc? I don't think so
@@ -311,3 +342,14 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = r
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second
 -}
+
+destroyPaymentChannel :: (MonadIO m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+destroyPaymentChannel a headId = runExceptT $ do
+  logInfo a "destroyPaymentChannel" $ "Closing head with id: " <> tShow headId
+  Db.runBeam a $ closeChannelQ headId
+
+closeChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
+closeChannelQ headId = do
+  runUpdate $ update (Db.db ^. Db.db_paymentChannels)
+    (\channel -> channel ^. Db.paymentChannel_open <-. val_ False)
+    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))

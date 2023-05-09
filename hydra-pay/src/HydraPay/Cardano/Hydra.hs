@@ -49,7 +49,8 @@ import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
 import qualified Data.ByteString.Lazy as LBS
 
-import Network.WebSockets
+import Network.WebSockets (runClient, sendDataMessage, receiveDataMessage, withPingThread)
+import qualified Network.WebSockets as WS
 
 data HydraHeadManager = HydraHeadManager
   { _hydraHeadManager_runningHeads :: TMVar (Map Int32 (TMVar RunningHydraHead))
@@ -86,6 +87,10 @@ data HydraNode = HydraNode
 data HydraHeadInput :: * -> * where
   HydraHeadInit :: HydraHeadInput (Either Text ())
   HydraHeadCommit :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> HydraHeadInput (Either Text ())
+  HydraHeadClose :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
+  -- Do we actually want this? We can make this happen automatically after the
+  -- contestation period has elapsed.
+  HydraHeadFanout :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 
@@ -251,6 +256,12 @@ initHydraHead = HydraHeadInit
 commitHydraHead :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> HydraHeadInput (Either Text ())
 commitHydraHead = HydraHeadCommit
 
+closeHydraHead :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
+closeHydraHead = HydraHeadClose
+
+fanoutHydraHead :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
+fanoutHydraHead = HydraHeadFanout
+
 waitForApi :: Port -> IO ()
 waitForApi port = do
   result :: Either IOException () <- try $ runClient "127.0.0.1" (fromIntegral port) "/" $ const $ pure ()
@@ -289,13 +300,13 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
         _ <- forkIO $ forever $ do
           cInput <- atomically $ readTBQueue pendingCommands
           logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
-          sendDataMessage conn $ Text (encode cInput) Nothing
+          sendDataMessage conn $ WS.Text (encode cInput) Nothing
         withPingThread conn 60 (pure ()) $ do
           payload <- receiveDataMessage conn
           let
             msg = case payload of
-              Text v _ -> v
-              Binary v -> v
+              WS.Text v _ -> v
+              WS.Binary v -> v
             result = eitherDecode msg
           logInfo a loggerName "Got new message, logging"
           LBS.hPutStr logFile $ msg <> "\n"
@@ -314,6 +325,10 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is initializing (waiting for commits)"
                     atomically $ writeTVar headStatus $ HydraHead_Initializing
+                HeadIsOpen _ _ -> do
+                  when (commsThreadIsHeadStateReporter cfg) $ do
+                    logInfo a loggerName "Head is open"
+                    atomically $ writeTVar headStatus $ HydraHead_Open
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
@@ -397,6 +412,36 @@ sendHydraHeadCommand a hHead command = do
             _ -> do
               throwError $ "Invalid response received" <> tShow output
 
+    HydraHeadClose hid _ -> do
+      runExceptT $ do
+        -- We don't care for init!
+        let node = unsafeAnyNode hHead
+        mailbox <- liftIO $ newEmptyTMVarIO
+        -- Submit the request
+        withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
+          let
+            nextId = case Map.null current of
+              True -> 0
+              False -> fst $ Map.findMax current
+            req = HydraNodeRequest nextId Close mailbox
+          liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) (_hydraNodeRequest_clientInput req)
+          pure (Map.insert nextId req current, ())
+
+    HydraHeadFanout hid addr -> do
+      runExceptT $ do
+        -- We don't care for init!
+        let node = unsafeAnyNode hHead
+        mailbox <- liftIO $ newEmptyTMVarIO
+
+        -- Submit the request
+        withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
+          let
+            nextId = case Map.null current of
+              True -> 0
+              False -> fst $ Map.findMax current
+            req = HydraNodeRequest nextId Fanout mailbox
+          liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) (_hydraNodeRequest_clientInput req)
+          pure (Map.insert nextId req current, ())
 
 logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
 logTo out err cp =
@@ -625,4 +670,32 @@ commitToHead a hid committer amount = do
   case result of
     Right _ -> logInfo a "commitHead" $ "Head " <> tShow hid <> " was committed to by " <> Api.serialiseAddress committer
     Left err -> logInfo a "commitHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
+  pure result
+
+closeHead :: (MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
+closeHead a hid committer = do
+  result <- runExceptT $ do
+    info <- ExceptT $ queryProxyInfo a committer
+    logInfo a "closeHead" $ "Attempting to Close " <> tShow hid
+    hydraHeadVar <- ExceptT $ getRunningHead a hid
+    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
+      result <- sendHydraHeadCommand a hydraHead $ closeHydraHead hid committer
+      pure(hydraHead, result)
+  case result of
+    Right _ -> logInfo a "closeHead" $ "Head " <> tShow hid <> " was closed by " <> Api.serialiseAddress committer
+    Left err -> logInfo a "closeHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
+  pure result
+
+fanoutHead :: (MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
+fanoutHead a hid committer = do
+  result <- runExceptT $ do
+    info <- ExceptT $ queryProxyInfo a committer
+    logInfo a "fanoutHead" $ "Attempting to Fanout " <> tShow hid
+    hydraHeadVar <- ExceptT $ getRunningHead a hid
+    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
+      result <- sendHydraHeadCommand a hydraHead $ fanoutHydraHead hid committer
+      pure(hydraHead, result)
+  case result of
+    Right _ -> logInfo a "fanoutHead" $ "Head " <> tShow hid <> " was closed by " <> Api.serialiseAddress committer
+    Left err -> logInfo a "fanoutHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
   pure result
