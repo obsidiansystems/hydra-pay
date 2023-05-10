@@ -67,6 +67,7 @@ data HydraNodeStatus
   | HydraNodeStatus_Replaying
   | HydraNodeStatus_Replayed
   | HydraNodeStatus_PeersConnected
+  | HydraNodeStatus_Closed -- ^ TODO do we need this? Should we be removing this node after it is close? But what about if we haven't fanned out yet
   deriving (Eq, Show)
 
 data HydraNodeRequest = HydraNodeRequest
@@ -87,10 +88,11 @@ data HydraNode = HydraNode
 data HydraHeadInput :: * -> * where
   HydraHeadInit :: HydraHeadInput (Either Text ())
   HydraHeadCommit :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> HydraHeadInput (Either Text ())
+  HydraHeadOpen :: Int32 -> HydraHeadInput (Either Text ())
   HydraHeadClose :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
   -- Do we actually want this? We can make this happen automatically after the
   -- contestation period has elapsed.
-  HydraHeadFanout :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
+  HydraHeadFanout :: Int32 -> HydraHeadInput (Either Text ())
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 
@@ -247,7 +249,8 @@ ensureHeadNodesReady state h = do
     statuses <- for (h ^. hydraHead_handles) $ \headHandle -> do
       readTVar $ headHandle ^. hydraNode_status
     let
-      ready = all (== HydraNodeStatus_PeersConnected) statuses
+      ready = all (\a -> a == HydraNodeStatus_PeersConnected || a == HydraNodeStatus_Closed) statuses
+
     check ready
 
 initHydraHead :: HydraHeadInput (Either Text ())
@@ -256,10 +259,13 @@ initHydraHead = HydraHeadInit
 commitHydraHead :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> HydraHeadInput (Either Text ())
 commitHydraHead = HydraHeadCommit
 
+openHydraHead :: Int32 -> HydraHeadInput (Either Text ())
+openHydraHead = HydraHeadOpen
+
 closeHydraHead :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
 closeHydraHead = HydraHeadClose
 
-fanoutHydraHead :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
+fanoutHydraHead :: Int32 -> HydraHeadInput (Either Text ())
 fanoutHydraHead = HydraHeadFanout
 
 waitForApi :: Port -> IO ()
@@ -300,6 +306,8 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
         _ <- forkIO $ forever $ do
           cInput <- atomically $ readTBQueue pendingCommands
           logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
+          LBS.hPutStr logFile $ encode cInput <> "\n"
+          hFlush logFile
           sendDataMessage conn $ WS.Text (encode cInput) Nothing
         withPingThread conn 60 (pure ()) $ do
           payload <- receiveDataMessage conn
@@ -329,6 +337,16 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is open"
                     atomically $ writeTVar headStatus $ HydraHead_Open
+                HeadIsClosed hid _ contestationDeadline -> do
+                  -- NOTE contestationDeadline is useful for automatically Fanning out one that
+                  logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow contestationDeadline
+                  atomically $ writeTVar headStatus $ HydraHead_Closed
+                  atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
+                ReadyToFanout hid -> do
+                  logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
+                  -- sendHydraHeadCommand a  $ fanoutHydraHead hid
+                  pure ()
+
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
@@ -427,7 +445,7 @@ sendHydraHeadCommand a hHead command = do
           liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) (_hydraNodeRequest_clientInput req)
           pure (Map.insert nextId req current, ())
 
-    HydraHeadFanout hid addr -> do
+    HydraHeadFanout hid -> do
       runExceptT $ do
         -- We don't care for init!
         let node = unsafeAnyNode hHead
@@ -659,13 +677,13 @@ initHead a hid = do
 commitToHead :: (MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
-    info <- ExceptT $ queryProxyInfo a committer
-    balance <- ExceptT $ runCardanoCli a $ queryUTxOs committer
+    proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
+    balance <- ExceptT $ runCardanoCli a $ queryUTxOs proxyAddr
     commitUtxo <- ExceptT $ pure $ maybeToEither ("Failed to find suitable commit utxo with " <> tShow amount <> "lovelace") $ findUTxOWithExactly amount balance
     logInfo a "commitHead" $ "Attempting to Commit to " <> tShow hid
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ commitHydraHead committer commitUtxo
+      result <- sendHydraHeadCommand a hydraHead $ commitHydraHead proxyAddr commitUtxo
       pure(hydraHead, result)
   case result of
     Right _ -> logInfo a "commitHead" $ "Head " <> tShow hid <> " was committed to by " <> Api.serialiseAddress committer
@@ -693,7 +711,7 @@ fanoutHead a hid committer = do
     logInfo a "fanoutHead" $ "Attempting to Fanout " <> tShow hid
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ fanoutHydraHead hid committer
+      result <- sendHydraHeadCommand a hydraHead $ fanoutHydraHead hid
       pure(hydraHead, result)
   case result of
     Right _ -> logInfo a "fanoutHead" $ "Head " <> tShow hid <> " was closed by " <> Api.serialiseAddress committer

@@ -87,6 +87,7 @@ library
     HydraPay.Cardano.Node
     HydraPay.Cardano.Hydra
     HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Api.ClientInput
     HydraPay.Cardano.Hydra.Tools
     HydraPay.Host
     HydraPay.Watch

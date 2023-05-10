@@ -1,25 +1,16 @@
 -- |
 
-module HydraPay.Cardano.Hydra.Api where
+module HydraPay.Cardano.Hydra.Api
+  ( module HydraPay.Cardano.Hydra.Api
+  , module X
+  )
+  where
 
 import GHC.Generics
 import Data.Aeson
 import Data.Text (Text)
 import Data.Set (Set)
-
-data ClientInput
-  = Init
-  | Abort
-  | Commit Value
-  | NewTx Value
-  | GetUTxO
-  | Close
-  | Contest
-  | Fanout
-  deriving (Generic, Show, Eq)
-
-instance FromJSON ClientInput
-instance ToJSON ClientInput
+import HydraPay.Cardano.Hydra.Api.ClientInput as X hiding (utxo, transaction)
 
 data ServerOutput
   = PeerConnected {peer :: Value}
