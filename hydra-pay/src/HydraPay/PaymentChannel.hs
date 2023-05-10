@@ -42,7 +42,7 @@ import qualified HydraPay.Database as Db
 
 import Database.Beam
 import Database.Beam.Postgres
-import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
+import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit, pgQuotedIdentifier)
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
 
@@ -218,6 +218,9 @@ getHydraBalanceSlow addr = do
 current_timestamp_ :: QExpr Postgres s UTCTime
 current_timestamp_ = QExpr (\_ -> PgExpressionSyntax (emit "current_timestamp"))
 
+addOneDayInterval_ :: QExpr Postgres s UTCTime -> QExpr Postgres s UTCTime
+addOneDayInterval_ (QExpr e) = QExpr (\t -> addE (e t) (PgExpressionSyntax $ emit "interval" <> pgQuotedIdentifier "1 day"))
+
 dbTransactionToTransactionInfo :: Api.AddressAny -> Db.Transaction -> TransactionInfo
 dbTransactionToTransactionInfo addr t =
   TransactionInfo
@@ -286,15 +289,11 @@ joinPaymentChannel a hid amount = runExceptT $ do
       (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
   pure ()
 
-createPaymentChannel :: (MonadIO m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> PaymentChannelConfig -> m (Either Text Int32)
-createPaymentChannel a (PaymentChannelConfig name first second amount chain) = runExceptT $ do
-  expiry <- liftIO $ do
-    t <- getCurrentTime
-    pure $ addUTCTime nominalDay t
-
+createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> PaymentChannelConfig -> m Int32
+createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
-  dbHead <- Db.runBeam a $ do
+  dbHead <- do
     [newHead] <- runInsertReturningList $ insert (Db.db ^. Db.db_heads) $
       insertExpressions [ Db.HydraHead
                           default_
@@ -310,7 +309,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = r
                           default_
                           (val_ name)
                           (val_ $ primaryKey newHead)
-                          (val_ expiry)
+                          (addOneDayInterval_ current_timestamp_)
                           (val_ True)
                         ]
     pure newHead
