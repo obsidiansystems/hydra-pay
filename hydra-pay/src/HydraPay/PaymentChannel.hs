@@ -202,13 +202,13 @@ getHydraBalanceSlow addr = do
     aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_expiry >. current_timestamp_)
+      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open)
       pure heads_
   mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_expiry >. current_timestamp_)
+      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open)
       pure heads_
   pure $ Right $ mconcat
     [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
