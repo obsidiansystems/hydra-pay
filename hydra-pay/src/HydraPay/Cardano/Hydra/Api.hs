@@ -8,12 +8,11 @@ module HydraPay.Cardano.Hydra.Api
 
 import GHC.Generics
 import Data.Aeson
-import Data.Int (Int32)
 import Data.Text (Text)
 import Data.Set (Set)
 import HydraPay.Cardano.Hydra.Api.ClientInput as X hiding (utxo, transaction)
 
-type HeadId = Int32
+type HeadId = Text
 
 data ServerOutput
   = PeerConnected {peer :: Value}
