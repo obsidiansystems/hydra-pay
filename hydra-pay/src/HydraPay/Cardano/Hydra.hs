@@ -452,6 +452,12 @@ sendHydraHeadCommand a hHead command = do
             req = HydraNodeRequest nextId Close mailbox
           liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) (_hydraNodeRequest_clientInput req)
           pure (Map.insert nextId req current, ())
+        output <- liftIO $ atomically $ takeTMVar mailbox
+        case output of
+          CommandFailed _ -> throwError "Command Failed"
+          Committed _ _ _ -> pure ()
+          _ -> do
+            throwError $ "Invalid response received" <> tShow output
 
 logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
 logTo out err cp =
