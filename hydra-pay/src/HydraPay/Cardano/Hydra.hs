@@ -338,20 +338,23 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                   atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
                 ReadyToFanout hid -> do
                   logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
-                  mailbox <- liftIO $ newEmptyTMVarIO
-                  withTMVar pendingRequests $ \current -> do
-                    let
-                      cInput = Fanout
-                      nextId = case Map.null current of
-                        True -> 0
-                        False -> fst $ Map.findMax current
-                      req = HydraNodeRequest nextId cInput mailbox
-                    pure (Map.insert nextId req current, ())
-                  output <- liftIO $ atomically $ takeTMVar mailbox
-                  case output of
-                    CommandFailed _ -> logInfo a loggerName "Fanout Failed"
-                    Committed _ _ _ -> logInfo a loggerName "Fanout Done"
-                    _ -> logInfo a loggerName $ "Invalid response received" <> tShow output
+                  -- Only fanout when not replaying.
+                  status <- atomically $ readTVar nodeStatus --  $ HydraNodeStatus_Replaying
+                  when (status /= HydraNodeStatus_Replaying) $ do
+                    mailbox <- liftIO $ newEmptyTMVarIO
+                    withTMVar pendingRequests $ \current -> do
+                      let
+                        cInput = Fanout
+                        nextId = case Map.null current of
+                          True -> 0
+                          False -> fst $ Map.findMax current
+                        req = HydraNodeRequest nextId cInput mailbox
+                      pure (Map.insert nextId req current, ())
+                    output <- liftIO $ atomically $ takeTMVar mailbox
+                    case output of
+                      CommandFailed _ -> logInfo a loggerName "Fanout Failed"
+                      Committed _ _ _ -> logInfo a loggerName "Fanout Done"
+                      _ -> logInfo a loggerName $ "Invalid response received" <> tShow output
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
