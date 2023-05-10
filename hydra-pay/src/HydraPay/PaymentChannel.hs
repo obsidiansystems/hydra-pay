@@ -125,9 +125,8 @@ getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.Addr
 getPaymentChannelsInfo a addr = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head <- all_ (Db.db ^. Db.db_heads)
-    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head)
-    guard_ (head ^. Db.hydraHead_first ==. val_ addrStr ||. head ^. Db.hydraHead_second ==. val_ addrStr)
+    head <- join_ (Db.db ^. Db.db_heads) (\head -> (paymentChannel ^. Db.paymentChannel_head) `references_` head)
+    guard_ (paymentChannel ^. Db.paymentChannel_open &&. (head ^. Db.hydraHead_first ==. val_ addrStr ||. head ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head, paymentChannel)
   pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
   where
