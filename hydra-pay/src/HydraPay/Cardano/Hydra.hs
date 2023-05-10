@@ -395,69 +395,47 @@ sendHydraHeadCommand a hHead command = do
       let
         -- We don't care for init!
         node = unsafeAnyNode hHead
-      mailbox <- liftIO $ newEmptyTMVarIO
-      -- Submit the request
-      withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
-        let
-          cInput = Init
-
-          nextId = case Map.null current of
-            True -> 0
-            False -> fst $ Map.findMax current
-          req = HydraNodeRequest nextId cInput mailbox
-        liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) cInput
-        pure (Map.insert nextId req current, ())
-      output <- liftIO $ atomically $ takeTMVar mailbox
+      output <- performHydraNodeRequest node Init
       case output of
         CommandFailed _ -> pure $ Left "Command Failed"
         HeadIsInitializing _ _ -> pure $ Right ()
         _ -> pure $ Left $ "Invalid response received" <> tShow output
 
-    HydraHeadCommit addr utxo -> do
-      let
-        mNode = getNodeFor hHead addr
-      case mNode of
-        Nothing -> pure $ Left $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
-        Just node -> runExceptT $ do
-          mailbox <- liftIO $ newEmptyTMVarIO
-          -- Submit the request
-          withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
-            let
-              cInput = Commit $ Aeson.toJSON utxo
-
-              nextId = case Map.null current of
-                True -> 0
-                False -> fst $ Map.findMax current
-              req = HydraNodeRequest nextId cInput mailbox
-            liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) cInput
-            pure (Map.insert nextId req current, ())
-          output <- liftIO $ atomically $ takeTMVar mailbox
-          case output of
-            CommandFailed _ -> throwError "Command Failed"
-            Committed _ _ _ -> pure ()
-            _ -> do
-              throwError $ "Invalid response received" <> tShow output
+    HydraHeadCommit addr utxo -> runExceptT $ do
+      node <- case getNodeFor hHead addr of
+        Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
+        Just node ->  pure node
+      output <- performHydraNodeRequest node $ Commit $ Aeson.toJSON utxo
+      case output of
+        CommandFailed _ -> throwError "Commit Failed"
+        Committed _ _ _ -> pure ()
+        _ -> throwError $ "Invalid response received" <> tShow output
 
     HydraHeadClose hid _ -> do
-      runExceptT $ do
-        -- We don't care for init!
-        let node = unsafeAnyNode hHead
-        mailbox <- liftIO $ newEmptyTMVarIO
-        -- Submit the request
-        withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
-          let
-            nextId = case Map.null current of
-              True -> 0
-              False -> fst $ Map.findMax current
-            req = HydraNodeRequest nextId Close mailbox
-          liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) (_hydraNodeRequest_clientInput req)
-          pure (Map.insert nextId req current, ())
-        output <- liftIO $ atomically $ takeTMVar mailbox
-        case output of
-          CommandFailed _ -> throwError "Command Failed"
-          Committed _ _ _ -> pure ()
-          _ -> do
-            throwError $ "Invalid response received" <> tShow output
+      let node = unsafeAnyNode hHead
+      output <- performHydraNodeRequest node Close
+      case output of
+        CommandFailed _ -> pure $ Left "Command Failed"
+        Committed _ _ _ -> pure $ Right ()
+        _ -> pure $ Left $ "Invalid response received" <> tShow output
+
+-- Performing a request on a node consists on adding it to a queue which
+-- eventually is processed and communicates through a websocket with the hydra
+-- node and awaits for the response to get sent back.
+performHydraNodeRequest :: MonadIO m => HydraNode -> ClientInput -> m ServerOutput
+performHydraNodeRequest node i = do
+  -- Where the result will be stored
+  mailbox <- liftIO newEmptyTMVarIO
+  -- Submit the request
+  withTMVar (node ^. hydraNode_pendingRequests) $ \current -> do
+    let
+      nextId = case Map.lookupMax current of
+        Nothing -> 0
+        Just (k, _) -> k
+      req = HydraNodeRequest nextId i mailbox
+    liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) i
+    pure (Map.insert nextId req current, ())
+  liftIO $ atomically $ takeTMVar mailbox
 
 logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
 logTo out err cp =
