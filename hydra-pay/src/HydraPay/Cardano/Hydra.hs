@@ -416,7 +416,7 @@ sendHydraHeadCommand a hHead command = do
       output <- performHydraNodeRequest node Close
       case output of
         CommandFailed _ -> pure $ Left "Command Failed"
-        Committed _ _ _ -> pure $ Right ()
+        HeadIsClosed _ _ _ -> pure $ Right ()
         _ -> pure $ Left $ "Invalid response received" <> tShow output
 
 -- Performing a request on a node consists on adding it to a queue which
