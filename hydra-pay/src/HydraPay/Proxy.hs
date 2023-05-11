@@ -32,9 +32,9 @@ data ProxyInfo = ProxyInfo
 
 makeLenses ''ProxyInfo
 
-getProxyInfo :: MonadIO m => Api.AddressAny -> Connection -> m (Maybe ProxyInfo)
-getProxyInfo addr conn = liftIO $ do
-  proxy <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
+getProxyInfo :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe ProxyInfo)
+getProxyInfo addr = do
+  proxy <- runSelectReturningOne $ select $ do
     proxy <- all_ (DB.db ^. DB.db_proxies)
     guard_ (proxy ^. DB.proxy_chainAddress ==.  val_ (Api.serialiseAddress addr))
     pure proxy
@@ -57,9 +57,9 @@ addProxyInfo addr pinfo conn = liftIO $ do
     anyConflict onConflictDoNothing
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo
 
-queryProxyInfo :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
+queryProxyInfo :: (MonadBeam Postgres m, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
 queryProxyInfo a addr = do
-  result <- DB.runQueryInTransaction a $ getProxyInfo addr
+  result <- getProxyInfo addr
   case result of
     Nothing -> do
       runExceptT $ do

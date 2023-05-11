@@ -120,7 +120,7 @@ withProtocolParamsFile pparams action = do
     action paramsPath
 
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
-getProxyTx a pparams addr lovelace = runExceptT $ do
+getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a socketPath paramsPath

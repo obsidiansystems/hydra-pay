@@ -500,7 +500,7 @@ mkHydraNodeProc cfg = do
       ]
 
 deriveConfigFromDbHead :: (MonadIO m, HasPortRange a, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> Db.HydraHead -> m (Either Text [HydraNodeConfig])
-deriveConfigFromDbHead a hh = runExceptT $ do
+deriveConfigFromDbHead a hh = Db.runBeam a $ runExceptT $ do
   liftIO $ do
     createDirectoryIfMissing True headPersistDir
     createDirectoryIfMissing True headNodeLogsDir
@@ -607,9 +607,9 @@ startupExistingHeads a = do
     ExceptT $ trackRunningHead a headId hydraHead
   pure $ fmap (sum . fmap (const 1)) $ sequenceA results
 
-spinUpHead :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+spinUpHead :: (MonadIO m, MonadBeam Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
 spinUpHead a hid = runExceptT $ do
-  mHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
+  mHead <- do
     runSelectReturningOne $ select $ do
       h <- all_ (Db.db ^. Db.db_heads)
       guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
@@ -650,7 +650,7 @@ initHead a hid = do
     Left err -> logInfo a "initHead" $ "Head failed to initialize: " <> err
   pure result
 
-commitToHead :: (MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
+commitToHead :: (MonadBeam Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
     proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
@@ -666,7 +666,7 @@ commitToHead a hid committer amount = do
     Left err -> logInfo a "commitHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
   pure result
 
-closeHead :: (MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
+closeHead :: (MonadBeam Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
 closeHead a hid committer = do
   result <- runExceptT $ do
     info <- ExceptT $ queryProxyInfo a committer
