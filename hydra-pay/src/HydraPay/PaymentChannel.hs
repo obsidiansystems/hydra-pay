@@ -219,7 +219,7 @@ current_timestamp_ :: QExpr Postgres s UTCTime
 current_timestamp_ = QExpr (\_ -> PgExpressionSyntax (emit "current_timestamp"))
 
 addOneDayInterval_ :: QExpr Postgres s UTCTime -> QExpr Postgres s UTCTime
-addOneDayInterval_ (QExpr e) = QExpr (\t -> addE (e t) (PgExpressionSyntax $ emit "interval" <> pgQuotedIdentifier "1 day"))
+addOneDayInterval_ (QExpr e) = QExpr (addE <$> e <*> pure (PgExpressionSyntax $ emit "interval '1 day'"))
 
 dbTransactionToTransactionInfo :: Api.AddressAny -> Db.Transaction -> TransactionInfo
 dbTransactionToTransactionInfo addr t =
