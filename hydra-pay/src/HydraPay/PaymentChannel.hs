@@ -278,16 +278,14 @@ sendAdaInChannel a hid you amount = runExceptT $ do
                             ]
         pure (newBalance, dbTransactionToTransactionInfo you $ head results)
 
-joinPaymentChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Int32 -> m (Either Text ())
-joinPaymentChannel a hid amount = runExceptT $ do
+joinPaymentChannel :: MonadBeam Postgres m => Int32 -> Int32 -> m ()
+joinPaymentChannel hid amount = do
   -- TODO(skylar): Do we 'try' to get a useful error message here?
-  Db.runBeam a $ do
     runUpdate $
       update
       (Db.db ^. Db.db_heads)
       (\channel -> channel ^. Db.hydraHead_secondBalance <-. val_ (Just amount))
       (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
-  pure ()
 
 createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> PaymentChannelConfig -> m Int32
 createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
