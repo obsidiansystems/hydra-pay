@@ -246,7 +246,7 @@ ensureHeadNodesReady state h = do
     statuses <- for (h ^. hydraHead_handles) $ \headHandle -> do
       readTVar $ headHandle ^. hydraNode_status
     let
-      ready = all (\a -> a == HydraNodeStatus_PeersConnected || a == HydraNodeStatus_Closed) statuses
+      ready = all (\a -> a == HydraNodeStatus_PeersConnected) statuses
 
     check ready
 
