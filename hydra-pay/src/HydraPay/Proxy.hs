@@ -40,10 +40,9 @@ getProxyInfo addr = do
     pure proxy
   pure $ proxy >>= dbProxyInfoToProxyInfo
 
-addProxyInfo :: MonadIO m => Api.AddressAny -> ProxyInfo -> Connection -> m (Maybe ProxyInfo)
-addProxyInfo addr pinfo conn = liftIO $ do
-  result <- runBeamPostgres conn
-    $ runInsertReturningList
+addProxyInfo :: MonadBeamInsertReturning Postgres m => Api.AddressAny -> ProxyInfo -> m (Maybe ProxyInfo)
+addProxyInfo addr pinfo = do
+  result <- runInsertReturningList
     $ insertOnConflict (DB.db ^. DB.db_proxies)
     (insertValues [ DB.ProxyInfo
                     (Api.serialiseAddress addr)
@@ -57,7 +56,7 @@ addProxyInfo addr pinfo conn = liftIO $ do
     anyConflict onConflictDoNothing
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo
 
-queryProxyInfo :: (MonadBeam Postgres m, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
+queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
 queryProxyInfo a addr = do
   result <- getProxyInfo addr
   case result of
@@ -70,7 +69,7 @@ queryProxyInfo a addr = do
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
         (hvk, hsk) <- ExceptT $ hydraKeyGen $ proxyKeysPath </> (prefix <> ".hydra")
         let newInfo = ProxyInfo proxyAddr vk sk hvk hsk
-        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ DB.runQueryInTransaction a $ addProxyInfo addr newInfo
+        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo addr newInfo
     Just info -> do
       pure $ Right info
 

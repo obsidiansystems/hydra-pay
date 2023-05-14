@@ -650,7 +650,7 @@ initHead a hid = do
     Left err -> logInfo a "initHead" $ "Head failed to initialize: " <> err
   pure result
 
-commitToHead :: (MonadBeam Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
+commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
     proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
@@ -667,6 +667,7 @@ commitToHead a hid committer amount = do
   pure result
 
 closeHead :: (MonadBeam Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
+closeHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
 closeHead a hid committer = do
   result <- runExceptT $ do
     info <- ExceptT $ queryProxyInfo a committer
