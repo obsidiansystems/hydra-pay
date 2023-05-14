@@ -150,4 +150,4 @@ runQueryInTransaction a action = liftIO $ withResource pool $ \conn -> do
     pool = a ^. dbConnectionPool
 
 runBeam :: (HasDbConnectionPool a, MonadIO m) => a -> Pg b -> m b
-runBeam a action = runQueryInTransaction a $ \conn -> runBeamPostgres conn action
+runBeam a action = runQueryInTransaction a $ \conn -> runBeamPostgresDebug putStrLn conn action

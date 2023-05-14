@@ -232,10 +232,8 @@ dbTransactionToTransactionInfo addr t =
    else TransactionReceived
   )
 
-sendAdaInChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
+sendAdaInChannel :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
 sendAdaInChannel a hid you amount = runExceptT $ do
-  now <- liftIO $ getCurrentTime
-  ExceptT $ Db.runBeam a $ runExceptT $ do
     mHead <- runSelectReturningOne $ select $ do
       h <- all_ (Db.db ^. Db.db_heads)
       guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
@@ -273,7 +271,7 @@ sendAdaInChannel a hid you amount = runExceptT $ do
                               default_
                               (val_ $ primaryKey h)
                               (val_ $ Api.serialiseAddress you)
-                              (val_ now)
+                              current_timestamp_
                               (val_ amount)
                             ]
         pure (newBalance, dbTransactionToTransactionInfo you $ head results)

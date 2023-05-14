@@ -14,6 +14,9 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
+import Control.Monad.Reader (ask)
+
+import Debug.Trace (traceM)
 
 import qualified Data.Aeson as Aeson
 
@@ -45,6 +48,8 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 
 import Cardano.Transaction hiding (TxId)
+import Cardano.Transaction.CardanoApi
+import Cardano.Transaction.Extras (evalRawNoSubmit)
 
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
@@ -180,3 +185,54 @@ payToProxyTx addr lovelace proxy = do
   void $ balanceNonAdaAssets addrStr
   where
     addrStr = addressString addr
+
+-- | Like 'Cardano.Transaction.selectInputs', but allows to provide your own
+-- UTxO. In the case of Hydra the UTxO comes from talking to the Head which
+-- 'Cardano.Transaction.selectInputs' can not handle.
+selectInputsFromUTxO :: Value -> Api.UTxO Api.BabbageEra -> Tx ([Input], Value)
+selectInputsFromUTxO outputValue utxo = do
+  let inputs = inputFromUTxO <$> fromCardanoApiUTxO utxo
+  putpend $ mempty { tInputs = inputs }
+  -- Merge the utxos values
+  let mergeInputValue = mconcat $ map (utxoValue . iUtxo) inputs
+  -- return the inputs and the remaining outputs
+  pure (inputs, diffValuesWithNegatives outputValue mergeInputValue)
+
+sendHydraLovelaceTx :: Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> Tx ()
+sendHydraLovelaceTx utxo addrStr lovelace = do
+  Output {..} <- output addrStr $ fromString $ show (Api.lovelaceToQuantity lovelace) <> " lovelace"
+  void $ selectInputsFromUTxO oValue utxo
+  changeAddress addrStr
+  void $ balanceNonAdaAssets addrStr
+
+-- sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> m (Either Text (Text, Text, Api.Tx Api.BabbageEra))
+sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
+sendHydraLovelace a proxyInfo pparams utxo addrStr lovelace = do
+  traceM "sendHydraLovelace: START"
+  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    traceM "sendHydraLovelace: PARAMS"
+    let cfg = mkEvalConfig a socketPath paramsPath
+        fee = 0
+    (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
+      sendHydraLovelaceTx utxo addrStr lovelace
+      sign (_proxyInfo_signingKey proxyInfo)
+    traceM $ "sendHydraLovelace: Tx: " <> show txLbs
+
+    case Aeson.decode txLbs of
+      Nothing -> do
+        traceM "sendHydraLovelace: decode failed"
+        error ""
+      Just envelope ->
+        case Api.deserialiseFromTextEnvelope (Api.AsTx Api.AsBabbageEra) envelope of
+          Left e -> do
+            traceM "sendHydraLovelace: envelope failed"
+            let Just cbor = txLbs ^? key "cborHex" . _String
+            -- pure $ Left $ T.pack $ show e
+            pure $ Right (T.pack txId, cbor)
+          Right (tx :: Api.Tx Api.BabbageEra) -> do
+            traceM "sendHydraLovelace: envelope good"
+            let Just cbor = txLbs ^? key "cborHex" . _String
+            pure $ Right (T.pack txId, cbor) -- , tx)
+    -- pure $ fmap ((,) (T.pack txId)) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath

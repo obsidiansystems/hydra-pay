@@ -44,6 +44,8 @@ library
                , aeson-gadt-th
                , hexstring
                , constraints-extras
+               , typed-process
+               , managed
 
                , cardano-addresses
                , cardano-api
