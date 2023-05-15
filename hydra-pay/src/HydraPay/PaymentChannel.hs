@@ -9,28 +9,14 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Data.Foldable
-
+import Control.Concurrent.STM
+import Control.Lens
 import Control.Monad
-import Control.Monad.IO.Class
 import Control.Monad.Error.Class
-import Control.Monad.Trans.Class
+import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
 
-import Control.Concurrent
-import Control.Concurrent.STM
-import Control.Exception
-
-import System.IO
-import System.Process
-import System.Directory
-import System.FilePath
-import Control.Lens
-
-import HydraPay.Proxy
 import HydraPay.Logging
-import HydraPay.PortRange
-import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra
 import HydraPay.Utils
 
@@ -42,7 +28,7 @@ import qualified HydraPay.Database as Db
 
 import Database.Beam
 import Database.Beam.Postgres
-import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit, pgQuotedIdentifier)
+import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
 
@@ -125,9 +111,9 @@ getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.Addr
 getPaymentChannelsInfo a addr = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head <- join_ (Db.db ^. Db.db_heads) (\head -> (paymentChannel ^. Db.paymentChannel_head) `references_` head)
-    guard_ (paymentChannel ^. Db.paymentChannel_open &&. (head ^. Db.hydraHead_first ==. val_ addrStr ||. head ^. Db.hydraHead_second ==. val_ addrStr))
-    pure (head, paymentChannel)
+    head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+    guard_ (paymentChannel ^. Db.paymentChannel_open &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
+    pure (head_, paymentChannel)
   pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
   where
     addrStr = Api.serialiseAddress addr
@@ -136,10 +122,10 @@ getPaymentChannelInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.Addre
 getPaymentChannelInfo a me pid = do
   result <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningOne $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head <- all_ (Db.db ^. Db.db_heads)
-    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head)
+    head_ <- all_ (Db.db ^. Db.db_heads)
+    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
     guard_ (paymentChannel ^. Db.paymentChannel_id ==. val_ (SqlSerial pid))
-    pure (head, paymentChannel)
+    pure (head_, paymentChannel)
   pure $ maybeToEither "Failed to get payment channel" $ uncurry (dbPaymentChannelToInfo me) <$> result
 
 dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> PaymentChannelInfo
@@ -164,7 +150,7 @@ dbPaymentChannelToInfo addr hh pc =
 
     addrStr = Api.serialiseAddress addr
 
-getPaymentChannelDetails :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
+getPaymentChannelDetails :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
 getPaymentChannelDetails a addr hid = do
   Db.runBeam a $ runExceptT $ do
     mHead <- runSelectReturningOne $ select $ do
@@ -232,8 +218,8 @@ dbTransactionToTransactionInfo addr t =
    else TransactionReceived
   )
 
-sendAdaInChannel :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, Db.HasDbConnectionPool a, HasNodeInfo a) => a -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
-sendAdaInChannel a hid you amount = runExceptT $ do
+sendAdaInChannel :: (MonadIO m, MonadBeamInsertReturning Postgres m) => Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
+sendAdaInChannel hid you amount = runExceptT $ do
     mHead <- runSelectReturningOne $ select $ do
       h <- all_ (Db.db ^. Db.db_heads)
       guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
@@ -287,7 +273,7 @@ joinPaymentChannel hid amount = do
       (\channel -> channel ^. Db.hydraHead_secondBalance <-. val_ (Just amount))
       (\channel -> channel ^. Db.hydraHead_id ==. val_ headId)
 
-createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> PaymentChannelConfig -> m Int32
+createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Int32
 createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
@@ -302,7 +288,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ chain ^. hydraChainConfig_ledgerGenesis . to T.pack)
                           (val_ $ chain ^. hydraChainConfig_ledgerProtocolParams . to T.pack)
                         ]
-    runInsertReturningList $ insert (Db.db ^. Db.db_paymentChannels) $
+    _ <- runInsertReturningList $ insert (Db.db ^. Db.db_paymentChannels) $
       insertExpressions [ Db.PaymentChannel
                           default_
                           (val_ name)
@@ -339,7 +325,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
     secondText = Api.serialiseAddress second
 -}
 
-destroyPaymentChannel :: (MonadIO m, HasLogger a, HasPortRange a, HasNodeInfo a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+destroyPaymentChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
 destroyPaymentChannel a headId = runExceptT $ do
   logInfo a "destroyPaymentChannel" $ "Closing head with id: " <> tShow headId
   Db.runBeam a $ closeChannelQ headId

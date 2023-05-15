@@ -9,9 +9,7 @@ import System.Process
 import Control.Monad.IO.Class
 import Control.Concurrent.STM
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 import qualified Cardano.Api.Shelley as Shelley
-import Cardano.Transaction hiding (TxId)
 import qualified Cardano.Ledger.BaseTypes as Ledger
 
 import qualified Data.ByteString as BS

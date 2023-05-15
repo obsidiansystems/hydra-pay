@@ -56,7 +56,7 @@ addProxyInfo addr pinfo = do
     anyConflict onConflictDoNothing
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo
 
-queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
+queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
 queryProxyInfo a addr = do
   result <- getProxyInfo addr
   case result of

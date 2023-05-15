@@ -31,7 +31,7 @@ import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.PortRange
-import HydraPay.Cardano.Hydra.Api
+import HydraPay.Cardano.Hydra.Api hiding (headId)
 import qualified HydraPay.Database as Db
 
 import qualified Cardano.Api as Api
@@ -408,39 +408,31 @@ sendHydraHeadCommand a hHead command = do
         HeadIsInitializing _ _ -> pure $ Right ()
         _ -> pure $ Left $ "Invalid response received" <> tShow output
 
-    HydraHeadCommit addr utxo -> runExceptT $ do
+    HydraHeadCommit addr utxo' -> runExceptT $ do
       node <- case getNodeFor hHead addr of
         Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
         Just node ->  pure node
-      output <- performHydraNodeRequest node $ Commit $ Aeson.toJSON utxo
+      output <- performHydraNodeRequest node $ Commit $ Aeson.toJSON utxo'
       case output of
         CommandFailed _ -> throwError "Commit Failed"
         Committed _ _ _ -> pure ()
         _ -> throwError $ "Invalid response received" <> tShow output
 
-    HydraHeadGetAddressUTxO addr -> runExceptT $ do
-      let
-        -- We don't care for init!
-        node = unsafeAnyNode hHead
-      -- node <- case getNodeFor hHead addr of
-      --   Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
-      --   Just node ->  pure node
+    HydraHeadGetAddressUTxO _ -> runExceptT $ do
+      let node = unsafeAnyNode hHead
       output <- performHydraNodeRequest node GetUTxO
       traceM $ show output
       case output of
-        GetUTxOResponse headId utxoJson -> do
-          traceM $ show utxoJson
-          let a =  Aeson.fromJSON utxoJson
-          traceM $ show a
-          case a of -- Aeson.fromJSON utxoJson of
-            Aeson.Success a -> pure a
+        GetUTxOResponse _ utxoJson -> do
+          case Aeson.fromJSON utxoJson of
+            Aeson.Success utxo' -> pure utxo'
             Aeson.Error e -> throwError $ "Failed to decode GetUTxOResponse: " <> T.pack e
         CommandFailed _ ->
           throwError "GetUTxO Failed"
         _ ->
           throwError $ "Invalid response received" <> tShow output
 
-    HydraHeadNewTx addr txCBOR _tx -> runExceptT $ do
+    HydraHeadNewTx _ txCBOR _tx -> runExceptT $ do
       let node = unsafeAnyNode hHead
       output <- performHydraNodeRequest node $ NewTx $ Aeson.String txCBOR
       case output of
@@ -449,7 +441,7 @@ sendHydraHeadCommand a hHead command = do
         TxInvalid _ _ _ _ -> throwError "NewTx Failed"
         _ -> throwError $ "Invalid response received" <> tShow output
 
-    HydraHeadClose hid _ -> do
+    HydraHeadClose _hid _ -> do
       let node = unsafeAnyNode hHead
       output <- performHydraNodeRequest node Close
       case output of
@@ -594,7 +586,7 @@ headPersistDir = "hydra-head-persistence"
 headNodeLogsDir :: FilePath
 headNodeLogsDir = "hydra-node-logs"
 
-queryHydraHeadConfigs :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text [HydraNodeConfig])
+queryHydraHeadConfigs :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text [HydraNodeConfig])
 queryHydraHeadConfigs a hid = do
   mHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
     runSelectReturningOne $ select $ do
@@ -692,7 +684,7 @@ initHead a hid = do
     Left err -> logInfo a "initHead" $ "Head failed to initialize: " <> err
   pure result
 
-commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
+commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  MonadIO m, HasNodeInfo a, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
     proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
@@ -708,7 +700,7 @@ commitToHead a hid committer amount = do
     Left err -> logInfo a "commitHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
   pure result
 
-getAddressUTxO :: (MonadIO m, HasLogger a, HasNodeInfo a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text (Api.UTxO Api.BabbageEra))
+getAddressUTxO :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text (Api.UTxO Api.BabbageEra))
 getAddressUTxO a hid committer = do
   runExceptT $ do
     hydraHeadVar <- ExceptT $ getRunningHead a hid
@@ -716,18 +708,17 @@ getAddressUTxO a hid committer = do
       result <- sendHydraHeadCommand a hydraHead $ HydraHeadGetAddressUTxO committer
       pure (hydraHead, result)
 
-newTx :: (MonadIO m, HasLogger a, HasNodeInfo a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> Api.Tx Api.BabbageEra -> m (Either Text ())
-newTx a hid addr txid txCBOR tx = do
+newTx :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> Api.Tx Api.BabbageEra -> m (Either Text ())
+newTx a hid addr _txid txCBOR tx = do
   runExceptT $ do
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
       result <- sendHydraHeadCommand a hydraHead $ HydraHeadNewTx addr txCBOR tx
       pure (hydraHead, result)
 
-closeHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, MonadIO m, HasNodeInfo a, HasLogger a, Db.HasDbConnectionPool a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
+closeHead :: (MonadBeam Postgres m, MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
 closeHead a hid committer = do
   result <- runExceptT $ do
-    info <- ExceptT $ queryProxyInfo a committer
     logInfo a "closeHead" $ "Attempting to Close " <> tShow hid
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
