@@ -532,8 +532,8 @@ mkHydraNodeProc cfg = do
       , ip <> ":" <> show port
       ]
 
-deriveConfigFromDbHead :: (MonadIO m, HasPortRange a, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> Db.HydraHead -> m (Either Text [HydraNodeConfig])
-deriveConfigFromDbHead a hh = Db.runBeam a $ runExceptT $ do
+deriveConfigFromDbHead :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasPortRange a, HasLogger a, HasNodeInfo a) => a -> Db.HydraHead -> m (Either Text [HydraNodeConfig])
+deriveConfigFromDbHead a hh = runExceptT $ do
   liftIO $ do
     createDirectoryIfMissing True headPersistDir
     createDirectoryIfMissing True headNodeLogsDir
@@ -586,7 +586,7 @@ headPersistDir = "hydra-head-persistence"
 headNodeLogsDir :: FilePath
 headNodeLogsDir = "hydra-node-logs"
 
-queryHydraHeadConfigs :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text [HydraNodeConfig])
+queryHydraHeadConfigs :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text [HydraNodeConfig])
 queryHydraHeadConfigs a hid = do
   mHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
     runSelectReturningOne $ select $ do
@@ -629,9 +629,9 @@ withHydraHeadManager :: (HydraHeadManager -> IO a) -> IO a
 withHydraHeadManager action = do
   bracket newHydraHeadManager terminateRunningHeads action
 
-startupExistingHeads :: (MonadIO m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> m (Either Text Int)
+startupExistingHeads :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
 startupExistingHeads a = do
-  allHeads <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
+  allHeads <- 
     runSelectReturningList $ select $ all_ (Db.db ^. Db.db_heads)
   results <- for allHeads $ \dbHead -> runExceptT $ do
     nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
@@ -641,7 +641,7 @@ startupExistingHeads a = do
     ExceptT $ trackRunningHead a headId hydraHead
   pure $ fmap (sum . fmap (const 1)) $ sequenceA results
 
-spinUpHead :: (MonadIO m, MonadBeam Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
+spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
 spinUpHead a hid = runExceptT $ do
   mHead <- do
     runSelectReturningOne $ select $ do

@@ -200,7 +200,6 @@ sendHydraLovelaceTx utxo addrStr lovelace = do
   changeAddress addrStr
   void $ balanceNonAdaAssets addrStr
 
--- sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> m (Either Text (Text, Text, Api.Tx Api.BabbageEra))
 sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
 sendHydraLovelace a proxyInfo pparams utxo addrStr lovelace = do
   traceM "sendHydraLovelace: START"
