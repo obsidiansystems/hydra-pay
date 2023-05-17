@@ -212,21 +212,11 @@ sendHydraLovelace a proxyInfo pparams utxo addrStr lovelace = do
       sendHydraLovelaceTx utxo addrStr lovelace
       sign (_proxyInfo_signingKey proxyInfo)
     traceM $ "sendHydraLovelace: Tx: " <> show txLbs
-
-    case Aeson.decode txLbs of
-      Nothing -> do
-        traceM "sendHydraLovelace: decode failed"
-        error ""
-      Just envelope ->
-        case txLbs ^? key "cborHex" . _String of
-          Nothing ->
-            pure $ Left "sendHydraLovelace: could not decode cardano tx creation"
-          Just cbor ->
-            case Api.deserialiseFromTextEnvelope (Api.AsTx Api.AsBabbageEra) envelope of
-              Left e -> do
-                pure $ Left $ T.pack $ "sendHydraLovelace: envelope failed" <> show e
-              Right (_tx :: Api.Tx Api.BabbageEra) -> do
-                traceM "sendHydraLovelace: envelope good"
-                pure $ Right (T.pack txId, cbor)
+    case txLbs ^? key "cborHex" . _String of
+      Nothing ->
+        pure $ Left "sendHydraLovelace: could not decode cardano tx creation"
+      Just cbor -> do
+        traceM "sendHydraLovelace: envelope good"
+        pure $ Right (T.pack txId, cbor)
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
