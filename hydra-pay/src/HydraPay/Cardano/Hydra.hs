@@ -616,17 +616,24 @@ withHydraHeadManager :: (HydraHeadManager -> IO a) -> IO a
 withHydraHeadManager action = do
   bracket newHydraHeadManager terminateRunningHeads action
 
-startupExistingHeads :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
+startupExistingHeads :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
 startupExistingHeads a = do
-  allHeads <- 
-    runSelectReturningList $ select $ all_ (Db.db ^. Db.db_heads)
-  results <- for allHeads $ \dbHead -> runExceptT $ do
+  activeHeads <- activeHydraHeads
+  results <- for activeHeads $ \dbHead -> runExceptT $ do
     nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
     hydraHead <- lift $ runHydraHead a nodeConfigs
     let
       headId = Db.hydraHeadId dbHead
     ExceptT $ trackRunningHead a headId hydraHead
   pure $ fmap (sum . fmap (const 1)) $ sequenceA results
+
+activeHydraHeads :: MonadBeam Postgres m => m [Db.HydraHead]
+activeHydraHeads = do
+  runSelectReturningList $ select $ do
+    heads_ <- all_ (Db.db ^. Db.db_heads)
+    paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
+    guard_ (paymentChan_ ^. Db.paymentChannel_open)
+    pure $ heads_
 
 spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
 spinUpHead a hid = runExceptT $ do
