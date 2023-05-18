@@ -586,18 +586,6 @@ headPersistDir = "hydra-head-persistence"
 headNodeLogsDir :: FilePath
 headNodeLogsDir = "hydra-node-logs"
 
-queryHydraHeadConfigs :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text [HydraNodeConfig])
-queryHydraHeadConfigs a hid = do
-  mHead <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ do
-    runSelectReturningOne $ select $ do
-      h <- all_ (Db.db ^. Db.db_heads)
-      guard_ (val_ (Db.HeadID $ SqlSerial hid) `references_` h)
-      pure h
-
-  case mHead of
-    Nothing -> pure $ Left $ "Invalid head " <> tShow hid <> " was not found"
-    Just hh -> deriveConfigFromDbHead a hh
-
 getRunningHead :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text (TMVar RunningHydraHead))
 getRunningHead a hid = do
   logInfo a "getRunningHead" $ "Fetching head " <> tShow hid
