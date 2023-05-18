@@ -333,17 +333,18 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                     logInfo a loggerName "Head is open"
                     atomically $ writeTVar headStatus $ HydraHead_Open
                 HeadIsClosed hid _ deadline -> do
-                  logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
-                  atomically $ writeTVar headStatus $ HydraHead_Closed
-                  atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
+                  when isReporter $ do
+                    logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
+                    atomically $ writeTVar headStatus $ HydraHead_Closed
+                    atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
                 ReadyToFanout hid -> do
-                  logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
-                  -- Only fanout when not replaying.
-                  traceM $ "Ready to Fanout: STATUS PRE"
-                  status <- atomically $ readTVar nodeStatus
-                  traceM $ "Ready to Fanout: STATUS" <> show status
-                  when (status /= HydraNodeStatus_Replaying) $ do
-                    liftIO $ atomically $ writeTBQueue pendingCommands Fanout
+                  when isReporter $ do
+                    logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
+                    traceM $ "Ready to Fanout: STATUS PRE"
+                    status <- atomically $ readTVar nodeStatus
+                    traceM $ "Ready to Fanout: STATUS" <> show status
+                    when (status /= HydraNodeStatus_Replaying) $ do
+                      liftIO $ atomically $ writeTBQueue pendingCommands Fanout
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
