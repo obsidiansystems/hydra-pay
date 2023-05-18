@@ -269,6 +269,11 @@ getPaymentChannelHeadId pcId = do
   let Db.HeadID (SqlSerial hid) = Db._paymentChannel_head paymentChannel
   pure hid
 
+getHydraHead :: (MonadBeam Postgres m, MonadFail m) => Int32 -> m Db.HydraHead
+getHydraHead headId = do
+  Just hydraHead <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_heads) (Db.HeadID $ SqlSerial headId))
+  pure hydraHead
+
 joinPaymentChannel :: (MonadBeam Postgres m) => Int32 -> Int32 -> m ()
 joinPaymentChannel headId amount = do
   -- TODO(skylar): Do we 'try' to get a useful error message here?

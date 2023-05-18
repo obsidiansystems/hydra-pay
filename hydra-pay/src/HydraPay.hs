@@ -195,22 +195,43 @@ selectInputsFromUTxO outputValue utxo = do
   -- return the inputs and the remaining outputs
   pure (inputs, diffValuesWithNegatives outputValue mergeInputValue)
 
-sendHydraLovelaceTx :: Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> Tx ()
-sendHydraLovelaceTx utxo addrStr lovelace = do
-  Output {..} <- output addrStr $ fromString $ show (Api.lovelaceToQuantity lovelace) <> " lovelace"
+sendHydraLovelaceTx :: Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> Tx ()
+sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace = do
+  traceM $ "FROM ADDR: " <> fromAddrStr
+  Output {..} <- output toAddrStr $ fromString $ show (Api.lovelaceToQuantity lovelace) <> " lovelace"
+  traceM $ "  TO ADDR: " <> toAddrStr
   void $ selectInputsFromUTxO oValue utxo
-  changeAddress addrStr
-  void $ balanceNonAdaAssets addrStr
+  void $ balanceAdaAssets fromAddrStr
 
-sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
-sendHydraLovelace a proxyInfo pparams utxo addrStr lovelace = do
-  traceM "sendHydraLovelace: START"
+balanceAdaAssets
+  :: Address
+  -- ^ Change address
+  -> Tx (Maybe Output)
+balanceAdaAssets addr = do
+  TransactionBuilder {..} <- getTransactionBuilder
+  let
+    inputValue = mconcat $ map (utxoValue . iUtxo) tInputs
+    outputValue = mconcat $ map oValue tOutputs
+    theDiffValue = inputValue `diffValues` outputValue
+
+  traceM $ " INPUT: " <> show inputValue
+  traceM $ "OUTPUT: " <> show outputValue
+  traceM $ "  DIFF: " <> show theDiffValue
+
+    -- Make sure there are non-ada assets in there
+
+  if theDiffValue == mempty then pure Nothing else do
+    Just <$> output addr theDiffValue
+
+sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
+sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
+  traceM "sendHydraLovelace: sendHydraLovelace: BEGIN"
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    traceM "sendHydraLovelace: PARAMS"
+    traceM "sendHydraLovelace: Retrieve Params"
     let cfg = mkEvalConfig a socketPath paramsPath
         fee = 0
     (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
-      sendHydraLovelaceTx utxo addrStr lovelace
+      sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace
       sign (_proxyInfo_signingKey proxyInfo)
     traceM $ "sendHydraLovelace: Tx: " <> show txLbs
     case txLbs ^? key "cborHex" . _String of

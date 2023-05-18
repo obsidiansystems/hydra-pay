@@ -91,7 +91,7 @@ data HydraHeadInput :: * -> * where
   HydraHeadInit :: HydraHeadInput (Either Text ())
   HydraHeadCommit :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> HydraHeadInput (Either Text ())
   HydraHeadGetAddressUTxO :: Api.AddressAny -> HydraHeadInput (Either Text (Api.UTxO Api.BabbageEra))
-  HydraHeadNewTx :: Api.AddressAny -> Text -> Api.Tx Api.BabbageEra -> HydraHeadInput (Either Text ())
+  HydraHeadNewTx :: Api.AddressAny -> Text -> HydraHeadInput (Either Text ())
   HydraHeadClose :: Int32 -> Api.AddressAny -> HydraHeadInput (Either Text ())
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
@@ -389,6 +389,7 @@ isResponse (HeadIsInitializing _ _) Init = True
 isResponse (Committed _ _ v) (Commit v') | v == v' = True
 isResponse (GetUTxOResponse {}) GetUTxO = True
 isResponse (SnapshotConfirmed {}) (NewTx {}) = True
+isResponse (TxInvalid {}) (NewTx {}) = True
 isResponse (ReadyToFanout {}) Close = True
 isResponse _ _ = False
 
@@ -423,22 +424,24 @@ sendHydraHeadCommand a hHead command = do
         Committed _ _ _ -> pure ()
         _ -> throwError $ "Invalid response received" <> tShow output
 
-    HydraHeadGetAddressUTxO _ -> runExceptT $ do
+    HydraHeadGetAddressUTxO addr -> runExceptT $ do
       let node = unsafeAnyNode hHead
       output <- performHydraNodeRequest node GetUTxO
       traceM $ show output
       case output of
         GetUTxOResponse _ utxoJson -> do
           case Aeson.fromJSON utxoJson of
-            Aeson.Success utxo' -> pure utxo'
+            Aeson.Success utxo' -> pure $ filterUTxOByAddress addr utxo'
             Aeson.Error e -> throwError $ "Failed to decode GetUTxOResponse: " <> T.pack e
         CommandFailed _ ->
           throwError "GetUTxO Failed"
         _ ->
           throwError $ "Invalid response received" <> tShow output
 
-    HydraHeadNewTx _ txCBOR _tx -> runExceptT $ do
-      let node = unsafeAnyNode hHead
+    HydraHeadNewTx addr txCBOR -> runExceptT $ do
+      node <- case getNodeFor hHead addr of
+        Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
+        Just node ->  pure node
       output <- performHydraNodeRequest node $ NewTx $ Aeson.String txCBOR
       case output of
         SnapshotConfirmed _ snapshotJson _ -> do
@@ -453,6 +456,11 @@ sendHydraHeadCommand a hHead command = do
         CommandFailed _ -> pure $ Left "Command Failed"
         HeadIsClosed _ _ _ -> pure $ Right ()
         _ -> pure $ Left $ "Invalid response received" <> tShow output
+
+filterUTxOByAddress :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> Api.UTxO Api.BabbageEra
+filterUTxOByAddress addr (Api.UTxO m) = Api.UTxO $ Map.filter (\x -> txOutAddress x == addr) m
+  where
+    txOutAddress (Api.TxOut (Api.AddressInEra _ a) _ _ _) = Api.toAddressAny a
 
 -- Performing a request on a node consists on adding it to a queue which
 -- eventually is processed and communicates through a websocket with the hydra
@@ -641,9 +649,14 @@ spinUpHead a hid = runExceptT $ do
   case mHead of
     Nothing -> throwError $ "Invalid head id" <> tShow hid
     Just dbHead -> do
+      traceM $ "spinUpHead: Foudn head: " <>  show (Db._hydraHead_id dbHead)
       nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
+      traceM $ "spinUpHead: Configs retrieved"
       hydraHead <- lift $ runHydraHead a nodeConfigs
-      ExceptT $ trackRunningHead a hid hydraHead
+      traceM $ "spinUpHead: Ran Hydra Head"
+      out <- ExceptT $ trackRunningHead a hid hydraHead
+      traceM $ "spinUpHead: Tracked Running Head"
+      pure out
 
 newHydraHeadManager :: MonadIO m => m HydraHeadManager
 newHydraHeadManager = HydraHeadManager <$> (liftIO . newTMVarIO) mempty
@@ -699,12 +712,12 @@ getAddressUTxO a hid committer = do
       result <- sendHydraHeadCommand a hydraHead $ HydraHeadGetAddressUTxO committer
       pure (hydraHead, result)
 
-newTx :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> Api.Tx Api.BabbageEra -> m (Either Text ())
-newTx a hid addr _txid txCBOR tx = do
+newTx :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> m (Either Text ())
+newTx a hid addr _txid txCBOR = do
   runExceptT $ do
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ HydraHeadNewTx addr txCBOR tx
+      result <- sendHydraHeadCommand a hydraHead $ HydraHeadNewTx addr txCBOR
       pure (hydraHead, result)
 
 closeHead :: (MonadBeam Postgres m, MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
