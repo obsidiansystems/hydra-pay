@@ -9,7 +9,6 @@ import System.Which
 import System.Process
 import System.FilePath
 import System.Directory
-import System.Timeout
 
 import Data.Int
 import Data.Word
@@ -353,6 +352,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
 
 handleRequests :: MonadIO m => TMVar (Map Int HydraNodeRequest) -> ServerOutput -> m ()
 handleRequests requests output = do
+  traceM $ "handleRequests: " <> show output
   withTMVar requests $ \current -> do
     handled <- fmap (catMaybes) $ for (Map.elems current) $ \req -> do
       case isResponse output (req ^. hydraNodeRequest_clientInput) of
@@ -367,7 +367,6 @@ handleRequests requests output = do
     pure (newMap, ())
 
 isResponse :: ServerOutput -> ClientInput -> Bool
-isResponse (CommandFailed {}) (NewTx {}) = True -- cbor can mess with input? which fails to get caught by the next case
 isResponse (CommandFailed offending) cInput =
   traceShow
   (offending, cInput)
@@ -375,8 +374,9 @@ isResponse (CommandFailed offending) cInput =
 isResponse (HeadIsInitializing _ _) Init = True
 isResponse (Committed _ _ v) (Commit v') | v == v' = True
 isResponse (GetUTxOResponse {}) GetUTxO = True
-isResponse (SnapshotConfirmed {}) (NewTx {}) = True
+isResponse (TxValid {}) (NewTx {}) = True
 isResponse (TxInvalid {}) (NewTx {}) = True
+isResponse (SnapshotConfirmed {}) (NewTx {}) = True
 isResponse (HeadIsClosed {}) Close = True
 isResponse (Committed {}) Fanout = True
 isResponse (HeadIsFinalized {}) Fanout = True
@@ -433,10 +433,15 @@ sendHydraHeadCommand a hHead command = do
         Just node ->  pure node
       output <- performHydraNodeRequest node $ NewTx $ Aeson.String txCBOR
       case output of
+        TxValid {} -> do
+          traceM $ "NewTx: " <> show output
+          pure ()
         SnapshotConfirmed _ snapshotJson _ -> do
-          traceM $ show snapshotJson
+          traceM $ "NewTx: SnapshotConfirmed: " <> show snapshotJson
         TxInvalid _ _ _ _ -> throwError "NewTx Failed"
-        _ -> throwError $ "Invalid response received" <> tShow output
+        _ -> do
+          traceM $ "Invalid response received" <> show output
+          throwError $ "Invalid response received" <> tShow output
 
     HydraHeadClose _hid _ -> do
       let node = unsafeAnyNode hHead
@@ -711,9 +716,12 @@ getAddressUTxO a hid committer = do
 newTx :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> m (Either Text ())
 newTx a hid addr _txid txCBOR = do
   runExceptT $ do
+    traceM "newTx: Start"
     hydraHeadVar <- ExceptT $ getRunningHead a hid
     ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
+      traceM "newTx: Pre cmd"
       result <- sendHydraHeadCommand a hydraHead $ HydraHeadNewTx addr txCBOR
+      traceM "newTx: Post cmd"
       pure (hydraHead, result)
 
 closeHead :: (MonadBeam Postgres m, MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
