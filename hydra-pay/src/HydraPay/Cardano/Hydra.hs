@@ -465,10 +465,7 @@ performHydraNodeRequest node i = do
       req = HydraNodeRequest nextId i mailbox
     liftIO $ atomically $ writeTBQueue (node ^. hydraNode_requestQueue) i
     pure (Map.insert nextId req current, ())
-  result <- liftIO $ timeout (5 * 1000 * 1000) $ atomically $ takeTMVar mailbox
-  case result of
-    Nothing -> pure $ CommandFailed undefined
-    Just r -> pure r
+  liftIO $ atomically $ takeTMVar mailbox
 
 logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
 logTo out err cp =
