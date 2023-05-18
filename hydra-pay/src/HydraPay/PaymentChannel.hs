@@ -151,15 +151,16 @@ dbPaymentChannelToInfo addr hh pc =
     addrStr = Api.serialiseAddress addr
 
 getPaymentChannelDetails :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
-getPaymentChannelDetails a addr hid = do
+getPaymentChannelDetails a addr pcId = do
   Db.runBeam a $ runExceptT $ do
     mHead <- runSelectReturningOne $ select $ do
-      h <- all_ (Db.db ^. Db.db_heads)
-      guard_ (h ^. Db.hydraHead_id ==. val_ (SqlSerial hid))
-      pure h
+      heads_ <- all_ (Db.db ^. Db.db_heads)
+      paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
+      guard_ (paymentChan_ ^. Db.paymentChannel_id ==. val_ (SqlSerial pcId))
+      pure heads_
 
     case mHead of
-      Nothing -> throwError $ "Invalid head " <> tShow hid
+      Nothing -> throwError $ "Invalid channel " <> tShow pcId
       Just h -> do
         let
           isFirst = h ^. Db.hydraHead_first == Api.serialiseAddress addr
@@ -262,16 +263,20 @@ sendAdaInChannel hid you amount = runExceptT $ do
                             ]
         pure (newBalance, dbTransactionToTransactionInfo you $ head results)
 
-joinPaymentChannel :: (MonadBeam Postgres m, MonadFail m) => Int32 -> Int32 -> m ()
-joinPaymentChannel hid amount = do
+getPaymentChannelHeadId :: (MonadBeam Postgres m, MonadFail m) => Int32 -> m Int32
+getPaymentChannelHeadId pcId = do
+  Just paymentChannel <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_paymentChannels) (Db.PaymentChannelID $ SqlSerial pcId))
+  let Db.HeadID (SqlSerial hid) = Db._paymentChannel_head paymentChannel
+  pure hid
+
+joinPaymentChannel :: (MonadBeam Postgres m) => Int32 -> Int32 -> m ()
+joinPaymentChannel headId amount = do
   -- TODO(skylar): Do we 'try' to get a useful error message here?
-    Just paymentChannel <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_paymentChannels) (Db.PaymentChannelID $ SqlSerial hid))
-    let Db.HeadID headId = paymentChannel ^. Db.paymentChannel_head
     runUpdate $
       update
       (Db.db ^. Db.db_heads)
       (\channel -> channel ^. Db.hydraHead_secondBalance <-. val_ (Just amount))
-      (\channel -> channel ^. Db.hydraHead_id ==. val_ headId)
+      (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
 
 createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Int32
 createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
