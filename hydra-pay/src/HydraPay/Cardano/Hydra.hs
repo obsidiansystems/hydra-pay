@@ -316,7 +316,8 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
           hFlush logFile
           case result of
             Right res -> do
-              logInfo a loggerName $ "Valid message, processing..."
+              -- logInfo a loggerName $ "Valid message, processing..."
+              logInfo a loggerName $ "Valid message, processing...\n" <> T.pack (show res)
               case res of
                 Greetings _ -> atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
                 PeerConnected _ -> do
@@ -325,10 +326,12 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                 PostTxOnChainFailed _ _ -> do
                   logInfo a loggerName "Hydra Node failed to submit transaction on chain (check for fuel)"
                 HeadIsInitializing _ _ -> do
+                  logInfo a loggerName "Head is initializing (waiting for commits)"
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is initializing (waiting for commits)"
                     atomically $ writeTVar headStatus $ HydraHead_Initializing
                 HeadIsOpen _ _ -> do
+                  logInfo a loggerName "Head is open"
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is open"
                     atomically $ writeTVar headStatus $ HydraHead_Open
@@ -369,7 +372,9 @@ handleRequests requests output = do
         True -> do
           liftIO $ atomically $ putTMVar (req ^. hydraNodeRequest_mailbox) output
           pure $ Just $ req ^. hydraNodeRequest_id
-        _ -> pure Nothing
+        False -> do
+          traceM  $ "handleRequests: Not response: " <> (show output)
+          pure Nothing
     let
       newMap = (handled ^. traversed . to Map.delete) current
     pure (newMap, ())
@@ -404,7 +409,7 @@ sendHydraHeadCommand a hHead command = do
         node = unsafeAnyNode hHead
       output <- performHydraNodeRequest node Init
       case output of
-        CommandFailed _ -> pure $ Left "Command Failed"
+        CommandFailed cm -> pure $ Left $ "Command Failed: " <> T.pack (show cm)
         HeadIsInitializing _ _ -> pure $ Right ()
         _ -> pure $ Left $ "Invalid response received" <> tShow output
 
@@ -414,7 +419,7 @@ sendHydraHeadCommand a hHead command = do
         Just node ->  pure node
       output <- performHydraNodeRequest node $ Commit $ Aeson.toJSON utxo'
       case output of
-        CommandFailed _ -> throwError "Commit Failed"
+        CommandFailed cm -> throwError $ "Commit Failed: " <> T.pack (show cm)
         Committed _ _ _ -> pure ()
         _ -> throwError $ "Invalid response received" <> tShow output
 
@@ -673,6 +678,7 @@ commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  Mon
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
     proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
+    logInfo a "commitHead" $ "Attempting to Commit from address: " <> Api.serialiseAddress proxyAddr
     balance <- ExceptT $ runCardanoCli a $ queryUTxOs proxyAddr
     commitUtxo <- ExceptT $ pure $ maybeToEither ("Failed to find suitable commit utxo with " <> tShow amount <> "lovelace") $ findUTxOWithExactly amount balance
     logInfo a "commitHead" $ "Attempting to Commit to " <> tShow hid
