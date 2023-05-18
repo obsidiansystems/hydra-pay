@@ -326,12 +326,10 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                 PostTxOnChainFailed _ _ -> do
                   logInfo a loggerName "Hydra Node failed to submit transaction on chain (check for fuel)"
                 HeadIsInitializing _ _ -> do
-                  logInfo a loggerName "Head is initializing (waiting for commits)"
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is initializing (waiting for commits)"
                     atomically $ writeTVar headStatus $ HydraHead_Initializing
                 HeadIsOpen _ _ -> do
-                  logInfo a loggerName "Head is open"
                   when (commsThreadIsHeadStateReporter cfg) $ do
                     logInfo a loggerName "Head is open"
                     atomically $ writeTVar headStatus $ HydraHead_Open

@@ -318,30 +318,8 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second
 
-{-  case headMaybe results of
-    Nothing -> do
-      let errMsg = "Failed to create payment channel: Database persistence failed"
-      logWarn a "createPaymentChannel" errMsg
-      throwError errMsg
-    Just dbHead -> do
-      nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
-      hydraHead <- ExceptT $ runHydraHead a nodeConfigs
-      let
-        headId = Db.paymentChannelId dbHead
-      ExceptT $ trackRunningHead a headId hydraHead
-      pure headId
-  where
-    firstText = Api.serialiseAddress first
-    secondText = Api.serialiseAddress second
--}
-
-destroyPaymentChannel :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> Int32 -> m (Either Text ())
-destroyPaymentChannel a headId = runExceptT $ do
-  logInfo a "destroyPaymentChannel" $ "Closing head with id: " <> tShow headId
-  Db.runBeam a $ closeChannelQ headId
-
-closeChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-closeChannelQ headId = do
+closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
+closePaymentChannelQ headId = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
     (\channel -> channel ^. Db.paymentChannel_open <-. val_ False)
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
