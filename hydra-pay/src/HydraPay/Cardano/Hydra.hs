@@ -342,22 +342,11 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                 ReadyToFanout hid -> do
                   logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
                   -- Only fanout when not replaying.
-                  status <- atomically $ readTVar nodeStatus --  $ HydraNodeStatus_Replaying
+                  traceM $ "Ready to Fanout: STATUS PRE"
+                  status <- atomically $ readTVar nodeStatus
+                  traceM $ "Ready to Fanout: STATUS" <> show status
                   when (status /= HydraNodeStatus_Replaying) $ do
-                    mailbox <- liftIO $ newEmptyTMVarIO
-                    withTMVar pendingRequests $ \current -> do
-                      let
-                        cInput = Fanout
-                        nextId = case Map.null current of
-                          True -> 0
-                          False -> fst $ Map.findMax current
-                        req = HydraNodeRequest nextId cInput mailbox
-                      pure (Map.insert nextId req current, ())
-                    output <- liftIO $ atomically $ takeTMVar mailbox
-                    case output of
-                      CommandFailed _ -> logInfo a loggerName "Fanout Failed"
-                      Committed _ _ _ -> logInfo a loggerName "Fanout Done"
-                      _ -> logInfo a loggerName $ "Invalid response received" <> tShow output
+                    liftIO $ atomically $ writeTBQueue pendingCommands Fanout
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
@@ -390,7 +379,9 @@ isResponse (Committed _ _ v) (Commit v') | v == v' = True
 isResponse (GetUTxOResponse {}) GetUTxO = True
 isResponse (SnapshotConfirmed {}) (NewTx {}) = True
 isResponse (TxInvalid {}) (NewTx {}) = True
-isResponse (ReadyToFanout {}) Close = True
+isResponse (HeadIsClosed {}) Close = True
+isResponse (Committed {}) Fanout = True
+isResponse (HeadIsFinalized {}) Fanout = True
 isResponse _ _ = False
 
 unsafeAnyNode :: RunningHydraHead -> HydraNode
