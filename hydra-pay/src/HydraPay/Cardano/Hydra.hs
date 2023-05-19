@@ -352,8 +352,9 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                       print e
                     Aeson.Success (Api.UTxO utxoMap :: Api.UTxO Api.BabbageEra) -> do
                       let addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
-                      liftIO $ print addressAndValues
-                      forM_ addressAndValues $ \(proxyAddr, val) -> Db.runBeam a $ do
+                          -- Combine UTxOs going to the same address
+                          addressAndValuesTotal = Map.fromListWith (<>) addressAndValues
+                      iforM_ addressAndValuesTotal $ \proxyAddr val -> Db.runBeam a $ do
                         mChainAddress <- getProxyChainAddressAndSigningKey proxyAddr
                         forM_ mChainAddress $ \(chainAddress, skPath) -> do
                           let lovelace = Api.selectLovelace val
