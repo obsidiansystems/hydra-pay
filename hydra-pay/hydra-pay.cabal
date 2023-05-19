@@ -1,85 +1,61 @@
-name: hydra-pay
-version: 0.1
-cabal-version: >= 1.10
-build-type: Simple
+name:          hydra-pay
+version:       0.1
+cabal-version: >=1.10
+build-type:    Simple
 
 library
-  hs-source-dirs: src
-  build-depends: base
-               , process
-               , which
-               , text
-               , lens
-               --, monad-logger
-               --, monad-logger-extras
-               , websockets
-               , bytestring
-               --, bytestring-aeson-orphans
-               --, exceptions
-               , aeson
-               , lens-aeson
-               , transformers
-               , fsnotify
-               , reflex
-               , reflex-fsnotify
-               , directory
-               , filepath
-               , stm
-               , mtl
-               , dependent-sum
-               , containers
-               , cardano-transaction
-               , temporary
-               , postgresql-simple
-               --, gargoyle-postgresql
-               , gargoyle-postgresql-connect
-               --, gargoyle-postgresql-nix
-               --, gargoyle
-               , resource-pool
-               , beam-core
-               , beam-postgres
-               , beam-automigrate
-               --, network
-               , time
-               --, aeson-gadt-th
-               --, hexstring
-               --, constraints-extras
-               , typed-process
-               , managed
-
-               -- , cardano-addresses
-               , cardano-api
-               -- , cardano-binary
-               -- , cardano-crypto
-               -- , cardano-crypto-class
-               -- , cardano-ledger-alonzo
-               -- , cardano-ledger-babbage
-               -- , cardano-ledger-core
-               -- , cardano-ledger-shelley
-               -- , cardano-ledger-shelley-ma
-               -- , cardano-slotting
-               -- , cardano-wallet
-               -- , cardano-wallet-coin-selection
-
-               , hydra-pay-core
+  hs-source-dirs:     src
+  build-depends:
+      aeson
+    , base
+    , beam-automigrate
+    , beam-core
+    , beam-postgres
+    , bytestring
+    , cardano-api
+    , cardano-transaction
+    , containers
+    , dependent-sum
+    , directory
+    , filepath
+    , fsnotify
+    , gargoyle-postgresql-connect
+    , hydra-pay-core
+    , lens
+    , lens-aeson
+    , managed
+    , mtl
+    , postgresql-simple
+    , process
+    , reflex
+    , reflex-fsnotify
+    , resource-pool
+    , stm
+    , temporary
+    , text
+    , time
+    , transformers
+    , typed-process
+    , websockets
+    , which
 
   default-extensions:
-    DerivingStrategies
+    ConstraintKinds
+    DataKinds
     DeriveGeneric
+    DerivingStrategies
     FlexibleContexts
     FlexibleInstances
     GADTs
     LambdaCase
-    ConstraintKinds
-    RankNTypes
     MultiParamTypeClasses
     OverloadedStrings
     QuantifiedConstraints
+    RankNTypes
     RecursiveDo
     ScopedTypeVariables
-    TypeFamilies
     TypeApplications
-    DataKinds
+    TypeFamilies
     UndecidableInstances
 
   exposed-modules:
@@ -97,4 +73,6 @@ library
     HydraPay.Transaction
     HydraPay.Watch
 
-  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
+  ghc-options:
+    -Wall -Wredundant-constraints -Wincomplete-uni-patterns
+    -Wincomplete-record-updates -O -fno-show-valid-hole-fits
