@@ -1,4 +1,4 @@
-name:          hydra-pay
+name:          hydra-pay-core
 version:       0.1
 cabal-version: >=1.10
 build-type:    Simple
@@ -7,37 +7,25 @@ library
   hs-source-dirs:     src
   build-depends:
       aeson
+    , aeson-gadt-th
     , base
-    , beam-automigrate
     , beam-core
-    , beam-postgres
     , bytestring
+    , cardano-addresses
     , cardano-api
-    , cardano-transaction
+    , cardano-ledger-core
+    , constraints-extras
     , containers
-    , dependent-sum
     , directory
-    , filepath
-    , fsnotify
-    , gargoyle-postgresql-connect
-    , hydra-pay-core
+    , hexstring
     , lens
-    , lens-aeson
-    , managed
     , mtl
-    , postgresql-simple
+    , network
     , process
-    , reflex
-    , reflex-fsnotify
-    , resource-pool
     , stm
-    , temporary
     , text
     , time
     , transformers
-    , typed-process
-    , websockets
-    , which
 
   default-extensions:
     ConstraintKinds
@@ -59,19 +47,16 @@ library
     UndecidableInstances
 
   exposed-modules:
-    Cardano.Transaction.CardanoApi
-    Cardano.Transaction.Extras
-    HydraPay
-    HydraPay.Cardano.Cli
-    HydraPay.Cardano.Hydra
-    HydraPay.Cardano.Hydra.Tools
-    HydraPay.Cardano.Node
-    HydraPay.Database
-    HydraPay.Host
-    HydraPay.PaymentChannel.Postgres
-    HydraPay.Proxy
-    HydraPay.Transaction
-    HydraPay.Watch
+    HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Api.ClientInput
+    HydraPay.Cardano.Hydra.ChainConfig
+    HydraPay.Cardano.Hydra.RunningHead
+    HydraPay.Logging
+    HydraPay.Orphans
+    HydraPay.PaymentChannel
+    HydraPay.PortRange
+    HydraPay.Types
+    HydraPay.Utils
 
   ghc-options:
     -Wall -Wredundant-constraints -Wincomplete-uni-patterns

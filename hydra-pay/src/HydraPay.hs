@@ -8,12 +8,15 @@ import System.Directory
 import System.IO
 import System.IO.Temp
 
+import Control.Exception (catch)
 import Data.Aeson.Lens
 
 import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
+
+import Debug.Trace (traceM)
 
 import qualified Data.Aeson as Aeson
 
@@ -23,14 +26,14 @@ import qualified Cardano.Api.Shelley as Api
 import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Logging
-import HydraPay.PaymentChannel
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
+import HydraPay.Cardano.Hydra
 import HydraPay.Proxy
+import HydraPay.Transaction
 import qualified HydraPay.Database as DB
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM
 
 import Data.Int
 import Data.String
@@ -40,10 +43,9 @@ import qualified Data.Text as T
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 
-import Data.Map (Map)
-import qualified Data.Map as Map
-
 import Cardano.Transaction hiding (TxId)
+import Cardano.Transaction.CardanoApi
+import Cardano.Transaction.Extras (evalRawNoSubmit)
 
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
@@ -52,12 +54,12 @@ import Database.Beam.Postgres
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
+
 data HydraPayState = HydraPayState
-  { _hydraPay_proxies :: TMVar (Map Api.AddressAny ProxyInfo)
-  , _hydraPay_nodeInfo :: NodeInfo
+  { _hydraPay_nodeInfo :: NodeInfo
   , _hydraPay_databaseConnectionPool :: Pool Connection
   , _hydraPay_logger :: Logger
-  , _hydraPay_paymentChannelManager :: PaymentChannelManager
+  , _hydraPay_hydraHeadManager :: HydraHeadManager
   }
 
 makeLenses ''HydraPayState
@@ -77,8 +79,8 @@ instance HasHydraPay HydraPayState where
 instance HasLogger HydraPayState where
   getLogger = hydraPay_logger
 
-instance HasPaymentChannelManager HydraPayState where
-  paymentChannelManager = hydraPay_paymentChannelManager
+instance HasHydraHeadManager HydraPayState where
+  hydraHeadManager = hydraPay_hydraHeadManager
 
 data HydraPayConfig = HydraPayConfig
   { hydraPaySettings_database :: FilePath
@@ -90,38 +92,20 @@ runHydraPay :: HydraPayConfig -> (HydraPayState -> IO a) -> IO a
 runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db $ \pool -> do
   withResource pool DB.doAutomigrate
   withCardanoNode ncfg $ \ni -> do
-    withPaymentChannelManager $ \manager -> do
-      proxies <- newTMVarIO mempty
-      action $ HydraPayState proxies ni pool l manager
-
-addressString :: Api.AddressAny -> String
-addressString = T.unpack . Api.serialiseAddress
-
--- | Given node information, and a path to the node socket and protocol parameters create an EvalConfig for running the Tx monad
-mkEvalConfig :: HasNodeInfo a => a -> FilePath -> FilePath -> EvalConfig
-mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just nsFp)
-  where
-    ni = a ^. nodeInfo
+    withHydraHeadManager $ \manager -> do
+      action $ HydraPayState ni pool l manager
 
 sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a socketPath paramsPath
-    fmap (TxId . T.pack) $ eval cfg $ payFuelTo fromAddr skPath toAddr amount
+    fmap (TxId . T.pack) $
+      eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
--- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
-withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
-withProtocolParamsFile pparams action = do
-  createDirectoryIfMissing True tempTxDir
-  withTempFile tempTxDir "params" $ \paramsPath handle -> do
-    hClose handle
-    Aeson.encodeFile paramsPath pparams
-    action paramsPath
-
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
-getProxyTx a pparams addr lovelace = runExceptT $ do
+getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a socketPath paramsPath
@@ -129,9 +113,6 @@ getProxyTx a pparams addr lovelace = runExceptT $ do
     pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
-
-tempTxDir :: FilePath
-tempTxDir = "tx"
 
 assumeWitnessed :: BS.ByteString -> BS.ByteString
 assumeWitnessed bs = do
@@ -182,27 +163,62 @@ payToProxyTx addr lovelace proxy = do
   where
     addrStr = addressString addr
 
-totalLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace = sum . fmap (txOutValue) . filter (not . txOutIsFuel) . Map.elems . Api.unUTxO
+-- | Like 'Cardano.Transaction.selectInputs', but allows to provide your own
+-- UTxO. In the case of Hydra the UTxO comes from talking to the Head which
+-- 'Cardano.Transaction.selectInputs' can not handle.
+selectInputsFromUTxO :: Value -> Api.UTxO Api.BabbageEra -> Tx ([Input], Value)
+selectInputsFromUTxO outputValue utxo = do
+  let inputs = inputFromUTxO <$> fromCardanoApiUTxO utxo
+  putpend $ mempty { tInputs = inputs }
+  -- Merge the utxos values
+  let mergeInputValue = mconcat $ map (utxoValue . iUtxo) inputs
+  -- return the inputs and the remaining outputs
+  pure (inputs, diffValuesWithNegatives outputValue mergeInputValue)
 
-totalLovelace' :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace' = sum . fmap (txOutValue) . Map.elems . Api.unUTxO
+sendHydraLovelaceTx :: Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> Tx ()
+sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace = do
+  traceM $ "FROM ADDR: " <> fromAddrStr
+  Output {..} <- output toAddrStr $ fromString $ show (Api.lovelaceToQuantity lovelace) <> " lovelace"
+  traceM $ "  TO ADDR: " <> toAddrStr
+  void $ selectInputsFromUTxO oValue utxo
+  void $ balanceAdaAssets fromAddrStr
 
-totalFuelLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalFuelLovelace = sum . fmap (txOutValue) . filter txOutIsFuel . Map.elems . Api.unUTxO
+balanceAdaAssets
+  :: Address
+  -- ^ Change address
+  -> Tx (Maybe Output)
+balanceAdaAssets addr = do
+  TransactionBuilder {..} <- getTransactionBuilder
+  let
+    inputValue = mconcat $ map (utxoValue . iUtxo) tInputs
+    outputValue = mconcat $ map oValue tOutputs
+    theDiffValue = inputValue `diffValues` outputValue
 
-fuelMarkerDatumHash :: BS.ByteString
-fuelMarkerDatumHash =
-  "a654fb60d21c1fed48db2c320aa6df9737ec0204c0ba53b9b94a09fb40e757f3"
+  traceM $ " INPUT: " <> show inputValue
+  traceM $ "OUTPUT: " <> show outputValue
+  traceM $ "  DIFF: " <> show theDiffValue
 
-txOutDatumIsFuel :: Api.TxOutDatum ctx era -> Bool
-txOutDatumIsFuel (Api.TxOutDatumHash _ datumHash) =
-  Aeson.encode datumHash == LBS.fromStrict ("\"" <> fuelMarkerDatumHash <> "\"")
-txOutDatumIsFuel _ = False
+    -- Make sure there are non-ada assets in there
 
-txOutIsFuel :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Bool
-txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
+  if theDiffValue == mempty then pure Nothing else do
+    Just <$> output addr theDiffValue
 
-txOutValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Api.Lovelace
-txOutValue (Api.TxOut _ (Api.TxOutValue _ value) _ _) = Api.selectLovelace value
-txOutValue _ = 0
+sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
+sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
+  traceM "sendHydraLovelace: sendHydraLovelace: BEGIN"
+  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    traceM "sendHydraLovelace: Retrieve Params"
+    let cfg = mkEvalConfig a socketPath paramsPath
+        fee = 0
+    (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
+      sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace
+      sign (_proxyInfo_signingKey proxyInfo)
+    traceM $ "sendHydraLovelace: Tx: " <> show txLbs
+    case txLbs ^? key "cborHex" . _String of
+      Nothing ->
+        pure $ Left "sendHydraLovelace: could not decode cardano tx creation"
+      Just cbor -> do
+        traceM "sendHydraLovelace: envelope good"
+        pure $ Right (T.pack txId, cbor)
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath

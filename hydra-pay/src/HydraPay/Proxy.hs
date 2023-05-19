@@ -32,18 +32,29 @@ data ProxyInfo = ProxyInfo
 
 makeLenses ''ProxyInfo
 
-getProxyInfo :: MonadIO m => Api.AddressAny -> Connection -> m (Maybe ProxyInfo)
-getProxyInfo addr conn = liftIO $ do
-  proxy <- runBeamPostgres conn $ runSelectReturningOne $ select $ do
+getProxyInfo :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe ProxyInfo)
+getProxyInfo addr = do
+  proxy <- runSelectReturningOne $ select $ do
     proxy <- all_ (DB.db ^. DB.db_proxies)
     guard_ (proxy ^. DB.proxy_chainAddress ==.  val_ (Api.serialiseAddress addr))
     pure proxy
   pure $ proxy >>= dbProxyInfoToProxyInfo
 
-addProxyInfo :: MonadIO m => Api.AddressAny -> ProxyInfo -> Connection -> m (Maybe ProxyInfo)
-addProxyInfo addr pinfo conn = liftIO $ do
-  result <- runBeamPostgres conn
-    $ runInsertReturningList
+-- | Return the chain address given a proxy address.
+getProxyChainAddressAndSigningKey :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe (Api.AddressAny, Text))
+getProxyChainAddressAndSigningKey addr = do
+  chainAddress <- runSelectReturningOne $ select $ do
+    proxy <- all_ (DB.db ^. DB.db_proxies)
+    guard_ (proxy ^. DB.proxy_hydraAddress ==.  val_ (Api.serialiseAddress addr))
+    pure (DB._proxy_chainAddress proxy, DB._proxy_signingKeyPath proxy)
+  pure $ do
+    (c, sk) <- chainAddress
+    a <- Api.deserialiseAddress Api.AsAddressAny c
+    pure (a, sk)
+
+addProxyInfo :: MonadBeamInsertReturning Postgres m => Api.AddressAny -> ProxyInfo -> m (Maybe ProxyInfo)
+addProxyInfo addr pinfo = do
+  result <- runInsertReturningList
     $ insertOnConflict (DB.db ^. DB.db_proxies)
     (insertValues [ DB.ProxyInfo
                     (Api.serialiseAddress addr)
@@ -57,9 +68,9 @@ addProxyInfo addr pinfo conn = liftIO $ do
     anyConflict onConflictDoNothing
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo
 
-queryProxyInfo :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
+queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
 queryProxyInfo a addr = do
-  result <- DB.runQueryInTransaction a $ getProxyInfo addr
+  result <- getProxyInfo addr
   case result of
     Nothing -> do
       runExceptT $ do
@@ -70,14 +81,14 @@ queryProxyInfo a addr = do
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
         (hvk, hsk) <- ExceptT $ hydraKeyGen $ proxyKeysPath </> (prefix <> ".hydra")
         let newInfo = ProxyInfo proxyAddr vk sk hvk hsk
-        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ DB.runQueryInTransaction a $ addProxyInfo addr newInfo
+        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo addr newInfo
     Just info -> do
       pure $ Right info
 
 dbProxyInfoToProxyInfo :: DB.ProxyInfo -> Maybe ProxyInfo
 dbProxyInfoToProxyInfo pinfo =
   ProxyInfo
-  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_chainAddress)
+  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_hydraAddress)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_verificationKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_signingKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. DB.proxy_hydraVerificationKeyPath)
