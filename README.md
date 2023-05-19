@@ -62,7 +62,7 @@ We assume at this time you are knowledgeable about Hydra and the basic Hydra Hea
 
 ## Haskell Library
 
-A first party haskell library `hydra-pay` provides direct access to powerful features like:
+First party haskell libraries `hydra-pay-core` and `hydra-pay` provide direct access to powerful features like:
 * A simple, powerful, and customizable logger with automatic rotation, file size limits, and file management.
 * Automated node management with integrated logging and error tracking, providing a convenient interface for interaction and information.
 * A typesafe GADT based interface into cardano-cli that allows easy:
@@ -80,7 +80,7 @@ A first party haskell library `hydra-pay` provides direct access to powerful fea
   This API gives you first party payment channels, and if this fits your usecase, greatly simplifies your experience interacting with Hydra Heads.
 * Port allocation utilities, used for the node and the various payment channels, but can simplify logic within a dapp or light wallet. Simply ask for ports, and they are automatically returned.
 
-This library helps you kickstart DApp or LightWallet development by handling logging, state management, persistence, node and head interactions, and even port allocation. 
+These libraries help you kickstart DApp or LightWallet development by handling logging, state management, persistence, node and head interactions, and even port allocation. `hydra-pay-core` provides functionality that can be used to build frontend clients, while `hydra-pay` is focused on backend support and database interaction.
 
 **Important** Very soon these new and upgraded features will be available through the websocket interface for those who aren't using Haskell to develop their DApp or LightWallet, with all the same convenience, ease of use, power, and strong guarantees. 
 
