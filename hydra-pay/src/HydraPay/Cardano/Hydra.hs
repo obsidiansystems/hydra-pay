@@ -31,6 +31,7 @@ import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.Api hiding (headId)
+import HydraPay.Transaction
 import qualified HydraPay.Database as Db
 
 import qualified Cardano.Api as Api
@@ -271,7 +272,7 @@ waitForApi port = do
       waitForApi port
     Right _ -> pure ()
 
-runHydraHead :: (MonadIO m, HasLogger a) => a -> [HydraNodeConfig] -> m RunningHydraHead
+runHydraHead :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> [HydraNodeConfig] -> m RunningHydraHead
 runHydraHead a configs = liftIO $ do
   headStatus <- newTVarIO HydraHead_Uninitialized
   handles <- for configs $ \config -> do
@@ -283,7 +284,7 @@ runHydraHead a configs = liftIO $ do
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue
   pure $ RunningHydraHead headStatus $ foldOf each handles
 
-spawnHydraNodeApiConnectionThread :: (HasLogger a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
+spawnHydraNodeApiConnectionThread :: (HasLogger a, Db.HasDbConnectionPool a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
 spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
   liftIO $ forkIO $ bracket (openFile (config ^. hydraNodeConfig_threadLogFile) AppendMode) hClose $ \logFile -> do
     let
@@ -349,11 +350,17 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                   case Aeson.fromJSON utxoJson of
                     Aeson.Error e ->
                       print e
-                    Aeson.Success (utxo' :: Api.UTxO Api.BabbageEra) -> do
-                      let
-                        Api.UTxO utxoMap = utxo'
-                        addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
-                      print addressAndValues
+                    Aeson.Success (Api.UTxO utxoMap :: Api.UTxO Api.BabbageEra) -> do
+                      let addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
+                      liftIO $ print addressAndValues
+                      forM_ addressAndValues $ \(proxyAddr, val) -> Db.runBeam a $ do
+                        mChainAddress <- getProxyChainAddressAndSigningKey proxyAddr
+                        forM_ mChainAddress $ \(chainAddress, skPath) -> do
+                          let lovelace = Api.selectLovelace val
+                              toL1Adddress = chainAddress
+                              pparams = undefined -- FIXME get protocol params
+                          liftIO $ fanoutToL1Address pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
+                        pure ()
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
@@ -634,7 +641,7 @@ withHydraHeadManager :: (HydraHeadManager -> IO a) -> IO a
 withHydraHeadManager action = do
   bracket newHydraHeadManager terminateRunningHeads action
 
-startupExistingHeads :: (MonadIO m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
+startupExistingHeads :: (MonadIO m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
 startupExistingHeads a = do
   activeHeads <- activeHydraHeads
   results <- for activeHeads $ \dbHead -> runExceptT $ do
@@ -653,7 +660,7 @@ activeHydraHeads = do
     guard_ (paymentChan_ ^. Db.paymentChannel_open)
     pure $ heads_
 
-spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
+spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
 spinUpHead a hid = runExceptT $ do
   mHead <- do
     runSelectReturningOne $ select $ do

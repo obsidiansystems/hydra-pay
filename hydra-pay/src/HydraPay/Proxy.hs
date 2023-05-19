@@ -40,6 +40,18 @@ getProxyInfo addr = do
     pure proxy
   pure $ proxy >>= dbProxyInfoToProxyInfo
 
+-- | Return the chain address given a proxy address.
+getProxyChainAddressAndSigningKey :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe (Api.AddressAny, Text))
+getProxyChainAddressAndSigningKey addr = do
+  chainAddress <- runSelectReturningOne $ select $ do
+    proxy <- all_ (DB.db ^. DB.db_proxies)
+    guard_ (proxy ^. DB.proxy_hydraAddress ==.  val_ (Api.serialiseAddress addr))
+    pure (DB._proxy_chainAddress proxy, DB._proxy_signingKeyPath proxy)
+  pure $ do
+    (c, sk) <- chainAddress
+    a <- Api.deserialiseAddress Api.AsAddressAny c
+    pure (a, sk)
+
 addProxyInfo :: MonadBeamInsertReturning Postgres m => Api.AddressAny -> ProxyInfo -> m (Maybe ProxyInfo)
 addProxyInfo addr pinfo = do
   result <- runInsertReturningList

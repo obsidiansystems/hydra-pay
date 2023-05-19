@@ -30,6 +30,7 @@ import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra
 import HydraPay.Proxy
+import HydraPay.Transaction
 import qualified HydraPay.Database as DB
 
 import Control.Concurrent (threadDelay)
@@ -94,15 +95,6 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
     withHydraHeadManager $ \manager -> do
       action $ HydraPayState ni pool l manager
 
-addressString :: Api.AddressAny -> String
-addressString = T.unpack . Api.serialiseAddress
-
--- | Given node information, and a path to the node socket and protocol parameters create an EvalConfig for running the Tx monad
-mkEvalConfig :: HasNodeInfo a => a -> FilePath -> FilePath -> EvalConfig
-mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just nsFp)
-  where
-    ni = a ^. nodeInfo
-
 sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
@@ -111,34 +103,6 @@ sendFuelTo a pparams fromAddr skPath toAddr amount = do
       eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
-
--- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
-withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
-withProtocolParamsFile pparams action = do
-  createDirectoryIfMissing True tempTxDir
-  withTempFile tempTxDir "params" $ \paramsPath handle -> do
-    hClose handle
-    Aeson.encodeFile paramsPath pparams
-    action paramsPath
-
-fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
-fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
-  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
-    fmap (TxId . T.pack) $
-      eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
-  where
-    socketPath = a ^. nodeInfo . nodeInfo_socketPath
-
-fanoutToL1AddressTx :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
-fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
-  Output {..} <- output (addressString toAddr) (fromString $ show lovelace <> " lovelace")
-  void $ selectInputs oValue fromStr
-  changeAddress fromStr
-  void $ balanceNonAdaAssets fromStr
-  sign skPath
-  where
-    fromStr = addressString fromAddr
 
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
@@ -149,9 +113,6 @@ getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
     pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
-
-tempTxDir :: FilePath
-tempTxDir = "tx"
 
 assumeWitnessed :: BS.ByteString -> BS.ByteString
 assumeWitnessed bs = do
