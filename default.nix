@@ -33,6 +33,7 @@ let
       packages =
       {
         hydra-pay = ./hydra-pay;
+        hydra-pay-core = ./hydra-pay-core;
         cardano-transaction = pkgs.hackGet ./dep/cardano-transaction-builder;
         bytestring-aeson-orphans = pkgs.hackGet ./dep/bytestring-aeson-orphans;
       };

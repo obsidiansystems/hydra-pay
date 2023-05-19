@@ -1,0 +1,63 @@
+name:          hydra-pay-core
+version:       0.1
+cabal-version: >=1.10
+build-type:    Simple
+
+library
+  hs-source-dirs:     src
+  build-depends:
+      aeson
+    , aeson-gadt-th
+    , base
+    , beam-core
+    , bytestring
+    , cardano-addresses
+    , cardano-api
+    , cardano-ledger-core
+    , constraints-extras
+    , containers
+    , directory
+    , hexstring
+    , lens
+    , mtl
+    , network
+    , process
+    , stm
+    , text
+    , time
+    , transformers
+
+  default-extensions:
+    ConstraintKinds
+    DataKinds
+    DeriveGeneric
+    DerivingStrategies
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    LambdaCase
+    MultiParamTypeClasses
+    OverloadedStrings
+    QuantifiedConstraints
+    RankNTypes
+    RecursiveDo
+    ScopedTypeVariables
+    TypeApplications
+    TypeFamilies
+    UndecidableInstances
+
+  exposed-modules:
+    HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Api.ClientInput
+    HydraPay.Cardano.Hydra.ChainConfig
+    HydraPay.Cardano.Hydra.RunningHead
+    HydraPay.Logging
+    HydraPay.Orphans
+    HydraPay.PaymentChannel
+    HydraPay.PortRange
+    HydraPay.Types
+    HydraPay.Utils
+
+  ghc-options:
+    -Wall -Wredundant-constraints -Wincomplete-uni-patterns
+    -Wincomplete-record-updates -O -fno-show-valid-hole-fits

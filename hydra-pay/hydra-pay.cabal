@@ -10,12 +10,12 @@ library
                , which
                , text
                , lens
-               , monad-logger
-               , monad-logger-extras
+               --, monad-logger
+               --, monad-logger-extras
                , websockets
                , bytestring
-               , bytestring-aeson-orphans
-               , exceptions
+               --, bytestring-aeson-orphans
+               --, exceptions
                , aeson
                , lens-aeson
                , transformers
@@ -31,35 +31,37 @@ library
                , cardano-transaction
                , temporary
                , postgresql-simple
-               , gargoyle-postgresql
+               --, gargoyle-postgresql
                , gargoyle-postgresql-connect
-               , gargoyle-postgresql-nix
-               , gargoyle
+               --, gargoyle-postgresql-nix
+               --, gargoyle
                , resource-pool
                , beam-core
                , beam-postgres
                , beam-automigrate
-               , network
+               --, network
                , time
-               , aeson-gadt-th
-               , hexstring
-               , constraints-extras
+               --, aeson-gadt-th
+               --, hexstring
+               --, constraints-extras
                , typed-process
                , managed
 
-               , cardano-addresses
+               -- , cardano-addresses
                , cardano-api
-               , cardano-binary
-               , cardano-crypto
-               , cardano-crypto-class
-               , cardano-ledger-alonzo
-               , cardano-ledger-babbage
-               , cardano-ledger-core
-               , cardano-ledger-shelley
-               , cardano-ledger-shelley-ma
-               , cardano-slotting
-               , cardano-wallet
-               , cardano-wallet-coin-selection
+               -- , cardano-binary
+               -- , cardano-crypto
+               -- , cardano-crypto-class
+               -- , cardano-ledger-alonzo
+               -- , cardano-ledger-babbage
+               -- , cardano-ledger-core
+               -- , cardano-ledger-shelley
+               -- , cardano-ledger-shelley-ma
+               -- , cardano-slotting
+               -- , cardano-wallet
+               -- , cardano-wallet-coin-selection
+
+               , hydra-pay-core
 
   default-extensions:
     DerivingStrategies
@@ -81,24 +83,17 @@ library
     UndecidableInstances
 
   exposed-modules:
-    HydraPay
-    HydraPay.Orphans
-    HydraPay.PaymentChannel
-    HydraPay.Cardano.Cli
-    HydraPay.Logging
-    HydraPay.Cardano.Node
-    HydraPay.Cardano.Hydra
-    HydraPay.Cardano.Hydra.Api
-    HydraPay.Cardano.Hydra.Api.ClientInput
-    HydraPay.Cardano.Hydra.Tools
-    HydraPay.Host
-    HydraPay.Watch
-    HydraPay.PortRange
-    HydraPay.Database
-    HydraPay.Utils
-    HydraPay.Types
-    HydraPay.Proxy
     Cardano.Transaction.CardanoApi
     Cardano.Transaction.Extras
+    HydraPay
+    HydraPay.Cardano.Cli
+    HydraPay.Cardano.Hydra
+    HydraPay.Cardano.Hydra.Tools
+    HydraPay.Cardano.Node
+    HydraPay.Database
+    HydraPay.Host
+    HydraPay.PaymentChannel.Postgres
+    HydraPay.Proxy
+    HydraPay.Watch
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

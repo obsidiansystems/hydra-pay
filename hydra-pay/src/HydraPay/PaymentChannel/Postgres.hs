@@ -1,15 +1,13 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module HydraPay.PaymentChannel where
+module HydraPay.PaymentChannel.Postgres where
 
 import Data.Time
 import Data.Int
-import Data.Aeson
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Control.Concurrent.STM
 import Control.Lens
 import Control.Monad
 import Control.Monad.Error.Class
@@ -17,7 +15,8 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
 
 import HydraPay.Logging
-import HydraPay.Cardano.Hydra
+import HydraPay.PaymentChannel
+import HydraPay.Cardano.Hydra.ChainConfig
 import HydraPay.Utils
 
 import Data.Map (Map)
@@ -31,81 +30,6 @@ import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
-
-data PaymentChannelConfig = PaymentChannelConfig
-  { _paymentChannelConfig_name :: Text
-  , _paymentChannelConfig_first :: Api.AddressAny
-  , _paymentChannelConfig_second :: Api.AddressAny
-  , _paymentChannelConfig_commitAmount :: Int32
-  , _paymentChannelConfig_hydraChainConfig :: HydraChainConfig
-  }
-
-makeLenses ''PaymentChannelConfig
-
-class HasPaymentChannelManager a where
-  paymentChannelManager :: Lens' a PaymentChannelManager
-
--- | Manages running payment channels
-data PaymentChannelManager = PaymentChannelManager
-  { _paymentChannelManager_runningChannels :: TMVar (Map Int32 (TMVar RunningHydraHead))
-  }
-
-makeLenses ''PaymentChannelManager
-
-data PaymentChannelStatus
-  = PaymentChannelOpen
-  | PaymentChannelPending UTCTime
-  deriving (Eq, Show, Generic)
-
-instance ToJSON PaymentChannelStatus
-instance FromJSON PaymentChannelStatus
-
-data PaymentChannelInfo = PaymentChannelInfo
-  { _paymentChannelInfo_id :: Int32
-  , _paymentChannelInfo_name :: Text
-  , _paymentChannelInfo_other :: Text
-  , _paymentChannelInfo_status :: PaymentChannelStatus
-  , _paymentChannelInfo_initiator :: Bool
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON PaymentChannelInfo
-instance FromJSON PaymentChannelInfo
-
-data TransactionDirection =
-  TransactionReceived | TransactionSent
-  deriving (Eq, Show, Enum, Generic)
-
-instance ToJSON TransactionDirection
-instance FromJSON TransactionDirection
-
-data TransactionInfo = TransactionInfo
-  { _transactionInfo_id :: Int32
-  , _transactionInfo_time :: UTCTime
-  , _transactionInfo_amount :: Int32
-  , _transactionInfo_direction :: TransactionDirection
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON TransactionInfo
-instance FromJSON TransactionInfo
-
-makeLenses ''TransactionInfo
-makeLenses ''PaymentChannelInfo
-
-paymentChannelDisplayName :: PaymentChannelInfo -> Text
-paymentChannelDisplayName pinfo =
-  case paymentChannelNeedsMyAcceptance pinfo of
-    True -> "New Request"
-    False -> pinfo ^. paymentChannelInfo_name
-
-paymentChannelNeedsMyAcceptance :: PaymentChannelInfo -> Bool
-paymentChannelNeedsMyAcceptance pinfo =
-  pinfo ^. paymentChannelInfo_status . to isPending && not (pinfo ^. paymentChannelInfo_initiator)
-
-isPending :: PaymentChannelStatus -> Bool
-isPending (PaymentChannelPending _) = True
-isPending _ = False
 
 getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> m (Map Int32 PaymentChannelInfo)
 getPaymentChannelsInfo a addr = do
