@@ -272,7 +272,7 @@ waitForApi port = do
       waitForApi port
     Right _ -> pure ()
 
-runHydraHead :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> [HydraNodeConfig] -> m RunningHydraHead
+runHydraHead :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> [HydraNodeConfig] -> m RunningHydraHead
 runHydraHead a configs = liftIO $ do
   headStatus <- newTVarIO HydraHead_Uninitialized
   handles <- for configs $ \config -> do
@@ -284,7 +284,7 @@ runHydraHead a configs = liftIO $ do
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue
   pure $ RunningHydraHead headStatus $ foldOf each handles
 
-spawnHydraNodeApiConnectionThread :: (HasLogger a, Db.HasDbConnectionPool a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
+spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
 spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
   liftIO $ forkIO $ bracket (openFile (config ^. hydraNodeConfig_threadLogFile) AppendMode) hClose $ \logFile -> do
     let
@@ -358,7 +358,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                         forM_ mChainAddress $ \(chainAddress, skPath) -> do
                           let lovelace = Api.selectLovelace val
                               toL1Adddress = chainAddress
-                              pparams = undefined -- FIXME get protocol params
+                          Right pparams <- runCardanoCli a getProtocolParameters
                           liftIO $ fanoutToL1Address pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
                         pure ()
                 _ -> pure ()
