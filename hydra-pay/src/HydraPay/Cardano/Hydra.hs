@@ -346,20 +346,22 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                     when (status /= HydraNodeStatus_Replaying) $ do
                       liftIO $ atomically $ writeTBQueue pendingCommands Fanout
                 HeadIsFinalized hid utxoJson -> do
-                  -- HeadIsFinalized {headId = "fc171a94d7b48687a718a227daf842af88ecd8a21e6518cebad6bcdd", utxo =
-                  -- Object (fromList [("6abc1bba4230455f92ac67ba6d0865fde968ae4efb66b6ecbc90d4a1afe8acbb#0"
-                  --                  ,Object (fromList [("address",String "addr_test1vzv60fdw5fayamsjd0ul8ywy64f652d3rq9e5kq48zse3zgp202tt"),("datum",Null),("datumhash",Null),("inlineDatum",Null),("referenceScript",Null)
-                  --                                   ,("value",Object (fromList [("lovelace",Number 2000000.0)]))]))
                   case Aeson.fromJSON utxoJson of
                     Aeson.Error e ->
                       print e
-                    Aeson.Success (utxo' :: Api.UTxO Api.BabbageEra) ->
-                      print utxo'
+                    Aeson.Success (utxo' :: Api.UTxO Api.BabbageEra) -> do
+                      let
+                        Api.UTxO utxoMap = utxo'
+                        addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
+                      print addressAndValues
                 _ -> pure ()
               handleRequests pendingRequests res
             Left err -> do
               logInfo a loggerName $ "Invalid message received: " <> tShow msg <> " " <> T.pack err
           pure ()
+
+txOutAddressAndValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> (Api.AddressAny, Api.Value)
+txOutAddressAndValue (Api.TxOut (Api.AddressInEra _ a) val _ _) = (Api.toAddressAny a, Api.txOutValueToValue val)
 
 handleRequests :: MonadIO m => TMVar (Map Int HydraNodeRequest) -> ServerOutput -> m ()
 handleRequests requests output = do
