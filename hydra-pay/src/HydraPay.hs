@@ -121,6 +121,25 @@ withProtocolParamsFile pparams action = do
     Aeson.encodeFile paramsPath pparams
     action paramsPath
 
+fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
+  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath paramsPath
+    fmap (TxId . T.pack) $
+      eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath
+
+fanoutToL1AddressTx :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
+fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
+  Output {..} <- output (addressString toAddr) (fromString $ show lovelace <> " lovelace")
+  void $ selectInputs oValue fromStr
+  changeAddress fromStr
+  void $ balanceNonAdaAssets fromStr
+  sign skPath
+  where
+    fromStr = addressString fromAddr
+
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
