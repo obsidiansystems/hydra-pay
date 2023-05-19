@@ -346,7 +346,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                     traceM $ "Ready to Fanout: STATUS" <> show status
                     when (status /= HydraNodeStatus_Replaying) $ do
                       liftIO $ atomically $ writeTBQueue pendingCommands Fanout
-                HeadIsFinalized hid utxoJson -> when isReporter $ do
+                HeadIsFinalized _ utxoJson -> when isReporter $ do
                   case Aeson.fromJSON utxoJson of
                     Aeson.Error e ->
                       print e
@@ -359,7 +359,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                           let lovelace = Api.selectLovelace val
                               toL1Adddress = chainAddress
                           Right pparams <- runCardanoCli a getProtocolParameters
-                          liftIO $ fanoutToL1Address pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
+                          liftIO $ fanoutToL1Address a pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
                         pure ()
                 _ -> pure ()
               handleRequests pendingRequests res

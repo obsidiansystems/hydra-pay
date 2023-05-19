@@ -14,7 +14,6 @@ import qualified Data.Aeson as Aeson
 import Data.Int (Int32)
 import Data.String (fromString)
 import qualified Data.Text as T
-import System.Which
 import System.Directory
 import System.IO
 import System.IO.Temp
@@ -31,14 +30,15 @@ withProtocolParamsFile pparams action = do
     Aeson.encodeFile paramsPath pparams
     action paramsPath
 
-fanoutToL1Address :: MonadIO m => Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
-fanoutToL1Address pparams fromAddr skPath toAddr amount = do
+fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let testnetMagic = Just 2 -- Preview network
-        cardanoNodeSocketPath = Nothing
-        cfg = EvalConfig Nothing testnetMagic cardanoNodeSocketPath False (Just paramsPath)
+        cfg = EvalConfig Nothing testnetMagic (Just socketPath) False (Just paramsPath)
     fmap (TxId . T.pack) $
       eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
+  where
+    socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
 fanoutToL1AddressTx :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
 fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
