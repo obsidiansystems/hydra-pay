@@ -96,6 +96,7 @@ library
     HydraPay.PortRange
     HydraPay.Database
     HydraPay.Utils
+    HydraPay.Transaction
     HydraPay.Types
     HydraPay.Proxy
     Cardano.Transaction.CardanoApi
