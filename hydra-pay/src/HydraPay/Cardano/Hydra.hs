@@ -346,7 +346,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
                     traceM $ "Ready to Fanout: STATUS" <> show status
                     when (status /= HydraNodeStatus_Replaying) $ do
                       liftIO $ atomically $ writeTBQueue pendingCommands Fanout
-                HeadIsFinalized hid utxoJson -> do
+                HeadIsFinalized hid utxoJson -> when isReporter $ do
                   case Aeson.fromJSON utxoJson of
                     Aeson.Error e ->
                       print e
