@@ -34,7 +34,7 @@ fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -
 fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let testnetMagic = Just 2 -- Preview network
-        cfg = EvalConfig Nothing testnetMagic (Just socketPath) False (Just paramsPath)
+        cfg = mkEvalConfig a socketPath paramsPath
     fmap (TxId . T.pack) $
       eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
   where
