@@ -94,6 +94,7 @@ library
     HydraPay.Host
     HydraPay.PaymentChannel.Postgres
     HydraPay.Proxy
+    HydraPay.Transaction
     HydraPay.Watch
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
