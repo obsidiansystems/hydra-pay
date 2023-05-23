@@ -21,7 +21,7 @@ evalRawNoSubmit EvalConfig {..} fee (Tx m) =
   let
     runCardanoCli args = do
       print args
-      (exitCode, outStr) <- readProcessInterleaved . setSocketPath ecSocketPath . proc "cardano-cli" $ args
+      (exitCode, outStr) <- readProcessInterleaved . setSocketPath ecSocketPath . proc cardanoCliPath $ args
       case exitCode of
         ExitSuccess -> pure $ BSLC.unpack outStr
         ExitFailure o -> do

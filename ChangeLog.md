@@ -2,6 +2,10 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
+### Unreleased
+
+* Ensure absolute paths for cardano-cli & hydra-tools executables
+
 ### Version v0.2.0
 
 * *Breaking change*: Split haskell library into two parts: hydra-pay-core and hydra-pay. hydra-pay includes database components that cannot be included in frontend clients, while hydra-pay-core includes common components that are compatible with both frontend and backend clients.

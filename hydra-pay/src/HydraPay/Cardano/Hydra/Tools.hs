@@ -24,5 +24,5 @@ hydraToolsPath = $(staticWhich "hydra-tools")
 hydraKeyGen :: MonadIO m => String -> m (Either Text (FilePath, FilePath))
 hydraKeyGen filePattern = fmap (first T.pack) $ runExceptT $ do
   liftIO $ createDirectoryIfMissing True $ takeDirectory filePattern
-  _ <- ExceptT $ eitherReadProcess $ proc "hydra-tools" ["gen-hydra-key", "--output-file", filePattern]
+  _ <- ExceptT $ eitherReadProcess $ proc hydraToolsPath ["gen-hydra-key", "--output-file", filePattern]
   pure (filePattern <> ".vk", filePattern <> ".sk")
