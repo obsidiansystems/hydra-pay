@@ -1,0 +1,13 @@
+diff --git a/default.nix b/default.nix
+index 44fc0c823..96cc0ef07 100644
+--- a/default.nix
++++ b/default.nix
+@@ -7,7 +7,7 @@ in
+   withHoogle ? defaultCustomConfig.withHoogle
+ , profileData ? null
+ , profileName ? if profileData != null then profileData.profileName
+-                else defaultCustomConfig.localCluster.profileName;
++                else defaultCustomConfig.localCluster.profileName
+ , workbenchDevMode ? defaultCustomConfig.localCluster.workbenchDevMode
+ , customConfig ? {
+     inherit withHoogle;

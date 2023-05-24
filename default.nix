@@ -14,7 +14,15 @@ let
     inherit system;
     src = deps.hydra;
   }).defaultNix.packages.${system};
-  cardano-node = import deps.cardano-node {};
+  # patch cardano-node 8.0.0 release broken default.nix
+  patched-cardano-node = pkgs.applyPatches {
+    name = "patched-cardano-node";
+    src = deps.cardano-node;
+    patches = [
+      ./nix/patches/cardano-node-8.0.0-fix-default-nix.patch
+    ];
+  };
+  cardano-node = import patched-cardano-node {};
   pkgs = nixpkgs;
   livedoc-devnet-script = pkgs.runCommand "livedoc-devnet-script" { } ''
     cp -r ${./livedoc-devnet} $out
