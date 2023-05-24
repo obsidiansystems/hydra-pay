@@ -135,10 +135,10 @@ commsThreadIsHeadStateReporter cfg =
   -- NOTE currently we just make the first node the state reported
   cfg ^. commsThreadConfig_hydraNodeConfig . hydraNodeConfig_nodeId . to (==1)
 
--- | Transaction ID on preview from the Hydra 9.0 release
--- https://github.com/input-output-hk/hydra/releases/tag/0.9.0
+-- | Transaction ID on preview from the Hydra 0.10.0 release
+-- https://github.com/input-output-hk/hydra/releases/tag/0.10.0
 previewScriptTxId :: TxId
-previewScriptTxId = TxId "74b587d08d12aa679bdfeb3eaa57d698e426045dd529d4130d7d8ca0c18d54b0"
+previewScriptTxId = TxId "d237926e174a2ca386174a5810d30f0ca6db352219dd7eacdc7d5969ae75d58f"
 
 loopbackAddress :: String
 loopbackAddress = "127.0.0.1"
