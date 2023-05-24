@@ -5,6 +5,7 @@ module HydraPay.Cardano.Node where
 import Data.Int
 import qualified Data.Text as T
 
+import System.Directory (createDirectoryIfMissing)
 import System.IO
 import System.Which
 import System.Process
@@ -67,6 +68,7 @@ ensureNodeSocket a = liftIO $ do
 
 withCardanoNode :: NodeConfig -> (NodeInfo -> IO a) -> IO a
 withCardanoNode cfg action = do
+  createDirectoryIfMissing True $ cfg ^. nodeConfig_databasePath
   withFile (cfg ^. nodeConfig_databasePath <> "/node.log") AppendMode $ \outHandle -> do
     withFile (cfg ^. nodeConfig_databasePath <> "/node_error.log") AppendMode $ \errHandle -> do
       withCreateProcess (makeNodeProcess outHandle errHandle cfg) $ \_ _ _ _ -> do
