@@ -53,7 +53,7 @@ import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
 import qualified Data.ByteString.Lazy as LBS
 
-import Network.WebSockets (runClient, sendDataMessage, receiveDataMessage, withPingThread)
+import Network.WebSockets (runClient, sendDataMessage, withPingThread)
 import qualified Network.WebSockets as WS
 
 data HydraHeadManager = HydraHeadManager
@@ -262,22 +262,17 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
           sendDataMessage conn $ WS.Text (encode cInput) Nothing
       flip finally (killThread requestThreadId) $ withPingThread conn 60 (pure ()) $ forever $ do
         result <- try $ do
-          payload <- receiveDataMessage conn
-          let
-            msg = case payload of
-              WS.Text v _ -> v
-              WS.Binary v -> v
-            result = eitherDecode msg
+          payload <- WS.receiveData conn
           logInfo a loggerName "Got new message, logging"
-          LBS.hPutStr logFile $ msg <> "\n"
+          LBS.hPutStr logFile $ payload <> "\n"
           hFlush logFile
-          case result of
+          case eitherDecode payload of
             Right res -> do
-              logInfo a loggerName $ "Valid message, processing...\n" <> T.pack (show res)
+              logInfo a loggerName $ "Valid message, processing...\n" <> tShow res
               handleHydraNodeApiResponse loggerName isReporter res
               handleRequests pendingRequests res
             Left err -> do
-              logInfo a loggerName $ "Invalid message received: " <> tShow msg <> " " <> T.pack err
+              logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
         case result of
           Left err@(SomeException _) ->
             logInfo a loggerName $ "Message Handler failed: " <> tShow err
