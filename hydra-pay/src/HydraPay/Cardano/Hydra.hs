@@ -489,7 +489,7 @@ mkHydraNodeProc cfg = do
      , cfg ^. hydraNodeConfig_ledgerGenesis
      , "--ledger-protocol-parameters"
      , cfg ^. hydraNodeConfig_ledgerProtocolParams
-     , "--network-id"
+     , "--testnet-magic"
      , cfg ^. hydraNodeConfig_magic . to show
      , "--node-socket"
      , cfg ^. hydraNodeConfig_cardanoNodeSocket
