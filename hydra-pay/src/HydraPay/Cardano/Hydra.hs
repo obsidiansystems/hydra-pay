@@ -32,7 +32,7 @@ import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
-import HydraPay.Cardano.Hydra.Api hiding (headId)
+import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
 import HydraPay.Transaction
 import qualified HydraPay.Database as Db
 
@@ -281,7 +281,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
   where
     -- Update hydra-pay state based on hydra node responses
     handleHydraNodeApiResponse loggerName isReporter = \case
-      Greetings _ ->
+      Greetings {} ->
         atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
       PeerConnected _ -> do
         logInfo a loggerName "Hydra Node ready"
