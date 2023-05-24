@@ -7,6 +7,7 @@ This project's release branch is `master`. This log is written from the perspect
 * Ensure absolute paths for cardano-cli & hydra-tools executables
 * Delegate SIGINT to cardano-node process
 * Reduce the number of reconnections to Hydra Node websocket api
+* Bump to hydra 0.10.0
 
 ### Version v0.2.0
 
