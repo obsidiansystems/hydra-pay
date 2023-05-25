@@ -16,10 +16,6 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
 
-import Debug.Trace (traceM)
-
-import qualified Data.Aeson as Aeson
-
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
 
@@ -177,9 +173,7 @@ selectInputsFromUTxO outputValue utxo = do
 
 sendHydraLovelaceTx :: Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> Tx ()
 sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace = do
-  traceM $ "FROM ADDR: " <> fromAddrStr
   Output {..} <- output toAddrStr $ fromString $ show (Api.lovelaceToQuantity lovelace) <> " lovelace"
-  traceM $ "  TO ADDR: " <> toAddrStr
   void $ selectInputsFromUTxO oValue utxo
   void $ balanceAdaAssets fromAddrStr
 
@@ -194,10 +188,6 @@ balanceAdaAssets addr = do
     outputValue = mconcat $ map oValue tOutputs
     theDiffValue = inputValue `diffValues` outputValue
 
-  traceM $ " INPUT: " <> show inputValue
-  traceM $ "OUTPUT: " <> show outputValue
-  traceM $ "  DIFF: " <> show theDiffValue
-
     -- Make sure there are non-ada assets in there
 
   if theDiffValue == mempty then pure Nothing else do
@@ -205,20 +195,16 @@ balanceAdaAssets addr = do
 
 sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
 sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
-  traceM "sendHydraLovelace: sendHydraLovelace: BEGIN"
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    traceM "sendHydraLovelace: Retrieve Params"
     let cfg = mkEvalConfig a socketPath paramsPath
         fee = 0
     (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
       sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace
       sign (_proxyInfo_signingKey proxyInfo)
-    traceM $ "sendHydraLovelace: Tx: " <> show txLbs
     case txLbs ^? key "cborHex" . _String of
       Nothing ->
         pure $ Left "sendHydraLovelace: could not decode cardano tx creation"
       Just cbor -> do
-        traceM "sendHydraLovelace: envelope good"
         pure $ Right (T.pack txId, cbor)
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath

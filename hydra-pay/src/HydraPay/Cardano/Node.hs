@@ -5,12 +5,16 @@ module HydraPay.Cardano.Node where
 import Data.Int
 import qualified Data.Text as T
 
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.FilePath
 import System.IO
 import System.Which
 import System.Process
 
 import Control.Lens hiding (parts)
 import Control.Concurrent.STM
+import Control.Exception
+import Control.Monad
 import Control.Monad.IO.Class
 
 import Reflex
@@ -67,26 +71,32 @@ ensureNodeSocket a = liftIO $ do
 
 withCardanoNode :: NodeConfig -> (NodeInfo -> IO a) -> IO a
 withCardanoNode cfg action = do
+  createDirectoryIfMissing True $ cfg ^. nodeConfig_databasePath
+  protocolMagicIdExists <- doesFileExist $ cfg ^. nodeConfig_databasePath </> "protocolMagicId"
+  when (not protocolMagicIdExists) $
+    writeFile (cfg ^. nodeConfig_databasePath </> "protocolMagicId") $ show $ cfg ^. nodeConfig_magic
   withFile (cfg ^. nodeConfig_databasePath <> "/node.log") AppendMode $ \outHandle -> do
     withFile (cfg ^. nodeConfig_databasePath <> "/node_error.log") AppendMode $ \errHandle -> do
-      withCreateProcess (makeNodeProcess outHandle errHandle cfg) $ \_ _ _ _ -> do
+      withCreateProcess (makeNodeProcess outHandle errHandle cfg) $ \_ _ _ ph -> do
         ready <- newEmptyTMVarIO
         let
           ninfo = NodeInfo (cfg ^. nodeConfig_socketPath) (cfg ^. nodeConfig_magic) ready
           (path, file) = pathAndFile $ ninfo ^. nodeInfo_socketPath
 
         -- Fork the FRP layer so we can still run the action
-        _ <- forkIO $ runHost $ do
+        socketWatchThreadId <- forkIO $ runHost $ do
           changed <- Watch.watchDir FS.defaultConfig path $ socketPred file
           performEvent_ $ ffor changed $ const $ do
             liftIO $ atomically $ putTMVar ready ()
 
-        action ninfo
+        _ <- forkIO $ void $ waitForProcess ph
+        action ninfo `finally` killThread socketWatchThreadId
 
 makeNodeProcess :: Handle -> Handle -> NodeConfig -> CreateProcess
 makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _) =
   cardanoCp { std_out = UseHandle outHandle
             , std_err = UseHandle errHandle
+            , delegate_ctlc = True
             }
   where
     cardanoCp = proc cardanoNodePath

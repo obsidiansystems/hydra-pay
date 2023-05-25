@@ -53,7 +53,7 @@ import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
 import qualified Data.ByteString.Lazy as LBS
 
-import Network.WebSockets (runClient, sendDataMessage, receiveDataMessage, withPingThread)
+import Network.WebSockets (runClient, sendDataMessage, withPingThread)
 import qualified Network.WebSockets as WS
 
 data HydraHeadManager = HydraHeadManager
@@ -243,7 +243,7 @@ runHydraHead a configs = liftIO $ do
 
 spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
 spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
-  liftIO $ forkIO $ bracket (openFile (config ^. hydraNodeConfig_threadLogFile) AppendMode) hClose $ \logFile -> do
+  liftIO $ forkIO $ withFile (config ^. hydraNodeConfig_threadLogFile) AppendMode $ \logFile -> forever $ do
     let
       apiPort = config ^. hydraNodeConfig_apiPort
       isReporter = commsThreadIsHeadStateReporter cfg
@@ -254,76 +254,78 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
     runClient "127.0.0.1" (fromIntegral apiPort) "/" $ \conn -> do
       -- We are connected so the nodes will be "replaying"
       atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replaying
-      forever $ do
-        _ <- forkIO $ forever $ do
+      requestThreadId <- forkIO $ forever $ do
           cInput <- atomically $ readTBQueue pendingCommands
           logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
           LBS.hPutStr logFile $ encode cInput <> "\n"
           hFlush logFile
           sendDataMessage conn $ WS.Text (encode cInput) Nothing
-        withPingThread conn 60 (pure ()) $ do
-          payload <- receiveDataMessage conn
-          let
-            msg = case payload of
-              WS.Text v _ -> v
-              WS.Binary v -> v
-            result = eitherDecode msg
+      flip finally (killThread requestThreadId) $ withPingThread conn 60 (pure ()) $ forever $ do
+        result <- try $ do
+          payload <- WS.receiveData conn
           logInfo a loggerName "Got new message, logging"
-          LBS.hPutStr logFile $ msg <> "\n"
+          LBS.hPutStr logFile $ payload <> "\n"
           hFlush logFile
-          case result of
+          case eitherDecode payload of
             Right res -> do
-              -- logInfo a loggerName $ "Valid message, processing..."
-              logInfo a loggerName $ "Valid message, processing...\n" <> T.pack (show res)
-              case res of
-                Greetings _ -> atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
-                PeerConnected _ -> do
-                  logInfo a loggerName "Hydra Node ready"
-                  atomically $ writeTVar nodeStatus $ HydraNodeStatus_PeersConnected
-                PostTxOnChainFailed _ _ -> do
-                  logInfo a loggerName "Hydra Node failed to submit transaction on chain (check for fuel)"
-                HeadIsInitializing _ _ -> do
-                  when (commsThreadIsHeadStateReporter cfg) $ do
-                    logInfo a loggerName "Head is initializing (waiting for commits)"
-                    atomically $ writeTVar headStatus $ HydraHead_Initializing
-                HeadIsOpen _ _ -> do
-                  when (commsThreadIsHeadStateReporter cfg) $ do
-                    logInfo a loggerName "Head is open"
-                    atomically $ writeTVar headStatus $ HydraHead_Open
-                HeadIsClosed hid _ deadline -> do
-                  when isReporter $ do
-                    logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
-                    atomically $ writeTVar headStatus $ HydraHead_Closed
-                    atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
-                ReadyToFanout hid -> do
-                  when isReporter $ do
-                    logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
-                    traceM $ "Ready to Fanout: STATUS PRE"
-                    status <- atomically $ readTVar nodeStatus
-                    traceM $ "Ready to Fanout: STATUS" <> show status
-                    when (status /= HydraNodeStatus_Replaying) $ do
-                      liftIO $ atomically $ writeTBQueue pendingCommands Fanout
-                HeadIsFinalized _ utxoJson -> when isReporter $ do
-                  case Aeson.fromJSON utxoJson of
-                    Aeson.Error e ->
-                      print e
-                    Aeson.Success (Api.UTxO utxoMap :: Api.UTxO Api.BabbageEra) -> do
-                      let addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
-                          -- Combine UTxOs going to the same address
-                          addressAndValuesTotal = Map.fromListWith (<>) addressAndValues
-                      iforM_ addressAndValuesTotal $ \proxyAddr val -> Db.runBeam a $ do
-                        mChainAddress <- getProxyChainAddressAndSigningKey proxyAddr
-                        forM_ mChainAddress $ \(chainAddress, skPath) -> do
-                          let lovelace = Api.selectLovelace val
-                              toL1Adddress = chainAddress
-                          Right pparams <- runCardanoCli a getProtocolParameters
-                          liftIO $ fanoutToL1Address a pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
-                        pure ()
-                _ -> pure ()
+              logInfo a loggerName $ "Valid message, processing...\n" <> tShow res
+              handleHydraNodeApiResponse loggerName isReporter res
               handleRequests pendingRequests res
             Left err -> do
-              logInfo a loggerName $ "Invalid message received: " <> tShow msg <> " " <> T.pack err
-          pure ()
+              logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
+        case result of
+          Left err@(SomeException _) ->
+            logInfo a loggerName $ "Message Handler failed: " <> tShow err
+          Right _ ->
+            pure ()
+  where
+    -- Update hydra-pay state based on hydra node responses
+    handleHydraNodeApiResponse loggerName isReporter = \case
+      Greetings _ ->
+        atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
+      PeerConnected _ -> do
+        logInfo a loggerName "Hydra Node ready"
+        atomically $ writeTVar nodeStatus $ HydraNodeStatus_PeersConnected
+      PostTxOnChainFailed _ _ -> do
+        logInfo a loggerName "Hydra Node failed to submit transaction on chain (check for fuel)"
+      HeadIsInitializing _ _ -> do
+        when (commsThreadIsHeadStateReporter cfg) $ do
+          logInfo a loggerName "Head is initializing (waiting for commits)"
+          atomically $ writeTVar headStatus $ HydraHead_Initializing
+      HeadIsOpen _ _ -> do
+        when (commsThreadIsHeadStateReporter cfg) $ do
+          logInfo a loggerName "Head is open"
+          atomically $ writeTVar headStatus $ HydraHead_Open
+      HeadIsClosed hid _ deadline -> do
+        when isReporter $ do
+          logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
+          atomically $ writeTVar headStatus $ HydraHead_Closed
+          atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
+      ReadyToFanout hid -> do
+        when isReporter $ do
+          logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
+          traceM $ "Ready to Fanout: STATUS PRE"
+          status <- atomically $ readTVar nodeStatus
+          traceM $ "Ready to Fanout: STATUS" <> show status
+          when (status /= HydraNodeStatus_Replaying) $ do
+            liftIO $ atomically $ writeTBQueue pendingCommands Fanout
+      HeadIsFinalized _ utxoJson -> when isReporter $ do
+        case Aeson.fromJSON utxoJson of
+          Aeson.Error e ->
+            print e
+          Aeson.Success (Api.UTxO utxoMap :: Api.UTxO Api.BabbageEra) -> do
+            let addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
+                -- Combine UTxOs going to the same address
+                addressAndValuesTotal = Map.fromListWith (<>) addressAndValues
+            iforM_ addressAndValuesTotal $ \proxyAddr val -> Db.runBeam a $ do
+              mChainAddress <- getProxyChainAddressAndSigningKey proxyAddr
+              forM_ mChainAddress $ \(chainAddress, skPath) -> do
+                let lovelace = Api.selectLovelace val
+                    toL1Adddress = chainAddress
+                Right pparams <- runCardanoCli a getProtocolParameters
+                liftIO $ fanoutToL1Address a pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
+              pure ()
+      _ -> pure ()
 
 txOutAddressAndValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> (Api.AddressAny, Api.Value)
 txOutAddressAndValue (Api.TxOut (Api.AddressInEra _ a) val _ _) = (Api.toAddressAny a, Api.txOutValueToValue val)
