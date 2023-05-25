@@ -460,12 +460,14 @@ performHydraNodeRequest node i = do
 hydraNode :: MonadIO m => HydraNodeConfig -> m ProcessInfo
 hydraNode cfg = liftIO $ do
   withFile (cfg ^. hydraNodeConfig_logFile) AppendMode $ \out ->
-    withFile (cfg ^. hydraNodeConfig_logErrFile) AppendMode $ \err ->
-      createProcess (mkHydraNodeProc cfg)
+    withFile (cfg ^. hydraNodeConfig_logErrFile) AppendMode $ \err -> do
+      out@(_,_,_,ph) <- createProcess (mkHydraNodeProc cfg)
         { std_out = UseHandle out
         , std_err = UseHandle err
         , delegate_ctlc = True
         }
+      _ <- forkIO $ void $ waitForProcess ph
+      pure out
 
 mkHydraNodeProc :: HydraNodeConfig -> CreateProcess
 mkHydraNodeProc cfg =
