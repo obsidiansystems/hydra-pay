@@ -86,20 +86,20 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
     withHydraHeadManager $ \manager -> do
       action $ HydraPayState ni pool l manager
 
-sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
-sendFuelTo a pparams fromAddr skPath toAddr amount = do
-  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
-    fmap (TxId . T.pack) $
+sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+sendFuelTo a fromAddr skPath toAddr amount = do
+  -- liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath -- paramsPath
+    fmap (TxId . T.pack) $ liftIO $
       eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
-getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
-getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
+getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
+getProxyTx a addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
-  ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+  ExceptT $ liftIO $ do -- withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath -- paramsPath
     txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
     pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
   where
@@ -188,12 +188,12 @@ balanceAdaAssets addr = do
   if theDiffValue == mempty then pure Nothing else do
     Just <$> output addr theDiffValue
 
-sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
-sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
-  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
+sendHydraLovelace a proxyInfo utxo fromAddrStr toAddrStr lovelace = do
+  -- liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+    let cfg = mkEvalConfig a socketPath--  paramsPath
         fee = 0
-    (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
+    (txId, txLbs) <- liftIO $ evalRawNoSubmit cfg fee $ do
       sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace
       sign (_proxyInfo_signingKey proxyInfo)
     case txLbs ^? key "cborHex" . _String of

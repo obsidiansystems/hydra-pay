@@ -325,8 +325,8 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
               forM_ mChainAddress $ \(chainAddress, skPath) -> do
                 let lovelace = Api.selectLovelace val
                     toL1Adddress = chainAddress
-                Right pparams <- runCardanoCli a getProtocolParameters
-                liftIO $ fanoutToL1Address a pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
+                -- Right pparams <- runCardanoCli a getProtocolParameters
+                liftIO $ fanoutToL1Address a proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
               pure ()
       _ -> pure ()
 

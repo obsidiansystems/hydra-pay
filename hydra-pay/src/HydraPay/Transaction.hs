@@ -22,19 +22,18 @@ import HydraPay.Cardano.Node
 import HydraPay.Types (TxId(..))
 
 -- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
-withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
-withProtocolParamsFile pparams action = do
-  createDirectoryIfMissing True tempTxDir
-  withTempFile tempTxDir "params" $ \paramsPath handle -> do
-    hClose handle
-    Aeson.encodeFile paramsPath pparams
-    action paramsPath
+-- withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
+-- withProtocolParamsFile pparams action = do
+--   createDirectoryIfMissing True tempTxDir
+--   withTempFile tempTxDir "params" $ \paramsPath handle -> do
+--     hClose handle
+--     Aeson.encodeFile paramsPath pparams
+--     action paramsPath
 
-fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
-fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
-  liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
-    fmap (TxId . T.pack) $
+fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+fanoutToL1Address a fromAddr skPath toAddr amount = do
+    let cfg = mkEvalConfig a socketPath
+    fmap (TxId . T.pack) $ liftIO $
       eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
@@ -53,8 +52,8 @@ tempTxDir :: FilePath
 tempTxDir = "tx"
 
 -- | Given node information, and a path to the node socket and protocol parameters create an EvalConfig for running the Tx monad
-mkEvalConfig :: HasNodeInfo a => a -> FilePath -> FilePath -> EvalConfig
-mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just nsFp)
+mkEvalConfig :: HasNodeInfo a => a -> FilePath -> EvalConfig
+mkEvalConfig a nsFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) Nothing False (Just nsFp)
   where
     ni = a ^. nodeInfo
 
