@@ -3,7 +3,6 @@
 
 module HydraPay where
 
-import System.Which
 import System.Directory
 import System.IO
 import System.IO.Temp
@@ -46,10 +45,6 @@ import Cardano.Transaction.Extras (evalRawNoSubmit)
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
 import Database.Beam.Postgres
-
-hydraNodePath :: FilePath
-hydraNodePath = $(staticWhich "hydra-node")
-
 
 data HydraPayState = HydraPayState
   { _hydraPay_nodeInfo :: NodeInfo
