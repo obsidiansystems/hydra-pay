@@ -237,7 +237,7 @@ runHydraHead a headId configs = liftIO $ do
   handles <- for configs $ \config -> do
     nodeStatus <- newTVarIO HydraNodeStatus_Unavailable
     requests <- newTMVarIO mempty
-    process <- createProcess <=< mkHydraNodeProc $ config
+    process <- hydraNode config
     queue <- newTBQueueIO 1000
     communicationThread <- spawnHydraNodeApiConnectionThread a headId $ CommsThreadConfig config headStatus nodeStatus requests queue
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue
@@ -457,17 +457,19 @@ performHydraNodeRequest node i = do
     pure (Map.insert nextId req current, ())
   liftIO $ atomically $ takeTMVar mailbox
 
-logTo :: Handle -> Handle -> CreateProcess -> CreateProcess
-logTo out err cp =
-  cp { std_out = UseHandle out
-     , std_err = UseHandle err
-     }
+hydraNode :: MonadIO m => HydraNodeConfig -> m ProcessInfo
+hydraNode cfg = liftIO $ do
+  withFile (cfg ^. hydraNodeConfig_logFile) AppendMode $ \out ->
+    withFile (cfg ^. hydraNodeConfig_logErrFile) AppendMode $ \err ->
+      createProcess (mkHydraNodeProc cfg)
+        { std_out = UseHandle out
+        , std_err = UseHandle err
+        , delegate_ctlc = True
+        }
 
-mkHydraNodeProc :: MonadIO m => HydraNodeConfig -> m CreateProcess
-mkHydraNodeProc cfg = do
-  out <- liftIO $ openFile (cfg ^. hydraNodeConfig_logFile) AppendMode
-  err <- liftIO $ openFile (cfg ^. hydraNodeConfig_logErrFile) AppendMode
-  pure $ logTo out err $ proc hydraNodePath $ join
+mkHydraNodeProc :: HydraNodeConfig -> CreateProcess
+mkHydraNodeProc cfg =
+  proc hydraNodePath $ join
    [ [ "--node-id"
      , cfg ^. hydraNodeConfig_nodeId . to show
      , "--port"
@@ -501,6 +503,7 @@ mkHydraNodeProc cfg = do
      ]
    ]
   where
+
     hydraVerificationKeyArg :: FilePath -> [String]
     hydraVerificationKeyArg vkPath =
       [ "--hydra-verification-key"
@@ -651,8 +654,6 @@ terminateRunningHeads (HydraHeadManager channels) = do
       withTMVar headVar $ \hydraHead@(RunningHydraHead _ handles) -> do
         for_ handles $ \(HydraNode _ nodeHandle@(_, out, err, _) thread _ _ _) -> liftIO $ do
           cleanupProcess nodeHandle
-          maybe (pure ()) hClose out
-          maybe (pure ()) hClose err
           killThread thread
         pure (hydraHead, ())
     pure (running, ())
