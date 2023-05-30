@@ -48,6 +48,7 @@ instance FromJSON PaymentChannelStatus
 data PaymentChannelInfo = PaymentChannelInfo
   { _paymentChannelInfo_id :: Int32
   , _paymentChannelInfo_name :: Text
+  , _paymentChannelInfo_createdAt :: UTCTime
   , _paymentChannelInfo_other :: Text
   , _paymentChannelInfo_status :: PaymentChannelStatus
   , _paymentChannelInfo_initiator :: Bool

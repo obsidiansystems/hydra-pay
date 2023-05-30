@@ -55,11 +55,13 @@ getPaymentChannelInfo a me pid = do
 dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> PaymentChannelInfo
 dbPaymentChannelToInfo addr hh pc =
   PaymentChannelInfo
-  (pc ^. Db.paymentChannel_id . to unSerial)
-  (pc ^. Db.paymentChannel_name)
-  other
-  status
-  isInitiator
+    { _paymentChannelInfo_id = pc ^. Db.paymentChannel_id . to unSerial
+    , _paymentChannelInfo_name = pc ^. Db.paymentChannel_name
+    , _paymentChannelInfo_createdAt = pc ^. Db.paymentChannel_createdAt
+    , _paymentChannelInfo_other = other
+    , _paymentChannelInfo_status = status
+    , _paymentChannelInfo_initiator = isInitiator
+    }
   where
     status =
       case hh ^. Db.hydraHead_secondBalance of
@@ -227,6 +229,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           default_
                           (val_ name)
                           (val_ $ primaryKey newHead)
+                          current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
                           (val_ True)
                         ]
