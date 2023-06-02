@@ -276,8 +276,13 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
             Left err -> do
               logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
         case result of
-          Left err@(SomeException _) ->
+          Left err@(WS.ConnectionClosed) -> do
+            error "Connection to hydra-node was closed."
+          Left err@(WS.CloseRequest{}) -> do
+            error $ "hydra-node requested to close connection: " <> show err
+          Left err -> do
             logInfo a loggerName $ "Message Handler failed: " <> tShow err
+            threadDelay $ 1000 * 1000 * 3
           Right _ ->
             pure ()
   where
