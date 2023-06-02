@@ -360,6 +360,7 @@ isResponse (CommandFailed offending) cInput =
   (offending, cInput)
   (offending == cInput)
 isResponse (HeadIsInitializing _ _) Init = True
+isResponse (PostTxOnChainFailed{}) Init = True
 isResponse (Committed _ _ v) (Commit v') | v == v' = True
 isResponse (GetUTxOResponse {}) GetUTxO = True
 isResponse (TxValid {}) (NewTx {}) = True
