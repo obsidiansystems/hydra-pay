@@ -64,9 +64,11 @@ dbPaymentChannelToInfo addr hh pc =
     }
   where
     status =
-      case hh ^. Db.hydraHead_secondBalance of
-        Just _ -> PaymentChannelOpen
-        Nothing -> (PaymentChannelPending $ pc ^. Db.paymentChannel_expiry)
+      case pc ^. Db.paymentChannel_open of
+        Nothing -> PaymentChannelOpening
+        _ -> case hh ^. Db.hydraHead_secondBalance of
+          Just _ -> PaymentChannelOpen
+          Nothing -> (PaymentChannelPending $ pc ^. Db.paymentChannel_expiry)
 
     isInitiator = addrStr == hh ^. Db.hydraHead_first
 
@@ -249,4 +251,10 @@ closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
 closePaymentChannelQ headId = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
     (\channel -> channel ^. Db.paymentChannel_open <-. val_ (Just False))
+    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
+
+openPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
+openPaymentChannelQ headId = do
+  runUpdate $ update (Db.db ^. Db.db_paymentChannels)
+    (\channel -> channel ^. Db.paymentChannel_open <-. val_ (Just True))
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))

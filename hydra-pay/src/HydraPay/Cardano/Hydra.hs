@@ -30,6 +30,7 @@ import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
+import HydraPay.PaymentChannel.Postgres (openPaymentChannelQ)
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
 import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
@@ -229,20 +230,20 @@ waitForApi port = do
       waitForApi port
     Right _ -> pure ()
 
-runHydraHead :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> [HydraNodeConfig] -> m RunningHydraHead
-runHydraHead a configs = liftIO $ do
+runHydraHead :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> Int32 -> [HydraNodeConfig] -> m RunningHydraHead
+runHydraHead a headId configs = liftIO $ do
   headStatus <- newTVarIO HydraHead_Uninitialized
   handles <- for configs $ \config -> do
     nodeStatus <- newTVarIO HydraNodeStatus_Unavailable
     requests <- newTMVarIO mempty
     process <- createProcess <=< mkHydraNodeProc $ config
     queue <- newTBQueueIO 1000
-    communicationThread <- spawnHydraNodeApiConnectionThread a $ CommsThreadConfig config headStatus nodeStatus requests queue
+    communicationThread <- spawnHydraNodeApiConnectionThread a headId $ CommsThreadConfig config headStatus nodeStatus requests queue
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue
   pure $ RunningHydraHead headStatus $ foldOf each handles
 
-spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> CommsThreadConfig -> m ThreadId
-spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
+spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> Int32 -> CommsThreadConfig -> m ThreadId
+spawnHydraNodeApiConnectionThread a hid cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
   liftIO $ forkIO $ withFile (config ^. hydraNodeConfig_threadLogFile) AppendMode $ \logFile -> forever $ do
     let
       apiPort = config ^. hydraNodeConfig_apiPort
@@ -296,6 +297,7 @@ spawnHydraNodeApiConnectionThread a cfg@(CommsThreadConfig config headStatus nod
         when (commsThreadIsHeadStateReporter cfg) $ do
           logInfo a loggerName "Head is open"
           atomically $ writeTVar headStatus $ HydraHead_Open
+          Db.runBeam a $ openPaymentChannelQ hid
       HeadIsClosed hid _ deadline -> do
         when isReporter $ do
           logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
@@ -606,9 +608,8 @@ startupExistingHeads a = do
   activeHeads <- activeHydraHeads
   results <- for activeHeads $ \dbHead -> runExceptT $ do
     nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
-    hydraHead <- lift $ runHydraHead a nodeConfigs
-    let
-      headId = Db.hydraHeadId dbHead
+    let headId = Db.hydraHeadId dbHead
+    hydraHead <- lift $ runHydraHead a headId nodeConfigs
     ExceptT $ trackRunningHead a headId hydraHead
   pure $ fmap (sum . fmap (const 1)) $ sequenceA results
 
@@ -633,7 +634,7 @@ spinUpHead a hid = runExceptT $ do
       traceM $ "spinUpHead: Foudn head: " <>  show (Db._hydraHead_id dbHead)
       nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
       traceM $ "spinUpHead: Configs retrieved"
-      hydraHead <- lift $ runHydraHead a nodeConfigs
+      hydraHead <- lift $ runHydraHead a hid nodeConfigs
       traceM $ "spinUpHead: Ran Hydra Head"
       out <- ExceptT $ trackRunningHead a hid hydraHead
       traceM $ "spinUpHead: Tracked Running Head"
