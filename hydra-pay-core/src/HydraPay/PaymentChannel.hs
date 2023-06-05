@@ -39,6 +39,7 @@ makeLenses ''PaymentChannelManager
 
 data PaymentChannelStatus
   = PaymentChannelOpen
+  | PaymentChannelOpening
   | PaymentChannelPending UTCTime
   deriving (Eq, Show, Generic)
 
@@ -91,4 +92,5 @@ paymentChannelNeedsMyAcceptance pinfo =
 
 isPending :: PaymentChannelStatus -> Bool
 isPending (PaymentChannelPending _) = True
+isPending PaymentChannelOpening = True
 isPending _ = False
