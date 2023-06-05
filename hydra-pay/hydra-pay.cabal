@@ -27,6 +27,7 @@ library
     , mtl
     , postgresql-simple
     , process
+    , rhyolite-beam-db
     , reflex
     , reflex-fsnotify
     , resource-pool
@@ -67,11 +68,13 @@ library
     HydraPay.Cardano.Hydra.Tools
     HydraPay.Cardano.Node
     HydraPay.Database
+    HydraPay.Database.Workers
     HydraPay.Host
     HydraPay.PaymentChannel.Postgres
     HydraPay.Proxy
     HydraPay.Transaction
     HydraPay.Watch
+    HydraPay.Worker
 
   ghc-options:
     -Wall -Wredundant-constraints -Wincomplete-uni-patterns

@@ -16,6 +16,8 @@ import Database.Beam.Backend.SQL
 import qualified Database.Beam.AutoMigrate as BA
 import Database.PostgreSQL.Simple (withTransaction)
 
+import HydraPay.Database.Workers
+
 data HydraHeadsT f = HydraHead
   { _hydraHead_id :: C f (SqlSerial Int32)
   , _hydraHead_first :: C f Text
@@ -37,6 +39,7 @@ instance Table HydraHeadsT where
 instance Beamable (PrimaryKey HydraHeadsT)
 
 type HydraHead = HydraHeadsT Identity
+type HeadId = PrimaryKey HydraHeadsT Identity
 
 data ProxiesT f = ProxyInfo
    { _proxy_chainAddress :: C f Text
@@ -65,7 +68,7 @@ data PaymentChannelsT f = PaymentChannel
   , _paymentChannel_head :: PrimaryKey HydraHeadsT f
   , _paymentChannel_createdAt :: C f UTCTime
   , _paymentChannel_expiry :: C f UTCTime
-  , _paymentChannel_open :: C f Bool
+  , _paymentChannel_open :: C f (Maybe Bool)
   }
   deriving (Generic)
 
@@ -105,6 +108,7 @@ data Db f = Db
   , _db_heads :: f (TableEntity HydraHeadsT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   , _db_transactions :: f (TableEntity TransactionsT)
+  , _db_openChanTask :: f (TableEntity OpenChannelTaskT)
   }
   deriving (Generic)
 
@@ -115,9 +119,6 @@ class HasDbConnectionPool a where
 
 instance HasDbConnectionPool (Pool Connection) where
   dbConnectionPool = id
-
-newtype HeadId =
-  HeadId Int32
 
 makeLenses ''PaymentChannelsT
 makeLenses ''TransactionsT
