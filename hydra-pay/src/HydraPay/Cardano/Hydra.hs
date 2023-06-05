@@ -617,7 +617,7 @@ activeHydraHeads = do
   runSelectReturningList $ select $ do
     heads_ <- all_ (Db.db ^. Db.db_heads)
     paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-    guard_ (paymentChan_ ^. Db.paymentChannel_open)
+    guard_ (paymentChan_ ^. Db.paymentChannel_open /=. val_ (Just False))
     pure $ heads_
 
 spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())

@@ -36,7 +36,7 @@ getPaymentChannelsInfo a addr = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_open &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
+    guard_ (paymentChannel ^. Db.paymentChannel_open /=. val_ (Just False) &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head_, paymentChannel)
   pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
   where
@@ -114,13 +114,13 @@ getHydraBalanceSlow addr = do
     aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open)
+      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open /=. val_ (Just False))
       pure heads_
   mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open)
+      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open /=. val_ (Just False))
       pure heads_
   pure $ Right $ mconcat
     [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
@@ -209,7 +209,7 @@ joinPaymentChannel headId amount = do
       (\channel -> channel ^. Db.hydraHead_secondBalance <-. val_ (Just amount))
       (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
 
-createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Int32
+createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Db.HeadId
 createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
@@ -231,7 +231,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ primaryKey newHead)
                           current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
-                          (val_ True)
+                          (val_ Nothing)
                         ]
     pure newHead
   -- TODO(skylar): Should creation imply spinning up nodes etc? I don't think so
@@ -240,7 +240,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
   -- let
   --   headId = Db.hydraHeadId dbHead
   -- ExceptT $ trackRunningHead a headId hydraHead
-  pure $ Db.hydraHeadId dbHead
+  pure $ primaryKey dbHead
   where
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second
@@ -248,5 +248,5 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
 closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
 closePaymentChannelQ headId = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_open <-. val_ False)
+    (\channel -> channel ^. Db.paymentChannel_open <-. val_ (Just False))
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
