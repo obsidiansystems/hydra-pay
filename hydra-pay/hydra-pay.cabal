@@ -28,6 +28,8 @@ library
     , postgresql-simple
     , process
     , rhyolite-beam-db
+    , rhyolite-beam-task-worker-backend
+    , rhyolite-beam-task-worker-types
     , reflex
     , reflex-fsnotify
     , resource-pool
