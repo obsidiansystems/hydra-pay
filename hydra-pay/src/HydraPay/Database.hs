@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module HydraPay.Database where
 
 import Control.Lens
@@ -10,13 +11,18 @@ import Data.Int
 import Data.Pool
 import Data.Proxy (Proxy(..))
 import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Beam
+import qualified Database.Beam.AutoMigrate as Beam
 import Database.Beam.Postgres
+import Database.Beam.Postgres.Syntax (PgValueSyntax)
 import Database.Beam.Backend.SQL
 import qualified Database.Beam.AutoMigrate as BA
 import Database.PostgreSQL.Simple (withTransaction)
+import Text.Read (readMaybe)
 
 import HydraPay.Database.Workers
+import HydraPay.PaymentChannel
 
 data HydraHeadsT f = HydraHead
   { _hydraHead_id :: C f (SqlSerial Int32)
@@ -62,13 +68,30 @@ instance Beamable (PrimaryKey ProxiesT)
 
 type ProxyInfo = ProxiesT Identity
 
+
+instance BA.HasColumnType PaymentChannelStatus where
+  defaultColumnType = const $ Beam.defaultColumnType $ Proxy @Text
+
+instance FromBackendRow Postgres PaymentChannelStatus where
+  fromBackendRow = do
+    row <- fromBackendRow
+    case readMaybe row of
+      Just x -> pure x
+      Nothing -> fail $ "Unknown PaymentChannelStatus: " <> row
+
+instance HasSqlValueSyntax PgValueSyntax PaymentChannelStatus where
+  sqlValueSyntax = sqlValueSyntax . T.pack . show
+
+instance HasSqlEqualityCheck Postgres PaymentChannelStatus
+
+
 data PaymentChannelsT f = PaymentChannel
   { _paymentChannel_id :: C f (SqlSerial Int32)
   , _paymentChannel_name :: C f Text
   , _paymentChannel_head :: PrimaryKey HydraHeadsT f
   , _paymentChannel_createdAt :: C f UTCTime
   , _paymentChannel_expiry :: C f UTCTime
-  , _paymentChannel_open :: C f (Maybe Bool)
+  , _paymentChannel_status :: C f PaymentChannelStatus
   }
   deriving (Generic)
 

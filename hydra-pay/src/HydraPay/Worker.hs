@@ -2,18 +2,13 @@
 
 module HydraPay.Worker where
 
-import Control.Lens (iso, makeLenses)
+import Control.Lens (iso)
 import Data.Text (Text)
 import Database.Beam
 import Database.Beam.Postgres
-import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
-import Database.Beam.Backend.SQL
-import Database.Beam.Backend.SQL.BeamExtensions
 import Rhyolite.DB.Beam.Types (WrapColumnar(..))
 import Rhyolite.Task.Beam
-import Rhyolite.Task.Beam.Worker
 
-import HydraPay.Database
 import HydraPay.Database.Workers
 
 
