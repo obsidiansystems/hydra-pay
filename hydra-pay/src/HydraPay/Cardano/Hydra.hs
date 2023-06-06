@@ -30,7 +30,8 @@ import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
-import HydraPay.PaymentChannel.Postgres (openPaymentChannelQ)
+import HydraPay.PaymentChannel (PaymentChannelStatus(..))
+import HydraPay.PaymentChannel.Postgres (initPaymentChannelQ)
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
 import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
@@ -243,7 +244,7 @@ runHydraHead a headId configs = liftIO $ do
   pure $ RunningHydraHead headStatus $ foldOf each handles
 
 spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> Int32 -> CommsThreadConfig -> m ThreadId
-spawnHydraNodeApiConnectionThread a hid cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
+spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
   liftIO $ forkIO $ withFile (config ^. hydraNodeConfig_threadLogFile) AppendMode $ \logFile -> forever $ do
     let
       apiPort = config ^. hydraNodeConfig_apiPort
@@ -297,7 +298,7 @@ spawnHydraNodeApiConnectionThread a hid cfg@(CommsThreadConfig config headStatus
         when (commsThreadIsHeadStateReporter cfg) $ do
           logInfo a loggerName "Head is open"
           atomically $ writeTVar headStatus $ HydraHead_Open
-          Db.runBeam a $ openPaymentChannelQ hid
+          Db.runBeam a $ initPaymentChannelQ headId
       HeadIsClosed hid _ deadline -> do
         when isReporter $ do
           logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
@@ -618,7 +619,7 @@ activeHydraHeads = do
   runSelectReturningList $ select $ do
     heads_ <- all_ (Db.db ^. Db.db_heads)
     paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-    guard_ (paymentChan_ ^. Db.paymentChannel_open /=. val_ (Just False))
+    guard_ (paymentChan_ ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
     pure $ heads_
 
 spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())

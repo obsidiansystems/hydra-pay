@@ -3,28 +3,17 @@
 {-# LANGUAGE TemplateHaskell #-}
 module HydraPay.Database.Workers where
 
-import Control.Lens (iso, makeLenses)
+import Control.Lens (makeLenses)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Int (Int32)
-import Data.Pool
 import Data.Proxy
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as LT
 import Data.Time (UTCTime)
 import Database.Beam
 import qualified Database.Beam.AutoMigrate as Beam
 import Database.Beam.Backend
-import Database.Beam.Backend.SQL
-import Database.Beam.Backend.SQL.BeamExtensions
 import Database.Beam.Postgres
-import Database.Beam.Postgres.Syntax (PgValueSyntax, PgExpressionSyntax(..), emit)
-import Database.PostgreSQL.Simple.FromField
-
-import Obelisk.Route
-import Rhyolite.DB.Beam.Types
-import Rhyolite.Task.Beam
-import Rhyolite.Task.Beam.Worker
+import Database.Beam.Postgres.Syntax (PgValueSyntax)
 
 
 data OpenChannelReq = OpenChannelReq

@@ -36,7 +36,7 @@ getPaymentChannelsInfo a addr = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_open /=. val_ (Just False) &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
+    guard_ (paymentChannel ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head_, paymentChannel)
   pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
   where
@@ -58,18 +58,12 @@ dbPaymentChannelToInfo addr hh pc =
     { _paymentChannelInfo_id = pc ^. Db.paymentChannel_id . to unSerial
     , _paymentChannelInfo_name = pc ^. Db.paymentChannel_name
     , _paymentChannelInfo_createdAt = pc ^. Db.paymentChannel_createdAt
+    , _paymentChannelInfo_expiry = pc ^. Db.paymentChannel_expiry
     , _paymentChannelInfo_other = other
-    , _paymentChannelInfo_status = status
+    , _paymentChannelInfo_status = pc ^. Db.paymentChannel_status
     , _paymentChannelInfo_initiator = isInitiator
     }
   where
-    status =
-      case pc ^. Db.paymentChannel_open of
-        Nothing -> PaymentChannelOpening
-        _ -> case hh ^. Db.hydraHead_secondBalance of
-          Just _ -> PaymentChannelOpen
-          Nothing -> (PaymentChannelPending $ pc ^. Db.paymentChannel_expiry)
-
     isInitiator = addrStr == hh ^. Db.hydraHead_first
 
     other = case isInitiator of
@@ -116,13 +110,13 @@ getHydraBalanceSlow addr = do
     aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open /=. val_ (Just False))
+      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
       pure heads_
   mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_open /=. val_ (Just False))
+      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
       pure heads_
   pure $ Right $ mconcat
     [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
@@ -233,7 +227,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ primaryKey newHead)
                           current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
-                          (val_ Nothing)
+                          (val_ PaymentChannelStatus_Initializing)
                         ]
     pure newHead
   -- TODO(skylar): Should creation imply spinning up nodes etc? I don't think so
@@ -250,11 +244,11 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
 closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
 closePaymentChannelQ headId = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_open <-. val_ (Just False))
+    (\channel -> channel ^. Db.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
 
-openPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-openPaymentChannelQ headId = do
+initPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
+initPaymentChannelQ headId = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_open <-. val_ (Just True))
+    (\channel -> channel ^. Db.paymentChannel_status <-. val_ PaymentChannelStatus_Initialized)
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
