@@ -12,6 +12,7 @@ library
     , beam-core
     , beam-postgres
     , bytestring
+    , bytestring-aeson-orphans
     , cardano-api
     , cardano-transaction
     , containers
