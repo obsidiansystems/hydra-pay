@@ -12,11 +12,22 @@ import Rhyolite.Task.Beam
 import HydraPay.Database.Workers
 
 
-openChannelTask :: Task Postgres OpenChannelTaskT (WrapColumnar OpenChannelReq) Text (WrapColumnar (Maybe Bool))
-openChannelTask = Task
+paymentChannelTask :: Task Postgres PaymentChannelTaskT (WrapColumnar PaymentChannelReq) Text (WrapColumnar (Maybe Bool))
+paymentChannelTask = Task
   { _task_filter = const $ val_ True
-  , _task_payload = WrapColumnar . _openChannelTask_payload
-  , _task_checkedOutBy = openChannelTask_checkedOutBy
-  , _task_hasRun = openChannelTask_finished
-  , _task_result = openChannelTask_status . iso WrapColumnar unWrapColumnar
+  , _task_payload = WrapColumnar . _paymentChannelTask_payload
+  , _task_checkedOutBy = paymentChannelTask_checkedOutBy
+  , _task_hasRun = paymentChannelTask_finished
+  , _task_result = paymentChannelTask_status . iso WrapColumnar unWrapColumnar
   }
+
+-- openChannelTask :: Task Postgres PaymentChannelTaskT (WrapColumnar PaymentChannelReq) Text (WrapColumnar (Maybe Bool))
+-- openChannelTask = Task
+--   { _task_filter = \a -> case _paymentChannelTask_payload a of
+--       PaymentChannelReq_Init _ -> val_ True
+--       _ -> False
+--   , _task_payload = WrapColumnar . _paymentChannelTask_payload
+--   , _task_checkedOutBy = paymentChannelTask_checkedOutBy
+--   , _task_hasRun = paymentChannelTask_finished
+--   , _task_result = paymentChannelTask_status . iso WrapColumnar unWrapColumnar
+--   }
