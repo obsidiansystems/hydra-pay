@@ -3,8 +3,10 @@
 {-# LANGUAGE TemplateHaskell #-}
 module HydraPay.Database.Workers where
 
+import ByteString.Aeson.Orphans ()
 import Control.Lens (makeLenses)
 import Data.Aeson (FromJSON, ToJSON)
+import Data.ByteString (ByteString)
 import Data.Int (Int32)
 import Data.Proxy
 import Data.Text (Text)
@@ -17,12 +19,14 @@ import Database.Beam.Postgres.Syntax (PgValueSyntax)
 
 
 data PaymentChannelReq
-  = PaymentChannelReq_Init Int32
+  = PaymentChannelReq_Init Int32 SignedTx
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
-  | PaymentChannelReq_Accept Int32
+  | PaymentChannelReq_Accept Int32 SignedTx
   | PaymentChannelReq_Close Int32 Text
   deriving Generic
+
+type SignedTx = ByteString
 
 instance FromJSON PaymentChannelReq
 instance ToJSON PaymentChannelReq
