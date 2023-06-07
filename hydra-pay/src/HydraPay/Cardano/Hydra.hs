@@ -31,7 +31,7 @@ import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
 import HydraPay.PaymentChannel (PaymentChannelStatus(..))
-import HydraPay.PaymentChannel.Postgres (initPaymentChannelQ)
+import HydraPay.PaymentChannel.Postgres (updatePaymentChannelStatusQ)
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
 import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
@@ -298,7 +298,7 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
         when (commsThreadIsHeadStateReporter cfg) $ do
           logInfo a loggerName "Head is open"
           atomically $ writeTVar headStatus $ HydraHead_Open
-          Db.runBeam a $ initPaymentChannelQ headId
+          Db.runBeam a $ updatePaymentChannelStatusQ headId PaymentChannelStatus_Open
       HeadIsClosed hid _ deadline -> do
         when isReporter $ do
           logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline

@@ -21,7 +21,7 @@ data PaymentChannelReq
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
   | PaymentChannelReq_Accept Int32
-  | PaymentChannelReq_Close Int32
+  | PaymentChannelReq_Close Int32 Text
   deriving Generic
 
 instance FromJSON PaymentChannelReq

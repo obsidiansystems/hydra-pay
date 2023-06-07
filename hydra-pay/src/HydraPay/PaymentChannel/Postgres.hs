@@ -242,13 +242,13 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
     secondText = Api.serialiseAddress second
 
 closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-closePaymentChannelQ headId = do
-  runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
-    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
+closePaymentChannelQ headId = updatePaymentChannelStatusQ headId PaymentChannelStatus_Closed
 
-initPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-initPaymentChannelQ headId = do
+closingPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
+closingPaymentChannelQ headId = updatePaymentChannelStatusQ headId PaymentChannelStatus_Closing
+
+updatePaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> PaymentChannelStatus -> m ()
+updatePaymentChannelStatusQ headId status = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_status <-. val_ PaymentChannelStatus_Initialized)
+    (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
