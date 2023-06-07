@@ -131,7 +131,7 @@ data Db f = Db
   , _db_heads :: f (TableEntity HydraHeadsT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   , _db_transactions :: f (TableEntity TransactionsT)
-  , _db_openChanTask :: f (TableEntity OpenChannelTaskT)
+  , _db_paymentChanTask :: f (TableEntity PaymentChannelTaskT)
   }
   deriving (Generic)
 

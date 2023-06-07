@@ -16,48 +16,49 @@ import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgValueSyntax)
 
 
-data OpenChannelReq = OpenChannelReq
-  { _openChannelReq_headId :: Int32
+data PaymentChannelReq
+  = PaymentChannelReq_Init Int32
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
-  }
+  | PaymentChannelReq_Accept Int32
+  | PaymentChannelReq_Close Int32
   deriving Generic
 
-instance FromJSON OpenChannelReq
-instance ToJSON OpenChannelReq
+instance FromJSON PaymentChannelReq
+instance ToJSON PaymentChannelReq
 
-instance Beam.HasColumnType OpenChannelReq where
-  defaultColumnType = const $ Beam.defaultColumnType $ Proxy @(PgJSON OpenChannelReq)
+instance Beam.HasColumnType PaymentChannelReq where
+  defaultColumnType = const $ Beam.defaultColumnType $ Proxy @(PgJSON PaymentChannelReq)
 
-instance FromBackendRow Postgres OpenChannelReq where
+instance FromBackendRow Postgres PaymentChannelReq where
   fromBackendRow = (\(PgJSON x) -> x) <$> fromBackendRow
 
-instance HasSqlValueSyntax PgValueSyntax OpenChannelReq where
+instance HasSqlValueSyntax PgValueSyntax PaymentChannelReq where
   sqlValueSyntax = sqlValueSyntax . PgJSON
 
 
-data OpenChannelTaskT f = OpenChannelTask
-  { _openChannelTask_id :: Columnar f (SqlSerial Int32)
-  , _openChannelTask_checkedOutBy :: Columnar f (Maybe Text)
-  , _openChannelTask_payload :: Columnar f OpenChannelReq
-  , _openChannelTask_status :: Columnar f (Maybe Bool)
-  , _openChannelTask_finished :: Columnar f Bool
-  , _openChannelTask_time :: Columnar f UTCTime
+data PaymentChannelTaskT f = PaymentChannelTask
+  { _paymentChannelTask_id :: Columnar f (SqlSerial Int32)
+  , _paymentChannelTask_checkedOutBy :: Columnar f (Maybe Text)
+  , _paymentChannelTask_payload :: Columnar f PaymentChannelReq
+  , _paymentChannelTask_status :: Columnar f (Maybe Bool)
+  , _paymentChannelTask_finished :: Columnar f Bool
+  , _paymentChannelTask_time :: Columnar f UTCTime
   }
   deriving Generic
 
-type OpenChannelTask = OpenChannelTaskT Identity
-type OpenChannelTaskId = PrimaryKey OpenChannelTaskT Identity
+type PaymentChannelTask = PaymentChannelTaskT Identity
+type PaymentChannelTaskId = PrimaryKey PaymentChannelTaskT Identity
 
-instance Table OpenChannelTaskT where
-  newtype PrimaryKey OpenChannelTaskT f = OpenChannelTaskId
-    { unOpenChannelTaskId :: Columnar f (SqlSerial Int32)
+instance Table PaymentChannelTaskT where
+  newtype PrimaryKey PaymentChannelTaskT f = PaymentChannelTaskId
+    { unPaymentChannelTaskId :: Columnar f (SqlSerial Int32)
     } deriving (Generic)
-  primaryKey = OpenChannelTaskId . _openChannelTask_id
+  primaryKey = PaymentChannelTaskId . _paymentChannelTask_id
 
-instance Beamable OpenChannelTaskT
-instance Beamable (PrimaryKey OpenChannelTaskT)
+instance Beamable PaymentChannelTaskT
+instance Beamable (PrimaryKey PaymentChannelTaskT)
 
 fmap concat $ traverse makeLenses
-  [ ''OpenChannelTaskT
+  [ ''PaymentChannelTaskT
   ]
