@@ -41,6 +41,7 @@ let
       overrides = self: super: pd.overrides self super // {
         aeson-gadt-th = haskellLib.doJailbreak (haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme");
         string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
+        bytestring-aeson-orphans = haskellLib.doJailbreak super.bytestring-aeson-orphans;
 
         cardano-transaction = haskellLib.overrideCabal super.cardano-transaction (drv: {
           librarySystemDepends = (drv.librarySystemDepends or []) ++ [
