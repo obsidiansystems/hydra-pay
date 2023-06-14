@@ -8,6 +8,7 @@ library
   build-depends:
       aeson
     , base
+    , exceptions
     , beam-automigrate
     , beam-core
     , beam-postgres

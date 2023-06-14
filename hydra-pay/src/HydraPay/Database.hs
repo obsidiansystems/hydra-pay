@@ -17,10 +17,10 @@ import qualified Database.Beam.AutoMigrate as BA
 import Database.PostgreSQL.Simple (withTransaction)
 
 data HydraHeadsT f = HydraHead
-  { _hydraHead_id :: C f (SqlSerial Int32)
+  { _hydraHead_id :: C f Text
   , _hydraHead_first :: C f Text
   , _hydraHead_second :: C f Text
-  , _hydraHead_firstBalance :: C f Int32
+  , _hydraHead_firstBalance :: C f (Maybe Int32)
   , _hydraHead_secondBalance :: C f (Maybe Int32)
   , _hydraHead_ledgerGenesis :: C f Text
   , _hydraHead_ledgerProtocolParams :: C f Text
@@ -30,7 +30,7 @@ data HydraHeadsT f = HydraHead
 instance Beamable HydraHeadsT
 
 instance Table HydraHeadsT where
-  data PrimaryKey HydraHeadsT f = HeadID (C f (SqlSerial Int32))
+  data PrimaryKey HydraHeadsT f = HeadID (C f Text)
     deriving (Generic)
   primaryKey = HeadID . _hydraHead_id
 
@@ -62,10 +62,12 @@ type ProxyInfo = ProxiesT Identity
 data PaymentChannelsT f = PaymentChannel
   { _paymentChannel_id :: C f (SqlSerial Int32)
   , _paymentChannel_name :: C f Text
-  , _paymentChannel_head :: PrimaryKey HydraHeadsT f
+  , _paymentChannel_head :: PrimaryKey HydraHeadsT (Nullable f)
   , _paymentChannel_createdAt :: C f UTCTime
   , _paymentChannel_expiry :: C f UTCTime
   , _paymentChannel_open :: C f Bool
+  , _paymentChannel_first :: C f Text
+  , _paymentChannel_second :: C f Text
   }
   deriving (Generic)
 
@@ -116,17 +118,11 @@ class HasDbConnectionPool a where
 instance HasDbConnectionPool (Pool Connection) where
   dbConnectionPool = id
 
-newtype HeadId =
-  HeadId Int32
-
 makeLenses ''PaymentChannelsT
 makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT
 makeLenses ''ProxiesT
 makeLenses ''Db
-
-hydraHeadId :: HydraHead -> Int32
-hydraHeadId = unSerial . _hydraHead_id
 
 paymentChannelId :: PaymentChannel -> Int32
 paymentChannelId = unSerial . _paymentChannel_id

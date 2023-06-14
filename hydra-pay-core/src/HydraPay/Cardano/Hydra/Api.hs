@@ -1,4 +1,4 @@
--- |
+{-# LANGUAGE TemplateHaskell #-}
 
 module HydraPay.Cardano.Hydra.Api
   ( module HydraPay.Cardano.Hydra.Api
@@ -8,8 +8,10 @@ module HydraPay.Cardano.Hydra.Api
 
 import GHC.Generics
 import Data.Aeson
+import Data.Aeson.TH
 import Data.Set (Set)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Time (UTCTime)
 import HydraPay.Cardano.Hydra.Api.ClientInput as X hiding (utxo, transaction)
 
@@ -19,6 +21,13 @@ type NodeId = Value
 type Party = Value
 type SnapshotNumber = Value
 type ValidationError = Value
+
+data Snapshot = Snapshot
+  { snapshot_number :: Integer
+  , snapshot_utxo :: Value
+  , snapshot_confirmedTransactions :: [Value]
+  }
+  deriving (Show, Generic)
 
 data ServerOutput
   = PeerConnected {peer :: NodeId}
@@ -51,7 +60,7 @@ data ServerOutput
     -- considered final.
     SnapshotConfirmed
       { headId :: HeadId
-      , snapshot :: Value
+      , snapshot :: Snapshot
       , signatures :: Value
       }
   | GetUTxOResponse {headId :: HeadId, utxo :: Value}
@@ -63,6 +72,8 @@ data ServerOutput
     Greetings {me :: Party, headStatus :: HeadStatus, snapshotUtxo :: Maybe Value}
   | PostTxOnChainFailed {postChainTx :: Value, postTxError :: Value}
   deriving (Generic, Show)
+
+deriveJSON (defaultOptions { fieldLabelModifier = drop (T.length "snapshot_")} ) ''Snapshot
 
 instance ToJSON ServerOutput
 instance FromJSON ServerOutput

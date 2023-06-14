@@ -8,5 +8,4 @@ data HydraChainConfig = HydraChainConfig
   , _hydraChainConfig_ledgerProtocolParams :: FilePath
   }
 
-
 makeLenses ''HydraChainConfig

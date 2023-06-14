@@ -26,13 +26,16 @@ data HydraHeadStatus
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 
+processInfoHandle :: ProcessInfo -> ProcessHandle
+processInfoHandle (_,_,_,ph) = ph
+
 data HydraNode = HydraNode
   { _hydraNode_apiPort :: Port
   , _hydraNode_processInfo :: ProcessInfo
   , _hydraNode_communicationThread :: ThreadId
   , _hydraNode_status :: TVar HydraNodeStatus
-  , _hydraNode_pendingRequests :: TMVar (Map Int HydraNodeRequest)
-  , _hydraNode_requestQueue :: TBQueue ClientInput
+  , _hydraNode_clientInputQueue :: TBQueue ClientInput
+  , _hydraNode_broadcastChannel :: TChan ServerOutput
   }
 
 data HydraNodeStatus
