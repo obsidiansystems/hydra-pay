@@ -42,6 +42,7 @@ library
     , typed-process
     , websockets
     , which
+    , async
 
   default-extensions:
     ConstraintKinds

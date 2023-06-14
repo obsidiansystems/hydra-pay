@@ -2,6 +2,7 @@
 
 module HydraPay.Cardano.Hydra where
 
+import Prelude hiding (log)
 import Debug.Trace (traceM, traceShow)
 
 import System.IO
@@ -48,12 +49,14 @@ import Database.Beam.Backend.SQL.BeamExtensions
 import Control.Lens
 import Control.Exception
 import Control.Concurrent
+import Control.Concurrent.Async (waitCatch, withAsync)
 import Control.Monad
 import Control.Concurrent.STM
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
 import qualified Data.ByteString.Lazy as LBS
+
 
 import Network.WebSockets (runClient, sendDataMessage, withPingThread)
 import qualified Network.WebSockets as WS
@@ -231,20 +234,50 @@ waitForApi port = do
       waitForApi port
     Right _ -> pure ()
 
-runHydraHead :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a) => a -> Int32 -> [HydraNodeConfig] -> m RunningHydraHead
+runHydraHead
+  :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a)
+  => a
+  -> Int32
+  -> [HydraNodeConfig]
+  -> m RunningHydraHead
 runHydraHead a headId configs = liftIO $ do
   headStatus <- newTVarIO HydraHead_Uninitialized
+  let log = logDebug a "node-supervisor"
   handles <- for configs $ \config -> do
     nodeStatus <- newTVarIO HydraNodeStatus_Unavailable
     requests <- newTMVarIO mempty
-    process <- createProcess <=< mkHydraNodeProc $ config
+    process <- newEmptyTMVarIO
+    communicationThread <- newEmptyTMVarIO
     queue <- newTBQueueIO 1000
-    communicationThread <- spawnHydraNodeApiConnectionThread a headId $ CommsThreadConfig config headStatus nodeStatus requests queue
-    pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue
-  pure $ RunningHydraHead headStatus $ foldOf each handles
+    let updateTMVar var new = atomically $ do
+            isEmpty <- isEmptyTMVar var
+            if isEmpty
+              then putTMVar var new
+              else void $ swapTMVar var new
+        runNode = do
+          log "Starting hydra node"
+          atomically $ writeTVar nodeStatus HydraNodeStatus_Unavailable
+          nodeProc <- createProcess <=< mkHydraNodeProc $ config
+          _ <- updateTMVar process nodeProc
+          comms <- spawnHydraNodeApiConnectionThread a headId $
+            CommsThreadConfig config headStatus nodeStatus requests queue
+          _ <- updateTMVar communicationThread comms
+          ec <- waitForProcess $ (\(_, _, _, ph) -> ph) nodeProc
+          killThread comms
+          pure ec
 
-spawnHydraNodeApiConnectionThread :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m) => a -> Int32 -> CommsThreadConfig -> m ThreadId
-spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) =
+    nodeRunner <- forkIO $ forever $ withAsync runNode $ \run -> do
+      result <- waitCatch run
+      case result of
+        Left (SomeException e) -> log $ "Hydra node encountered an error: " <> T.pack (show e)
+        Right ec -> log $ "Hydra node exited with: " <> T.pack (show ec)
+    pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue nodeRunner
+  pure $ RunningHydraHead headStatus (foldOf each handles)
+
+spawnHydraNodeApiConnectionThread
+  :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m)
+  => a -> Int32 -> CommsThreadConfig -> m ThreadId
+spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headStatus nodeStatus pendingRequests pendingCommands) = do
   liftIO $ forkIO $ withFile (config ^. hydraNodeConfig_threadLogFile) AppendMode $ \logFile -> forever $ do
     let
       apiPort = config ^. hydraNodeConfig_apiPort
@@ -257,11 +290,13 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
       -- We are connected so the nodes will be "replaying"
       atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replaying
       requestThreadId <- forkIO $ forever $ do
-          cInput <- atomically $ readTBQueue pendingCommands
-          logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
-          LBS.hPutStr logFile $ encode cInput <> "\n"
-          hFlush logFile
-          sendDataMessage conn $ WS.Text (encode cInput) Nothing
+        cInput <- atomically $ peekTBQueue pendingCommands
+        logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
+        LBS.hPutStr logFile $ encode cInput <> "\n"
+        hFlush logFile
+        sendDataMessage conn $ WS.Text (encode cInput) Nothing
+        _ <- atomically $ readTBQueue pendingCommands
+        pure ()
       flip finally (killThread requestThreadId) $ withPingThread conn 60 (pure ()) $ forever $ do
         result <- try $ do
           payload <- WS.receiveData conn
@@ -467,7 +502,10 @@ mkHydraNodeProc :: MonadIO m => HydraNodeConfig -> m CreateProcess
 mkHydraNodeProc cfg = do
   out <- liftIO $ openFile (cfg ^. hydraNodeConfig_logFile) AppendMode
   err <- liftIO $ openFile (cfg ^. hydraNodeConfig_logErrFile) AppendMode
-  pure $ logTo out err $ proc hydraNodePath $ join
+  pure $ logTo out err $ proc hydraNodePath (hydraNodeArgs cfg)
+
+hydraNodeArgs :: HydraNodeConfig -> [String]
+hydraNodeArgs cfg = join
    [ [ "--node-id"
      , cfg ^. hydraNodeConfig_nodeId . to show
      , "--port"
@@ -632,7 +670,7 @@ spinUpHead a hid = runExceptT $ do
   case mHead of
     Nothing -> throwError $ "Invalid head id" <> tShow hid
     Just dbHead -> do
-      traceM $ "spinUpHead: Foudn head: " <>  show (Db._hydraHead_id dbHead)
+      traceM $ "spinUpHead: Found head: " <>  show (Db._hydraHead_id dbHead)
       nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
       traceM $ "spinUpHead: Configs retrieved"
       hydraHead <- lift $ runHydraHead a hid nodeConfigs
@@ -642,18 +680,25 @@ spinUpHead a hid = runExceptT $ do
       pure out
 
 newHydraHeadManager :: MonadIO m => m HydraHeadManager
-newHydraHeadManager = HydraHeadManager <$> (liftIO . newTMVarIO) mempty
+newHydraHeadManager = do
+  runningHeads <- liftIO $ newTMVarIO mempty
+  pure $ HydraHeadManager
+    { _hydraHeadManager_runningHeads = runningHeads
+    }
 
 terminateRunningHeads :: MonadIO m => HydraHeadManager -> m ()
 terminateRunningHeads (HydraHeadManager channels) = do
   withTMVar channels $ \running -> do
     for_ (Map.elems running) $ \headVar -> do
       withTMVar headVar $ \hydraHead@(RunningHydraHead _ handles) -> do
-        for_ handles $ \(HydraNode _ nodeHandle@(_, out, err, _) thread _ _ _) -> liftIO $ do
-          cleanupProcess nodeHandle
-          maybe (pure ()) hClose out
-          maybe (pure ()) hClose err
-          killThread thread
+        for_ handles $ \(HydraNode _ nodeHandleRef thread _ _ _ runner) -> liftIO $ do
+          killThread runner
+          mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
+          forM_ mNodeHandle $ \nodeHandle@(_, out, err, _) -> do
+            cleanupProcess nodeHandle
+            maybe (pure ()) hClose out
+            maybe (pure ()) hClose err
+          killThread <=< atomically $ readTMVar thread
         pure (hydraHead, ())
     pure (running, ())
 
