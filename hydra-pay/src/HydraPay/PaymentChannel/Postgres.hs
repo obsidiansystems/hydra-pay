@@ -102,6 +102,16 @@ getPaymentChannelDetails a addr pcId = do
 
         pure (currentBalance, infos)
 
+-- | Retrieves payment channels requests that have expired along with address and balance information
+getExpiredPaymentChannels :: (MonadIO m, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([(Db.HydraHeadsT Identity, Db.PaymentChannelsT Identity, Db.ProxiesT Identity)])
+getExpiredPaymentChannels a now = do
+  Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
+    paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
+    head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+    proxies <- join_ (Db.db ^. Db.db_proxies) (\proxy -> (head_ ^. Db.hydraHead_first) ==. (proxy ^. Db.proxy_chainAddress))
+    guard_ (paymentChannel ^. Db.paymentChannel_status ==. val_ PaymentChannelStatus_Initialized &&. paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
+    pure (head_, paymentChannel, proxies)
+
 -- | Retrieve the total balance locked in hydra heads filtering ones that have expired.
 getHydraBalanceSlow :: (MonadBeam Postgres m) => Api.AddressAny -> m (Either Text Api.Lovelace)
 getHydraBalanceSlow addr = do
