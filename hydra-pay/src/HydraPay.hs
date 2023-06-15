@@ -104,21 +104,17 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
 sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+    let cfg = mkEvalConfig a paramsPath
     fmap (TxId . T.pack) $
       eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
-  where
-    socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+    let cfg = mkEvalConfig a paramsPath
     txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
     pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
-  where
-    socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
 assumeWitnessed :: BS.ByteString -> BS.ByteString
 assumeWitnessed bs = do
@@ -206,7 +202,7 @@ balanceAdaAssets addr = do
 sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
 sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+    let cfg = mkEvalConfig a paramsPath
         fee = 0
     (txId, txLbs) <- evalRawNoSubmit cfg fee $ do
       sendHydraLovelaceTx utxo fromAddrStr toAddrStr lovelace
@@ -216,8 +212,6 @@ sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
         pure $ Left "sendHydraLovelace: could not decode cardano tx creation"
       Just cbor -> do
         pure $ Right (T.pack txId, cbor)
-  where
-    socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
 -- Handles refunds for payment channel initiators whose invites have expired
 handleChannelRefund :: MonadIO m => HydraPayState -> RefundRequest -> m (Either Text Text)
@@ -253,4 +247,3 @@ handleChannelRefund state refundRequest = do
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"
     eitherAddrDeserialise txt = fmap (first T.pack) $ runExceptT $
       ExceptT $ pure $ mayToEitherAddr $ Api.deserialiseAddress Api.AsAddressAny $ txt
-
