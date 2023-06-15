@@ -271,6 +271,7 @@ runHydraHead a headId configs = liftIO $ do
       case result of
         Left (SomeException e) -> log $ "Hydra node encountered an error: " <> T.pack (show e)
         Right ec -> log $ "Hydra node exited with: " <> T.pack (show ec)
+      threadDelay 250000
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus requests queue nodeRunner
   pure $ RunningHydraHead headStatus (foldOf each handles)
 
@@ -311,8 +312,9 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
             Left err -> do
               logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
         case result of
-          Left err@(SomeException _) ->
+          Left err@(SomeException _) -> do
             logInfo a loggerName $ "Message Handler failed: " <> tShow err
+            threadDelay 250000
           Right _ ->
             pure ()
   where
