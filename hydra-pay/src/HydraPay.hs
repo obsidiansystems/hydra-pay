@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module HydraPay where
 
@@ -10,6 +11,7 @@ import System.IO.Temp
 
 import Control.Exception (catch)
 import Data.Aeson.Lens
+import Data.Bifunctor
 
 import Control.Lens
 import Control.Monad
@@ -28,13 +30,17 @@ import HydraPay.Cardano.Hydra
 import HydraPay.Proxy
 import HydraPay.Transaction
 import qualified HydraPay.Database as DB
+import HydraPay.PaymentChannel.Postgres (getExpiredPaymentChannels)
 
 import Control.Concurrent (threadDelay)
 
+import qualified Data.Aeson as Aeson
 import Data.Int
 import Data.String
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
+import Data.Time (UTCTime)
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -46,6 +52,7 @@ import Cardano.Transaction.Extras (evalRawNoSubmit)
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
 import Database.Beam.Postgres
+import Database.Beam.Backend.SQL.BeamExtensions (unSerial)
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
@@ -208,3 +215,31 @@ sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
         pure $ Right (T.pack txId, cbor)
   where
     socketPath = a ^. nodeInfo . nodeInfo_socketPath
+
+-- Handles refunds for payment channel initiators whose invites have expired
+handleChannelRefund :: MonadIO m => HydraPayState -> UTCTime -> m (Either Text ([Either Text (Int32,Text)]))
+handleChannelRefund state now = do
+  refundsDue <- getExpiredPaymentChannels (_hydraPay_databaseConnectionPool state) now
+  case refundsDue of
+    [] -> return $ Left "No refunds due"
+    _ -> do
+      results <- forM refundsDue $ \(head', paymentChan, proxy) -> do
+        -- TODO: add each job to db_paymentChanTask (maybe...)
+        eHydraAddr <- fmap (first T.pack) $ runExceptT $
+          ExceptT $ pure $ maybeToEither "Failed to deserialize to Any Address" $ Api.deserialiseAddress Api.AsAddressAny $ DB._proxy_hydraAddress proxy
+        case eHydraAddr of
+          Left err -> return $ Left err
+          Right hydraAddr -> do
+            eChainAddr <- fmap (first T.pack) $ runExceptT $
+              ExceptT $ pure $ maybeToEither "Failed to deserialize to Any Address" $ Api.deserialiseAddress Api.AsAddressAny $ DB._proxy_chainAddress proxy
+            case eChainAddr of
+              Left err -> return $ Left err
+              Right chainAddr -> do
+                let ePparams :: Either String Api.ProtocolParameters = Aeson.eitherDecode (LBS.fromStrict $ T.encodeUtf8 $ DB._hydraHead_ledgerProtocolParams head')
+                case ePparams of
+                  Left err -> return $ Left $ T.pack err
+                  Right pparams -> do
+                    txid <- fanoutToL1Address state pparams hydraAddr (T.unpack $ DB._proxy_signingKeyPath proxy) chainAddr $ DB._hydraHead_firstBalance head'
+                    return $ Right ((unSerial $ DB._hydraHead_id head'), (unTxId txid))
+      return $ Right results
+

@@ -24,6 +24,7 @@ data PaymentChannelReq
   -- Channel request.
   | PaymentChannelReq_Accept Int32 SignedTx
   | PaymentChannelReq_Close Int32 Text
+  | PaymentChannelReq_InitiatorRefund UTCTime
   deriving Generic
 
 type SignedTx = ByteString
