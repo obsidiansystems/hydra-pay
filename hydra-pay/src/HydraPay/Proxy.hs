@@ -56,13 +56,14 @@ addProxyInfo :: MonadBeamInsertReturning Postgres m => Api.AddressAny -> ProxyIn
 addProxyInfo addr pinfo = do
   result <- runInsertReturningList
     $ insertOnConflict (DB.db ^. DB.db_proxies)
-    (insertValues [ DB.ProxyInfo
-                    (Api.serialiseAddress addr)
-                    (pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
-                    (pinfo ^. proxyInfo_verificationKey . to (T.pack))
-                    (pinfo ^. proxyInfo_signingKey . to (T.pack))
-                    (pinfo ^. proxyInfo_hydraVerificationKey . to (T.pack))
-                    (pinfo ^. proxyInfo_hydraSigningKey . to (T.pack))
+    (insertExpressions [ DB.ProxyInfo
+                         default_
+                         (val_ $ Api.serialiseAddress addr)
+                         (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
+                         (val_ $ pinfo ^. proxyInfo_verificationKey . to (T.pack))
+                         (val_ $ pinfo ^. proxyInfo_signingKey . to (T.pack))
+                         (val_ $ pinfo ^. proxyInfo_hydraVerificationKey . to (T.pack))
+                         (val_ $ pinfo ^. proxyInfo_hydraSigningKey . to (T.pack))
                   ])
     -- If somehow we had someone insert before we did, we should get the information back out and use that
     anyConflict onConflictDoNothing

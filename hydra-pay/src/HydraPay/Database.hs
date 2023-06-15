@@ -48,7 +48,8 @@ type HydraHead = HydraHeadsT Identity
 type HeadId = PrimaryKey HydraHeadsT Identity
 
 data ProxiesT f = ProxyInfo
-   { _proxy_chainAddress :: C f Text
+   { _proxy_id :: C f (SqlSerial Int32)
+   , _proxy_chainAddress :: C f Text
    , _proxy_hydraAddress :: C f Text
    , _proxy_verificationKeyPath :: C f Text
    , _proxy_signingKeyPath :: C f Text
@@ -60,9 +61,9 @@ data ProxiesT f = ProxyInfo
 instance Beamable ProxiesT
 
 instance Table ProxiesT where
-  data PrimaryKey ProxiesT f = ProxyID (C f Text)
+  data PrimaryKey ProxiesT f = ProxyID (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = ProxyID . _proxy_chainAddress
+  primaryKey = ProxyID . _proxy_id
 
 instance Beamable (PrimaryKey ProxiesT)
 
