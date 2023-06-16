@@ -143,7 +143,7 @@ waitForTxInput state txin = runExceptT $ do
   case exists of
     True -> pure ()
     False -> do
-      liftIO $ threadDelay 100000
+      liftIO $ threadDelay 500000
       ExceptT $ waitForTxInput state txin
 
 payFuelTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
