@@ -16,7 +16,21 @@ import qualified Database.Beam.AutoMigrate as Beam
 import Database.Beam.Backend
 import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgValueSyntax)
+import qualified Cardano.Api as Api
+import qualified Cardano.Api.Shelley as Api
 
+data RefundRequest = RefundRequest
+  { _refundRequest_hydraHead :: Int32
+  , _refundRequest_hydraAddress :: Text
+  , _refundRequest_signingKeyPath :: FilePath
+  , _refundRequest_chainAddress :: Text
+  , _refundRequest_amount :: Int32
+  , _refundRequest_protocolParams :: Text
+  }
+  deriving Generic
+
+instance FromJSON RefundRequest
+instance ToJSON RefundRequest
 
 data PaymentChannelReq
   = PaymentChannelReq_Init Int32 SignedTx
@@ -24,7 +38,7 @@ data PaymentChannelReq
   -- Channel request.
   | PaymentChannelReq_Accept Int32 SignedTx
   | PaymentChannelReq_Close Int32 Text
-  | PaymentChannelReq_InitiatorRefund UTCTime
+  | PaymentChannelReq_InitiatorRefund RefundRequest
   deriving Generic
 
 type SignedTx = ByteString
@@ -40,7 +54,6 @@ instance FromBackendRow Postgres PaymentChannelReq where
 
 instance HasSqlValueSyntax PgValueSyntax PaymentChannelReq where
   sqlValueSyntax = sqlValueSyntax . PgJSON
-
 
 data PaymentChannelTaskT f = PaymentChannelTask
   { _paymentChannelTask_id :: Columnar f (SqlSerial Int32)
