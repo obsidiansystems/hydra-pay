@@ -238,13 +238,17 @@ handleChannelRefund state refundRequest = do
             Left err -> return $ Left err
             Right pparams -> do
               txid <- fanoutToL1Address state pparams hydraAddr (_refundRequest_signingKeyPath refundRequest) chainAddr $ _refundRequest_amount refundRequest
-              -- Mark payment channel as closed
-              DB.runBeam (_hydraPay_databaseConnectionPool state) $ runExceptT $ runUpdate $
-                update
-                (DB.db ^. DB.db_paymentChannels)
-                (\channel -> channel ^. DB.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
-                (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadID (SqlSerial (_refundRequest_hydraHead refundRequest))))
-              return $ Right $ unTxId txid
+              eRes <- runExceptT $ ExceptT $ waitForTxInput state $ mkTxInput txid 0
+              case eRes of
+                Left txErr -> return $ Left txErr
+                Right _ -> do
+                  -- Mark payment channel as closed
+                  DB.runBeam (_hydraPay_databaseConnectionPool state) $ runUpdate $
+                    update
+                    (DB.db ^. DB.db_paymentChannels)
+                    (\channel -> channel ^. DB.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
+                    (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadID (SqlSerial (_refundRequest_hydraHead refundRequest))))
+                  return $ Right $ unTxId txid
   where
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"
     eitherAddrDeserialise txt = fmap (first T.pack) $ runExceptT $
