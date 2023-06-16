@@ -18,8 +18,8 @@ import Control.Monad
 import Control.Monad.IO.Class
 
 import Reflex
+import Reflex.Host.Headless
 
-import HydraPay.Host
 import qualified HydraPay.Watch as Watch
 
 import Control.Concurrent
@@ -84,13 +84,17 @@ withCardanoNode cfg action = do
           (path, file) = pathAndFile $ ninfo ^. nodeInfo_socketPath
 
         -- Fork the FRP layer so we can still run the action
-        socketWatchThreadId <- forkIO $ runHost $ do
-          changed <- Watch.watchDir FS.defaultConfig path $ socketPred file
+        socketWatchThreadId <- forkIO $ runHeadlessApp $ do
+          pb <- getPostBuild
+          exited <- performEventAsync $ ffor pb $ \_ cb -> do
+            liftIO $ void $ forkIO $ cb =<< waitForProcess ph
+          (changed, watchThread) <- Watch.watchDir FS.defaultConfig path $ socketPred file
           performEvent_ $ ffor changed $ const $ do
             liftIO $ atomically $ putTMVar ready ()
+          performEvent_ $ ffor exited $ \_ -> liftIO $ killThread watchThread
+          delay 0.1 $ () <$ exited
 
-        _ <- forkIO $ void $ waitForProcess ph
-        action ninfo `finally` killThread socketWatchThreadId
+        action ninfo `finally` (killThread socketWatchThreadId)
 
 makeNodeProcess :: Handle -> Handle -> NodeConfig -> CreateProcess
 makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _) =
