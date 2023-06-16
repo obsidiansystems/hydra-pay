@@ -212,7 +212,7 @@ ensureHeadNodesReady state h = do
       readTVar $ headHandle ^. hydraNode_status
     traceM $ "==> STATUS" <> show statuses
     let
-      ready = all (\a -> a == HydraNodeStatus_PeersConnected) statuses
+      ready = all (== HydraNodeStatus_PeersConnected) statuses
 
     check ready
 
@@ -297,6 +297,7 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
         hFlush logFile
         sendDataMessage conn $ WS.Text (encode cInput) Nothing
         _ <- atomically $ readTBQueue pendingCommands
+        logInfo a "sendingThread" $ "Message sent: " <> tShow cInput
         pure ()
       flip finally (killThread requestThreadId) $ withPingThread conn 60 (pure ()) $ forever $ do
         result <- try $ do
@@ -306,8 +307,12 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
           hFlush logFile
           case eitherDecode payload of
             Right res -> do
+              status <- atomically $ readTVar nodeStatus
+              logInfo a loggerName $ "Node is " <> tShow status
               logInfo a loggerName $ "Valid message, processing...\n" <> tShow res
-              handleHydraNodeApiResponse loggerName isReporter res
+              case status of
+                HydraNodeStatus_Replaying -> handleHydraNodeApiResponseOther loggerName isReporter res
+                _ -> handleHydraNodeApiResponse loggerName isReporter res
               handleRequests pendingRequests res
             Left err -> do
               logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
@@ -318,10 +323,13 @@ spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headSta
           Right _ ->
             pure ()
   where
+    handleHydraNodeApiResponseOther loggerName isReporter = \case
+      Greetings {} -> do
+        logInfo a loggerName "Hydra Node Replay Complete"
+        atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
+      _ -> pure ()
     -- Update hydra-pay state based on hydra node responses
     handleHydraNodeApiResponse loggerName isReporter = \case
-      Greetings {} ->
-        atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
       PeerConnected _ -> do
         logInfo a loggerName "Hydra Node ready"
         atomically $ writeTVar nodeStatus $ HydraNodeStatus_PeersConnected
@@ -411,6 +419,7 @@ getNodeFor hHead addr = Map.lookup addr $ hHead ^. hydraHead_handles
 sendHydraHeadCommand :: (MonadIO m, HasLogger a) => a -> RunningHydraHead -> HydraHeadInput b -> m b
 sendHydraHeadCommand a hHead command = do
   ensureHeadNodesReady a hHead
+  liftIO $ threadDelay 5000000
   logInfo a "sendHydraHeadCommand" "Nodes are ready, sending command"
   case command of
     HydraHeadInit -> do
