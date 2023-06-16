@@ -37,6 +37,7 @@ import Control.Concurrent (threadDelay)
 
 import qualified Data.Aeson as Aeson
 import Data.Int
+import qualified Data.ByteString.Char8 as B8
 import Data.String
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -227,9 +228,12 @@ handleChannelRefund state refundRequest = do
       case eChainAddr of
         Left err -> return $ Left err
         Right chainAddr -> do
-          let ePparams :: Either String Api.ProtocolParameters = Aeson.eitherDecode $ LBS.fromStrict $ T.encodeUtf8 $ (_refundRequest_protocolParams refundRequest)
+          handle <- liftIO $ openFile (T.unpack $ _refundRequest_protocolParams refundRequest) ReadMode
+          pparamBytes <- liftIO $ hGetContents handle
+          ePparams <- fmap (first T.pack) $ runExceptT $
+             ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack pparamBytes
           case ePparams of
-            Left err -> return $ Left $ T.pack err
+            Left err -> return $ Left err
             Right pparams -> do
               txid <- fanoutToL1Address state pparams hydraAddr (_refundRequest_signingKeyPath refundRequest) chainAddr $ _refundRequest_amount refundRequest
               return $ Right $ unTxId txid
