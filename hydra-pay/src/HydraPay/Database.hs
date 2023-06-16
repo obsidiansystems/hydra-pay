@@ -38,9 +38,9 @@ data HydraHeadsT f = HydraHead
 instance Beamable HydraHeadsT
 
 instance Table HydraHeadsT where
-  data PrimaryKey HydraHeadsT f = HeadID (C f (SqlSerial Int32))
+  data PrimaryKey HydraHeadsT f = HeadId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = HeadID . _hydraHead_id
+  primaryKey = HeadId . _hydraHead_id
 
 instance Beamable (PrimaryKey HydraHeadsT)
 
@@ -61,9 +61,9 @@ data ProxiesT f = ProxyInfo
 instance Beamable ProxiesT
 
 instance Table ProxiesT where
-  data PrimaryKey ProxiesT f = ProxyID (C f (SqlSerial Int32))
+  data PrimaryKey ProxiesT f = ProxyId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = ProxyID . _proxy_id
+  primaryKey = ProxyId . _proxy_id
 
 instance Beamable (PrimaryKey ProxiesT)
 
@@ -99,9 +99,9 @@ data PaymentChannelsT f = PaymentChannel
 instance Beamable PaymentChannelsT
 
 instance Table PaymentChannelsT where
-  data PrimaryKey PaymentChannelsT f = PaymentChannelID (C f (SqlSerial Int32))
+  data PrimaryKey PaymentChannelsT f = PaymentChannelId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = PaymentChannelID . _paymentChannel_id
+  primaryKey = PaymentChannelId . _paymentChannel_id
 
 instance Beamable (PrimaryKey PaymentChannelsT)
 
@@ -119,17 +119,35 @@ data TransactionsT f = Transaction
 instance Beamable TransactionsT
 
 instance Table TransactionsT where
-  data PrimaryKey TransactionsT f = TransactionID (C f (SqlSerial Int32))
+  data PrimaryKey TransactionsT f = TransactionId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = TransactionID . _transaction_id
+  primaryKey = TransactionId . _transaction_id
 
 instance Beamable (PrimaryKey TransactionsT)
 
 type Transaction = TransactionsT Identity
 
+-- | Associates a given Proxy Address with a Head and therefore a node.
+data ProxyHeadT f = ProxyHead
+  { _proxyHead_id :: C f (SqlSerial Int32)
+  , _proxyHead_proxy :: PrimaryKey ProxiesT f
+  , _proxyHead_head :: PrimaryKey HydraHeadsT f
+  }
+  deriving (Generic)
+
+instance Beamable ProxyHeadT
+
+instance Table ProxyHeadT where
+  data PrimaryKey ProxyHeadT f = ProxyHeadId (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = ProxyHeadId . _proxyHead_id
+
+instance Beamable (PrimaryKey ProxyHeadT)
+
 data Db f = Db
   { _db_proxies :: f (TableEntity ProxiesT)
   , _db_heads :: f (TableEntity HydraHeadsT)
+  , _db_proxyHead :: f (TableEntity ProxyHeadT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   , _db_transactions :: f (TableEntity TransactionsT)
   , _db_paymentChanTask :: f (TableEntity PaymentChannelTaskT)
@@ -144,6 +162,7 @@ class HasDbConnectionPool a where
 instance HasDbConnectionPool (Pool Connection) where
   dbConnectionPool = id
 
+makeLenses ''ProxyHeadT
 makeLenses ''PaymentChannelsT
 makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT

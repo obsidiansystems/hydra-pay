@@ -108,9 +108,9 @@ sendFuelTo a pparams fromAddr skPath toAddr amount = do
     fmap (TxId . T.pack) $
       eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
 
-getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
-getProxyTx a pparams addr lovelace = DB.runBeam a $ runExceptT $ do
-  proxyInfo <- ExceptT $ queryProxyInfo a addr
+getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
+getProxyTx a pparams hid addr lovelace = DB.runBeam a $ runExceptT $ do
+  proxyInfo <- ExceptT $ queryProxyInfo a hid addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath
     txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
@@ -146,15 +146,22 @@ waitForTxInput state txin = runExceptT $ do
       liftIO $ threadDelay 500000
       ExceptT $ waitForTxInput state txin
 
-payFuelTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
-payFuelTo fromAddr skPath toAddr lovelace = do
-  Output {..} <- outputWithDatumHash (addressString toAddr) (fromString $ show lovelace <> " lovelace") (BS.unpack fuelMarkerDatumHash)
+transferTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Maybe BS.ByteString -> Tx ()
+transferTo fromAddr skPath toAddr lovelace mDatum = do
+  Output {..} <- case mDatum of
+    Just dh -> outputWithDatumHash toStr (fromString $ show lovelace <> " lovelace") (BS.unpack dh)
+    Nothing -> output toStr $ fromString $ show lovelace <> " lovelace"
   void $ selectInputs oValue fromStr
   changeAddress fromStr
   void $ balanceNonAdaAssets fromStr
   sign skPath
   where
+    toStr = addressString toAddr
     fromStr = addressString fromAddr
+
+payFuelTo :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
+payFuelTo fromAddr skPath toAddr lovelace =
+  transferTo fromAddr skPath toAddr lovelace $ Just fuelMarkerDatumHash
 
 payToProxyTx :: Api.AddressAny -> Int32 -> ProxyInfo -> Tx ()
 payToProxyTx addr lovelace proxy = do
@@ -241,7 +248,7 @@ handleChannelRefund state refundRequest = do
                     update
                     (DB.db ^. DB.db_paymentChannels)
                     (\channel -> channel ^. DB.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
-                    (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadID (SqlSerial (_refundRequest_hydraHead refundRequest))))
+                    (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadId (SqlSerial (_refundRequest_hydraHead refundRequest))))
                   return $ Right $ unTxId txid
   where
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"

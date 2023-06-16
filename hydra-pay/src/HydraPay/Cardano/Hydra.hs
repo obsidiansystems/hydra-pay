@@ -573,8 +573,8 @@ deriveConfigFromDbHead a hh = runExceptT $ do
   first <- ExceptT $ pure $ maybeToEither "Failed to deserialize address" $ Api.deserialiseAddress Api.AsAddressAny firstText
   second <- ExceptT $ pure $ maybeToEither "Failed to deserialize address" $ Api.deserialiseAddress Api.AsAddressAny secondText
 
-  firstProxy <- ExceptT $ queryProxyInfo a first
-  secondProxy <- ExceptT $ queryProxyInfo a second
+  firstProxy <- ExceptT $ queryProxyInfo a (Db.hydraHeadId hh) first
+  secondProxy <- ExceptT $ queryProxyInfo a (Db.hydraHeadId hh) second
 
   let
     suffixFirst = (T.unpack $ (tShow $ Db.hydraHeadId hh) <> "-" <> T.takeEnd 8 firstText)
@@ -720,7 +720,7 @@ initHead a hid = do
 commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  MonadIO m, HasNodeInfo a, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
 commitToHead a hid committer amount = do
   result <- runExceptT $ do
-    proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a committer
+    proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a hid committer
     logInfo a "commitHead" $ "Attempting to Commit from address: " <> Api.serialiseAddress proxyAddr
     balance <- ExceptT $ runCardanoCli a $ queryUTxOs proxyAddr
     commitUtxo <- ExceptT $ pure $ maybeToEither ("Failed to find suitable commit utxo with " <> tShow amount <> "lovelace") $ findUTxOWithExactly amount balance

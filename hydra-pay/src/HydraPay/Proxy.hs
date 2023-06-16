@@ -2,6 +2,9 @@
 
 module HydraPay.Proxy where
 
+import Data.Int
+import Data.Foldable
+
 import Control.Lens
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
@@ -19,7 +22,7 @@ import HydraPay.Utils
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra.Tools
-import qualified HydraPay.Database as DB
+import qualified HydraPay.Database as Db
 
 data ProxyInfo = ProxyInfo
   { _proxyInfo_address :: Api.AddressAny
@@ -32,11 +35,23 @@ data ProxyInfo = ProxyInfo
 
 makeLenses ''ProxyInfo
 
-getProxyInfo :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe ProxyInfo)
-getProxyInfo addr = do
+getProxyInfo :: MonadBeam Postgres m => Int32 -> Api.AddressAny -> m (Maybe ProxyInfo)
+getProxyInfo hid addr = do
   proxy <- runSelectReturningOne $ select $ do
-    proxy <- all_ (DB.db ^. DB.db_proxies)
-    guard_ (proxy ^. DB.proxy_chainAddress ==.  val_ (Api.serialiseAddress addr))
+    h <- all_ (Db.db ^. Db.db_heads)
+    proxy <- all_ (Db.db ^. Db.db_proxies)
+    ph <- all_ (Db.db ^. Db.db_proxyHead)
+    guard_ (h ^. Db.hydraHead_id ==. (val_ $ SqlSerial hid))
+    guard_ ((ph ^. Db.proxyHead_head) `references_` h)
+    guard_ ((ph ^. Db.proxyHead_proxy) `references_` proxy)
+    pure proxy
+  pure $ proxy >>= dbProxyInfoToProxyInfo
+
+getProxyInfoDirect :: MonadBeam Postgres m => Int32 -> m (Maybe ProxyInfo)
+getProxyInfoDirect pid = do
+  proxy <- runSelectReturningOne $ select $ do
+    proxy <- all_ (Db.db ^. Db.db_proxies)
+    guard_ (proxy ^. Db.proxy_id ==. val_ (SqlSerial pid))
     pure proxy
   pure $ proxy >>= dbProxyInfoToProxyInfo
 
@@ -44,34 +59,41 @@ getProxyInfo addr = do
 getProxyChainAddressAndSigningKey :: MonadBeam Postgres m => Api.AddressAny -> m (Maybe (Api.AddressAny, Text))
 getProxyChainAddressAndSigningKey addr = do
   chainAddress <- runSelectReturningOne $ select $ do
-    proxy <- all_ (DB.db ^. DB.db_proxies)
-    guard_ (proxy ^. DB.proxy_hydraAddress ==.  val_ (Api.serialiseAddress addr))
-    pure (DB._proxy_chainAddress proxy, DB._proxy_signingKeyPath proxy)
+    proxy <- all_ (Db.db ^. Db.db_proxies)
+    guard_ (proxy ^. Db.proxy_hydraAddress ==.  val_ (Api.serialiseAddress addr))
+    pure (Db._proxy_chainAddress proxy, Db._proxy_signingKeyPath proxy)
   pure $ do
     (c, sk) <- chainAddress
     a <- Api.deserialiseAddress Api.AsAddressAny c
     pure (a, sk)
 
-addProxyInfo :: MonadBeamInsertReturning Postgres m => Api.AddressAny -> ProxyInfo -> m (Maybe ProxyInfo)
-addProxyInfo addr pinfo = do
+addProxyInfo :: MonadBeamInsertReturning Postgres m => Int32 -> Api.AddressAny -> ProxyInfo -> m (Maybe ProxyInfo)
+addProxyInfo hid addr pinfo = do
   result <- runInsertReturningList
-    $ insertOnConflict (DB.db ^. DB.db_proxies)
-    (insertExpressions [ DB.ProxyInfo
-                         default_
-                         (val_ $ Api.serialiseAddress addr)
-                         (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
-                         (val_ $ pinfo ^. proxyInfo_verificationKey . to (T.pack))
-                         (val_ $ pinfo ^. proxyInfo_signingKey . to (T.pack))
-                         (val_ $ pinfo ^. proxyInfo_hydraVerificationKey . to (T.pack))
-                         (val_ $ pinfo ^. proxyInfo_hydraSigningKey . to (T.pack))
-                  ])
     -- If somehow we had someone insert before we did, we should get the information back out and use that
-    anyConflict onConflictDoNothing
+    $ insertOnConflict (Db.db ^. Db.db_proxies)
+      (insertExpressions [ Db.ProxyInfo
+                           default_
+                           (val_ $ Api.serialiseAddress addr)
+                           (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
+                           (val_ $ pinfo ^. proxyInfo_verificationKey . to (T.pack))
+                           (val_ $ pinfo ^. proxyInfo_signingKey . to (T.pack))
+                           (val_ $ pinfo ^. proxyInfo_hydraVerificationKey . to (T.pack))
+                           (val_ $ pinfo ^. proxyInfo_hydraSigningKey . to (T.pack))
+                    ])
+      anyConflict onConflictDoNothing
+
+  -- Create the linkages for the new proxy info
+  for_ result $ \pi -> do
+    runInsertReturningList $ insert (Db.db ^. Db.db_proxyHead) $ insertExpressions
+      [ Db.ProxyHead default_ (val_ $ pk pi) (val_ $ Db.HeadId $ SqlSerial hid)
+      ]
+
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo
 
-queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, MonadIO m) => a -> Api.AddressAny -> m (Either Text ProxyInfo)
-queryProxyInfo a addr = do
-  result <- getProxyInfo addr
+queryProxyInfo :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, HasNodeInfo a, MonadIO m) => a -> Int32 -> Api.AddressAny -> m (Either Text ProxyInfo)
+queryProxyInfo a headId addr = do
+  result <- getProxyInfo headId addr
   case result of
     Nothing -> do
       runExceptT $ do
@@ -82,15 +104,15 @@ queryProxyInfo a addr = do
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
         (hvk, hsk) <- ExceptT $ hydraKeyGen $ proxyKeysPath </> (prefix <> ".hydra")
         let newInfo = ProxyInfo proxyAddr vk sk hvk hsk
-        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo addr newInfo
+        ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo headId addr newInfo
     Just info -> do
       pure $ Right info
 
-dbProxyInfoToProxyInfo :: DB.ProxyInfo -> Maybe ProxyInfo
+dbProxyInfoToProxyInfo :: Db.ProxyInfo -> Maybe ProxyInfo
 dbProxyInfoToProxyInfo pinfo =
   ProxyInfo
-  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. DB.proxy_hydraAddress)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_verificationKeyPath)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_signingKeyPath)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_hydraVerificationKeyPath)
-  <*> (pure $ T.unpack $ pinfo ^. DB.proxy_hydraSigningKeyPath)
+  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_hydraAddress)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_verificationKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_signingKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_hydraVerificationKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_hydraSigningKeyPath)

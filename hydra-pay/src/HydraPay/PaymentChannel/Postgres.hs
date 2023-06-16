@@ -206,13 +206,13 @@ sendAdaInChannel hid you amount = runExceptT $ do
 
 getPaymentChannelHeadId :: (MonadBeam Postgres m, MonadFail m) => Int32 -> m Int32
 getPaymentChannelHeadId pcId = do
-  Just paymentChannel <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_paymentChannels) (Db.PaymentChannelID $ SqlSerial pcId))
-  let Db.HeadID (SqlSerial hid) = Db._paymentChannel_head paymentChannel
+  Just paymentChannel <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_paymentChannels) (Db.PaymentChannelId $ SqlSerial pcId))
+  let Db.HeadId (SqlSerial hid) = Db._paymentChannel_head paymentChannel
   pure hid
 
 getHydraHead :: (MonadBeam Postgres m, MonadFail m) => Int32 -> m Db.HydraHead
 getHydraHead headId = do
-  Just hydraHead <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_heads) (Db.HeadID $ SqlSerial headId))
+  Just hydraHead <- runSelectReturningOne (lookup_ (Db.db ^. Db.db_heads) (Db.HeadId $ SqlSerial headId))
   pure hydraHead
 
 joinPaymentChannel :: (MonadBeam Postgres m) => Int32 -> Int32 -> m ()
@@ -270,4 +270,4 @@ updatePaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> PaymentChannelSt
 updatePaymentChannelStatusQ headId status = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
     (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
-    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadID (SqlSerial headId)))
+    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))

@@ -11,6 +11,7 @@ import Data.Int (Int32)
 import Data.Proxy
 import Data.Text (Text)
 import Data.Time (UTCTime)
+import qualified Data.ByteString.Char8 as BS
 import Database.Beam
 import qualified Database.Beam.AutoMigrate as Beam
 import Database.Beam.Backend
@@ -33,18 +34,30 @@ instance FromJSON RefundRequest
 instance ToJSON RefundRequest
 
 data PaymentChannelReq
-  = PaymentChannelReq_Init Int32 SignedTx
+  = PaymentChannelReq_Init Int32
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
+  | PaymentChannelReq_Fund Int32 Int32
   | PaymentChannelReq_Accept Int32 SignedTx
   | PaymentChannelReq_Close Int32 Text
   | PaymentChannelReq_InitiatorRefund RefundRequest
+  | PaymentChannelReq_Bank [FundRequest] -- Proxy ids to fund
   deriving Generic
+
+data FundRequest = FundRequest
+  { _fundRequest_address :: String
+   -- ^ String of the address to send funds to
+  , _fundRequest_amount :: Int32
+  , _fundRequest_datumHash :: Maybe BS.ByteString
+  }
+  deriving (Generic)
 
 type SignedTx = ByteString
 
 instance FromJSON PaymentChannelReq
 instance ToJSON PaymentChannelReq
+instance FromJSON FundRequest
+instance ToJSON FundRequest
 
 instance Beam.HasColumnType PaymentChannelReq where
   defaultColumnType = const $ Beam.defaultColumnType $ Proxy @(PgJSON PaymentChannelReq)
