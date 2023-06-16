@@ -17,6 +17,7 @@ import Control.Monad.Trans.Except
 import HydraPay.Logging
 import HydraPay.PaymentChannel
 import HydraPay.Cardano.Hydra.ChainConfig
+import HydraPay.Database.Workers (RefundRequest(..))
 import HydraPay.Utils
 
 import Data.Map (Map)
@@ -103,14 +104,22 @@ getPaymentChannelDetails a addr pcId = do
         pure (currentBalance, infos)
 
 -- | Retrieves payment channels requests that have expired along with address and balance information
-getExpiredPaymentChannels :: (MonadIO m, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([(Db.HydraHeadsT Identity, Db.PaymentChannelsT Identity, Db.ProxiesT Identity)])
+getExpiredPaymentChannels :: (MonadIO m, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([RefundRequest])
 getExpiredPaymentChannels a now = do
-  Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
+  results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
     proxies <- join_ (Db.db ^. Db.db_proxies) (\proxy -> (head_ ^. Db.hydraHead_first) ==. (proxy ^. Db.proxy_chainAddress))
     guard_ (paymentChannel ^. Db.paymentChannel_status ==. val_ PaymentChannelStatus_Initialized &&. paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
     pure (head_, paymentChannel, proxies)
+  forM results $ \(head', paymentChan, prox) -> return $ RefundRequest
+    { _refundRequest_hydraHead = unSerial $ Db._hydraHead_id head'
+    , _refundRequest_hydraAddress = Db._proxy_hydraAddress prox
+    , _refundRequest_signingKeyPath = T.unpack $ Db._proxy_signingKeyPath prox
+    , _refundRequest_chainAddress = Db._proxy_chainAddress prox
+    , _refundRequest_amount = Db._hydraHead_firstBalance head'
+    , _refundRequest_protocolParams = Db._hydraHead_ledgerProtocolParams head'
+    }
 
 -- | Retrieve the total balance locked in hydra heads filtering ones that have expired.
 getHydraBalanceSlow :: (MonadBeam Postgres m) => Api.AddressAny -> m (Either Text Api.Lovelace)
