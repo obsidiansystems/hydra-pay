@@ -32,6 +32,7 @@ import HydraPay.Proxy
 import HydraPay.Transaction
 import qualified HydraPay.Database as DB
 import HydraPay.PaymentChannel.Postgres (getExpiredPaymentChannels)
+import HydraPay.PaymentChannel
 
 import Control.Concurrent (threadDelay)
 
@@ -54,7 +55,8 @@ import Cardano.Transaction.Extras (evalRawNoSubmit)
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
 import Database.Beam.Postgres
-import Database.Beam.Backend.SQL.BeamExtensions (unSerial)
+import Database.Beam.Backend.SQL.BeamExtensions
+import Database.Beam.Query
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
@@ -236,6 +238,12 @@ handleChannelRefund state refundRequest = do
             Left err -> return $ Left err
             Right pparams -> do
               txid <- fanoutToL1Address state pparams hydraAddr (_refundRequest_signingKeyPath refundRequest) chainAddr $ _refundRequest_amount refundRequest
+              -- Mark payment channel as closed
+              DB.runBeam (_hydraPay_databaseConnectionPool state) $ runExceptT $ runUpdate $
+                update
+                (DB.db ^. DB.db_paymentChannels)
+                (\channel -> channel ^. DB.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
+                (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadID (SqlSerial (_refundRequest_hydraHead refundRequest))))
               return $ Right $ unTxId txid
   where
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"
