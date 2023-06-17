@@ -37,8 +37,7 @@ data PaymentChannelReq
   = PaymentChannelReq_Init Int32
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
-  | PaymentChannelReq_Fund Int32 Int32
-  | PaymentChannelReq_Accept Int32 SignedTx
+  | PaymentChannelReq_Accept Int32
   | PaymentChannelReq_Close Int32 Text
   | PaymentChannelReq_InitiatorRefund RefundRequest
   | PaymentChannelReq_Bank [FundRequest] -- Proxy ids to fund
