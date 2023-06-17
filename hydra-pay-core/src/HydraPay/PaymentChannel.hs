@@ -38,14 +38,19 @@ data PaymentChannelManager = PaymentChannelManager
 makeLenses ''PaymentChannelManager
 
 data PaymentChannelStatus
-  = PaymentChannelStatus_Initializing
+  = PaymentChannelStatus_Unknown
+  | PaymentChannelStatus_Created
+  | PaymentChannelStatus_Funded
+  | PaymentChannelStatus_Initializing
   | PaymentChannelStatus_Initialized
   | PaymentChannelStatus_Opening
   | PaymentChannelStatus_Open
   | PaymentChannelStatus_Closing
   | PaymentChannelStatus_Closed
+  | PaymentChannelStatus_CanFanout
+  | PaymentChannelStatus_Finalized
   | PaymentChannelStatus_Error
-  deriving (Show, Eq, Ord, Read, Generic)
+  deriving (Show, Eq, Ord, Read, Generic, Enum)
 
 instance ToJSON PaymentChannelStatus
 instance FromJSON PaymentChannelStatus
@@ -99,8 +104,9 @@ isPending :: PaymentChannelStatus -> Bool
 isPending = \case
   PaymentChannelStatus_Initializing -> True
   PaymentChannelStatus_Initialized -> True
-  PaymentChannelStatus_Opening -> True
+  -- PaymentChannelStatus_Opening -> True
   PaymentChannelStatus_Open -> False
   PaymentChannelStatus_Closing -> False
   PaymentChannelStatus_Closed -> False
   PaymentChannelStatus_Error -> False
+  _ -> False

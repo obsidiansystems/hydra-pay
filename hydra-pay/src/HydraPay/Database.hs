@@ -69,7 +69,6 @@ instance Beamable (PrimaryKey ProxiesT)
 
 type ProxyInfo = ProxiesT Identity
 
-
 instance BA.HasColumnType PaymentChannelStatus where
   defaultColumnType = const $ Beam.defaultColumnType $ Proxy @Text
 

@@ -40,7 +40,14 @@ data PaymentChannelReq
   | PaymentChannelReq_Accept Int32
   | PaymentChannelReq_Close Int32 Text
   | PaymentChannelReq_InitiatorRefund RefundRequest
-  | PaymentChannelReq_Bank [FundRequest] -- Proxy ids to fund
+  | PaymentChannelReq_Fund Int32 [FundRequest] -- Proxy ids to fund
+  | PaymentChannelReq_Join Int32 Text Api.Lovelace
+  | PaymentChannelReq_RetryInit Int32
+  | PaymentChannelReq_RetryClose Int32 Text
+  | PaymentChannelReq_SpinUpHead Int32
+  | PaymentChannelReq_Commit Int32 Text Api.Lovelace
+  | PaymentChannelReq_Fanout Int32
+  | PaymentChannelReq_Cleanup Int32
   deriving Generic
 
 data FundRequest = FundRequest

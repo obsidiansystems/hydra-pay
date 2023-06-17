@@ -271,3 +271,11 @@ updatePaymentChannelStatusQ headId status = do
   runUpdate $ update (Db.db ^. Db.db_paymentChannels)
     (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
     (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
+
+getPaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> m PaymentChannelStatus
+getPaymentChannelStatusQ headId = do
+  mChan <- runSelectReturningOne $ select $ do
+    chan <- all_ $ Db.db ^. Db.db_paymentChannels
+    guard_ (chan ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
+    pure chan
+  pure $ maybe PaymentChannelStatus_Unknown Db._paymentChannel_status mChan

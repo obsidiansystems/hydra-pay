@@ -31,9 +31,9 @@ data HydraNode = HydraNode
   , _hydraNode_processInfo :: TMVar ProcessInfo
   , _hydraNode_communicationThread :: TMVar ThreadId
   , _hydraNode_status :: TVar HydraNodeStatus
-  , _hydraNode_pendingRequests :: TMVar (Map Int HydraNodeRequest)
-  , _hydraNode_requestQueue :: TBQueue ClientInput
   , _hydraNode_runnerThread :: ThreadId
+  , _hydraNode_inputs :: TBQueue ClientInput
+  , _hydraNode_outputs :: TChan ServerOutput
   }
 
 data HydraNodeStatus

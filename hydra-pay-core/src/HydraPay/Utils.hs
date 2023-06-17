@@ -33,6 +33,12 @@ withTMVar var action = do
   liftIO $ atomically $ putTMVar var a
   pure b
 
+withTMVar_ :: MonadIO m => TMVar a -> (a -> m a) -> m ()
+withTMVar_ var action = do
+  withTMVar var $ \a -> do
+    action a
+    pure (a, ())
+
 headMaybe :: [a] -> Maybe a
 headMaybe [] = Nothing
 headMaybe (x:_) = Just x
