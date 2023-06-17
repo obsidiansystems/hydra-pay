@@ -42,6 +42,7 @@ getProxyInfo hid addr = do
     proxy <- all_ (Db.db ^. Db.db_proxies)
     ph <- all_ (Db.db ^. Db.db_proxyHead)
     guard_ (h ^. Db.hydraHead_id ==. (val_ $ SqlSerial hid))
+    guard_ (proxy ^. Db.proxy_chainAddress ==. val_ (addr ^. to Api.serialiseAddress))
     guard_ ((ph ^. Db.proxyHead_head) `references_` h)
     guard_ ((ph ^. Db.proxyHead_proxy) `references_` proxy)
     pure proxy
