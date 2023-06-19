@@ -37,7 +37,7 @@ getPaymentChannelsInfo a addr = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
+    guard_ (paymentChannel ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head_, paymentChannel)
   pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
   where
@@ -53,6 +53,7 @@ getPaymentChannelInfo a me pid = do
     pure (head_, paymentChannel)
   pure $ maybeToEither "Failed to get payment channel" $ uncurry (dbPaymentChannelToInfo me) <$> result
 
+
 dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> PaymentChannelInfo
 dbPaymentChannelToInfo addr hh pc =
   PaymentChannelInfo
@@ -61,7 +62,7 @@ dbPaymentChannelToInfo addr hh pc =
     , _paymentChannelInfo_createdAt = pc ^. Db.paymentChannel_createdAt
     , _paymentChannelInfo_expiry = pc ^. Db.paymentChannel_expiry
     , _paymentChannelInfo_other = other
-    , _paymentChannelInfo_status = pc ^. Db.paymentChannel_status
+    , _paymentChannelInfo_status = paymentChannelStatusToInfoStatus (pc ^. Db.paymentChannel_commits) $ pc ^. Db.paymentChannel_status
     , _paymentChannelInfo_initiator = isInitiator
     }
   where
@@ -129,13 +130,13 @@ getHydraBalanceSlow addr = do
     aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
+      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
       pure heads_
   mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
       heads_ <- all_ (Db.db ^. Db.db_heads)
       paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
+      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
       pure heads_
   pure $ Right $ mconcat
     [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
@@ -159,6 +160,13 @@ dbTransactionToTransactionInfo addr t =
    then TransactionSent
    else TransactionReceived
   )
+
+paymentChannelBumpCommitCount :: (MonadIO m, MonadBeamInsertReturning Postgres m) => Int32 -> m ()
+paymentChannelBumpCommitCount hid = do
+  runUpdate $
+    update (Db.db ^. Db.db_paymentChannels)
+    (\channel -> channel ^. Db.paymentChannel_commits <-. current_ (channel ^. Db.paymentChannel_commits) + 1)
+    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId $ SqlSerial hid))
 
 sendAdaInChannel :: (MonadIO m, MonadBeamInsertReturning Postgres m) => Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
 sendAdaInChannel hid you amount = runExceptT $ do
@@ -247,14 +255,9 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
                           (val_ PaymentChannelStatus_Initializing)
+                          (val_ 0)
                         ]
     pure newHead
-  -- TODO(skylar): Should creation imply spinning up nodes etc? I don't think so
-  -- nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
-  -- hydraHead <- lift $ runHydraHead a nodeConfigs
-  -- let
-  --   headId = Db.hydraHeadId dbHead
-  -- ExceptT $ trackRunningHead a headId hydraHead
   pure $ primaryKey dbHead
   where
     firstText = Api.serialiseAddress first

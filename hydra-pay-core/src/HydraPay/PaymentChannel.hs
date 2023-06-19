@@ -40,20 +40,39 @@ makeLenses ''PaymentChannelManager
 data PaymentChannelStatus
   = PaymentChannelStatus_Unknown
   | PaymentChannelStatus_Created
-  | PaymentChannelStatus_Funded
   | PaymentChannelStatus_Initializing
   | PaymentChannelStatus_Initialized
-  | PaymentChannelStatus_Opening
   | PaymentChannelStatus_Open
   | PaymentChannelStatus_Closing
   | PaymentChannelStatus_Closed
-  | PaymentChannelStatus_CanFanout
   | PaymentChannelStatus_Finalized
   | PaymentChannelStatus_Error
+  | PaymentChannelStatus_Done
   deriving (Show, Eq, Ord, Read, Generic, Enum)
 
 instance ToJSON PaymentChannelStatus
 instance FromJSON PaymentChannelStatus
+
+data PaymentChannelInfoStatus
+  = PaymentChannelInfo_Pending
+  | PaymentChannelInfo_WaitingForAccept
+  | PaymentChannelInfo_Opening
+  | PaymentChannelInfo_Open
+  | PaymentChannelInfo_Closing
+  | PaymentChannelInfo_Error
+  deriving (Show, Eq, Ord, Read, Generic, Enum)
+
+instance ToJSON PaymentChannelInfoStatus
+instance FromJSON PaymentChannelInfoStatus
+
+paymentChannelStatusToInfoStatus :: Int32 -> PaymentChannelStatus -> PaymentChannelInfoStatus
+paymentChannelStatusToInfoStatus commits status
+  | status == PaymentChannelStatus_Error = PaymentChannelInfo_Error
+  | status < PaymentChannelStatus_Initialized = PaymentChannelInfo_Pending
+  | status == PaymentChannelStatus_Initialized = PaymentChannelInfo_WaitingForAccept
+  | status < PaymentChannelStatus_Open && commits == 2 = PaymentChannelInfo_Opening
+  | status == PaymentChannelStatus_Open = PaymentChannelInfo_Open
+  | otherwise = PaymentChannelInfo_Closing
 
 data PaymentChannelInfo = PaymentChannelInfo
   { _paymentChannelInfo_id :: Int32
@@ -61,7 +80,7 @@ data PaymentChannelInfo = PaymentChannelInfo
   , _paymentChannelInfo_createdAt :: UTCTime
   , _paymentChannelInfo_expiry :: UTCTime
   , _paymentChannelInfo_other :: Text
-  , _paymentChannelInfo_status :: PaymentChannelStatus
+  , _paymentChannelInfo_status :: PaymentChannelInfoStatus
   , _paymentChannelInfo_initiator :: Bool
   }
   deriving (Eq, Show, Generic)
@@ -100,13 +119,5 @@ paymentChannelNeedsMyAcceptance :: PaymentChannelInfo -> Bool
 paymentChannelNeedsMyAcceptance pinfo =
   pinfo ^. paymentChannelInfo_status . to isPending && not (pinfo ^. paymentChannelInfo_initiator)
 
-isPending :: PaymentChannelStatus -> Bool
-isPending = \case
-  PaymentChannelStatus_Initializing -> True
-  PaymentChannelStatus_Initialized -> True
-  -- PaymentChannelStatus_Opening -> True
-  PaymentChannelStatus_Open -> False
-  PaymentChannelStatus_Closing -> False
-  PaymentChannelStatus_Closed -> False
-  PaymentChannelStatus_Error -> False
-  _ -> False
+isPending :: PaymentChannelInfoStatus -> Bool
+isPending x = x < PaymentChannelInfo_Open

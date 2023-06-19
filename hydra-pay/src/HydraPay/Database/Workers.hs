@@ -34,7 +34,7 @@ instance FromJSON RefundRequest
 instance ToJSON RefundRequest
 
 data PaymentChannelReq
-  = PaymentChannelReq_Init Int32
+  = PaymentChannelReq_Init Int32 Text
   -- ^ The head id used to find the data required on the db to fullfill the Open
   -- Channel request.
   | PaymentChannelReq_Accept Int32

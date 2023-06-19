@@ -31,8 +31,11 @@ import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
+import HydraPay.Database.Workers
+import HydraPay.PaymentChannel.Postgres
+import Database.Beam.Postgres
 import HydraPay.PaymentChannel (PaymentChannelStatus(..))
-import HydraPay.PaymentChannel.Postgres (updatePaymentChannelStatusQ)
+import HydraPay.PaymentChannel.Postgres (updatePaymentChannelStatusQ, paymentChannelBumpCommitCount)
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
 import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
@@ -283,23 +286,32 @@ runHydraHead a headId configs = liftIO $ do
                   status <- atomically $ readTVar nodeStatus
                   case eitherDecode payload of
                     Right serverOutput -> do
-                      logInfo a loggerName $ "Received " <> tShow serverOutput
+                      logInfo a loggerName $ "Received(" <> tShow status <> ") " <> tShow serverOutput
                       case serverOutput of
                         HeadIsInitializing _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_Replayed) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Initialized
+                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Initialized
                         HeadIsOpen _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_Replayed) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Open
+                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Open
                         HeadIsClosed _ _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_Replayed) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Closed
+                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Closed
                         ReadyToFanout _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_Replayed) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_CanFanout
+                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ do
+                            atomically $ writeTBQueue inputs Fanout
                         HeadIsFinalized _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_Replayed) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Finalized
+                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ do
+                            updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Finalized
+                            addPaymentChannelTask' $ PaymentChannelReq_Cleanup headId
                         Greetings _ _ _ -> do
                           atomically $ writeTVar nodeStatus HydraNodeStatus_Replayed
                         PeerConnected _ -> do
                           when (status == HydraNodeStatus_Replayed) $ atomically $ writeTVar nodeStatus HydraNodeStatus_PeersConnected
+                        Committed _ _ _ -> do
+                          when (status == HydraNodeStatus_Replayed) $
+                            Db.runBeam a $ paymentChannelBumpCommitCount headId
                         _ -> pure ()
+
+                      when (status == HydraNodeStatus_Replayed || status == HydraNodeStatus_PeersConnected) $ do
+                        atomically $ writeTChan outputs $ serverOutput
 
                     Left _ -> do
                       logInfo a loggerName $ "Failed to parse payload: " <> tShow payload
@@ -445,71 +457,13 @@ sendClientInput runningHead mAddress input = liftIO $ do
       Just addr -> getNodeFor runningHead addr
       Nothing -> pure $ unsafeAnyNode runningHead
 
+waitForServerOutput :: MonadIO m => TChan ServerOutput -> (ServerOutput -> Bool) -> m ServerOutput
+waitForServerOutput outputs filterFunc = liftIO $ do
+  atomically $ do
+    o <- readTChan outputs
+    check $ filterFunc o
+    pure o
 
--- sendHydraHeadCommand :: (MonadIO m, HasLogger a) => a -> RunningHydraHead -> HydraHeadInput b -> m b
--- sendHydraHeadCommand a hHead command = do
---   ensureHeadNodesReady a hHead
---   liftIO $ threadDelay 5000000
---   logInfo a "sendHydraHeadCommand" "Nodes are ready, sending command"
---   case command of
---     HydraHeadInit -> do
---       let
---         -- We don't care for init!
---         node = unsafeAnyNode hHead
---       output <- performHydraNodeRequest node Init
---       case output of
---         CommandFailed cm -> pure $ Left $ "Command Failed: " <> T.pack (show cm)
---         HeadIsInitializing _ _ -> pure $ Right ()
---         _ -> pure $ Left $ "Invalid response received" <> tShow output
---
---     HydraHeadCommit addr utxo' -> runExceptT $ do
---       node <- case getNodeFor hHead addr of
---         Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
---         Just node ->  pure node
---       output <- performHydraNodeRequest node $ Commit $ Aeson.toJSON utxo'
---       case output of
---         CommandFailed cm -> throwError $ "Commit Failed: " <> T.pack (show cm)
---         Committed _ _ _ -> pure ()
---         _ -> throwError $ "Invalid response received" <> tShow output
---
---     HydraHeadGetAddressUTxO addr -> runExceptT $ do
---       let node = unsafeAnyNode hHead
---       output <- performHydraNodeRequest node GetUTxO
---       traceM $ show output
---       case output of
---         GetUTxOResponse _ utxoJson -> do
---           case Aeson.fromJSON utxoJson of
---             Aeson.Success utxo' -> pure $ filterUTxOByAddress addr utxo'
---             Aeson.Error e -> throwError $ "Failed to decode GetUTxOResponse: " <> T.pack e
---         CommandFailed _ ->
---           throwError "GetUTxO Failed"
---         _ ->
---           throwError $ "Invalid response received" <> tShow output
---
---     HydraHeadNewTx addr txCBOR -> runExceptT $ do
---       node <- case getNodeFor hHead addr of
---         Nothing -> throwError $ "Address " <> Api.serialiseAddress addr <> " is not a part of this head!"
---         Just node ->  pure node
---       output <- performHydraNodeRequest node $ NewTx $ Aeson.String txCBOR
---       case output of
---         TxValid {} -> do
---           traceM $ "NewTx: " <> show output
---           pure ()
---         SnapshotConfirmed _ snapshotJson _ -> do
---           traceM $ "NewTx: SnapshotConfirmed: " <> show snapshotJson
---         TxInvalid _ _ _ _ -> throwError "NewTx Failed"
---         _ -> do
---           traceM $ "Invalid response received" <> show output
---           throwError $ "Invalid response received" <> tShow output
---
---     HydraHeadClose _hid _ -> do
---       let node = unsafeAnyNode hHead
---       output <- performHydraNodeRequest node Close
---       case output of
---         CommandFailed _ -> pure $ Left "Command Failed"
---         HeadIsClosed _ _ _ -> pure $ Right ()
---         _ -> pure $ Left $ "Invalid response received" <> tShow output
---
 filterUTxOByAddress :: Api.AddressAny -> Api.UTxO Api.BabbageEra -> Api.UTxO Api.BabbageEra
 filterUTxOByAddress addr (Api.UTxO m) = Api.UTxO $ Map.filter (\x -> txOutAddress x == addr) m
   where
@@ -661,12 +615,23 @@ trackRunningHead a hid hydraHead = do
   where
     runningHeads = a ^. hydraHeadManager . hydraHeadManager_runningHeads
 
+untrackRunningHead :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> m ()
+untrackRunningHead a hid = do
+  withTMVar runningHeads $ \running -> do
+    case Map.lookup hid running of
+      Just rh -> terminateRunningHead rh
+      _ -> pure ()
+    pure (Map.delete hid running, ())
+  where
+    runningHeads = a ^. hydraHeadManager . hydraHeadManager_runningHeads
+
 withHydraHeadManager :: (HydraHeadManager -> IO a) -> IO a
 withHydraHeadManager action = do
   bracket newHydraHeadManager terminateRunningHeads action
 
 startupExistingHeads :: (MonadIO m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> m (Either Text Int)
 startupExistingHeads a = do
+  ensureNodeSocket a
   activeHeads <- activeHydraHeads
   results <- for activeHeads $ \dbHead -> runExceptT $ do
     nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
@@ -680,7 +645,7 @@ activeHydraHeads = do
   runSelectReturningList $ select $ do
     heads_ <- all_ (Db.db ^. Db.db_heads)
     paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-    guard_ (paymentChan_ ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Closed)
+    guard_ (paymentChan_ ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
     pure $ heads_
 
 spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
@@ -725,69 +690,48 @@ terminateRunningHeads (HydraHeadManager channels) = do
         pure (hydraHead, ())
     pure (running, ())
 
-{-
-initHead :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
-initHead a hid = do
-  logInfo a "initHead" $ "Attempting to Init head " <> tShow hid
-  result <- runExceptT $ do
-    hydraHeadVar <- ExceptT $ getRunningHead a hid
-    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ initHydraHead
-      pure(hydraHead, result)
-  case result of
-    Right _ -> logInfo a "initHead" $ "Head " <> tShow hid <> " is initialized"
-    Left err -> logInfo a "initHead" $ "Head failed to initialize: " <> err
-  pure result
+terminateRunningHead :: MonadIO m => TMVar RunningHydraHead -> m ()
+terminateRunningHead hVar =
+  withTMVar_ hVar $ \hydraHead@(RunningHydraHead _ handles) -> liftIO $ do
+    for_ handles $ \(HydraNode _ nodeHandleRef thread _ runner _ _) -> do
+      killThread runner
+      mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
+      forM_ mNodeHandle $ \nodeHandle@(_, out, err, _) -> do
+        cleanupProcess nodeHandle
+        maybe (pure ()) hClose out
+        maybe (pure ()) hClose err
+      killThread <=< atomically $ readTMVar thread
 
-commitToHead :: (MonadBeam Postgres m, MonadBeamInsertReturning Postgres m,  MonadIO m, HasNodeInfo a, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Api.Lovelace -> m (Either Text ())
-commitToHead a hid committer amount = do
-  result <- runExceptT $ do
-    proxyAddr <- fmap _proxyInfo_address $ ExceptT $ queryProxyInfo a hid committer
-    logInfo a "commitHead" $ "Attempting to Commit from address: " <> Api.serialiseAddress proxyAddr
-    balance <- ExceptT $ runCardanoCli a $ queryUTxOs proxyAddr
-    commitUtxo <- ExceptT $ pure $ maybeToEither ("Failed to find suitable commit utxo with " <> tShow amount <> "lovelace") $ findUTxOWithExactly amount balance
-    logInfo a "commitHead" $ "Attempting to Commit to " <> tShow hid
-    hydraHeadVar <- ExceptT $ getRunningHead a hid
-    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ commitHydraHead proxyAddr commitUtxo
-      pure(hydraHead, result)
-  case result of
-    Right _ -> logInfo a "commitHead" $ "Head " <> tShow hid <> " was committed to by " <> Api.serialiseAddress committer
-    Left err -> logInfo a "commitHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
-  pure result
--}
-{-
 getAddressUTxO :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text (Api.UTxO Api.BabbageEra))
-getAddressUTxO a hid committer = do
-  runExceptT $ do
-    hydraHeadVar <- ExceptT $ getRunningHead a hid
-    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ HydraHeadGetAddressUTxO committer
-      pure (hydraHead, result)
--}
-{-
-newTx :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> Text -> Text -> m (Either Text ())
-newTx a hid addr _txid txCBOR = do
-  runExceptT $ do
-    traceM "newTx: Start"
-    hydraHeadVar <- ExceptT $ getRunningHead a hid
-    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      traceM "newTx: Pre cmd"
-      result <- sendHydraHeadCommand a hydraHead $ HydraHeadNewTx addr txCBOR
-      traceM "newTx: Post cmd"
-      pure (hydraHead, result)
--}
-{-
-closeHead :: (MonadBeam Postgres m, MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text ())
-closeHead a hid committer = do
-  result <- runExceptT $ do
-    logInfo a "closeHead" $ "Attempting to Close " <> tShow hid
-    hydraHeadVar <- ExceptT $ getRunningHead a hid
-    ExceptT $ liftIO $ withTMVar hydraHeadVar $ \hydraHead -> do
-      result <- sendHydraHeadCommand a hydraHead $ closeHydraHead hid committer
-      pure(hydraHead, result)
-  case result of
-    Right _ -> logInfo a "closeHead" $ "Head " <> tShow hid <> " was closed by " <> Api.serialiseAddress committer
-    Left err -> logInfo a "closeHead" $ "Head failed to commit from " <> Api.serialiseAddress committer <> ": " <> err
-  pure result
--}
+getAddressUTxO a hid addr = runExceptT $ do
+  runningHeadVar <- ExceptT $ getRunningHead a hid
+  chan <- ExceptT $ withTMVar runningHeadVar $ \rh -> do
+    let node = unsafeAnyNode rh
+    result <- runExceptT $ do
+      output <- liftIO $ atomically $ dupTChan $ node ^. hydraNode_outputs
+      sendClientInput rh Nothing $ GetUTxO
+      pure output
+    pure (rh, result)
+
+  ExceptT $ liftIO $ atomically $ do
+    o <- readTChan chan
+    case o of
+      GetUTxOResponse _ utxoJson ->
+       case Aeson.fromJSON utxoJson of
+         Aeson.Success utxo' -> pure $ Right $ filterUTxOByAddress addr utxo'
+         Aeson.Error e -> pure $ Left $ "Failed to decode GetUTxOResponse: " <> T.pack e
+      CommandFailed GetUTxO -> pure $ Left "GetUTxO: Command Failed"
+      _ -> retry
+
+addPaymentChannelTask' :: MonadBeam Postgres m => PaymentChannelReq -> m ()
+addPaymentChannelTask' payload = runInsert $ insert (Db._db_paymentChanTask Db.db) $
+  insertExpressions
+    [ PaymentChannelTask
+        { _paymentChannelTask_id = default_
+        , _paymentChannelTask_checkedOutBy = val_ Nothing
+        , _paymentChannelTask_payload = val_ payload
+        , _paymentChannelTask_status = val_ Nothing
+        , _paymentChannelTask_finished = val_ False
+        , _paymentChannelTask_time = current_timestamp_
+        }
+    ]

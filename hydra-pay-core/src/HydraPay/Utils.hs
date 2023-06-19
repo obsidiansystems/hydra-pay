@@ -2,6 +2,9 @@
 
 module HydraPay.Utils where
 
+import Debug.Trace
+import Control.Applicative
+import Data.Traversable
 import Data.Aeson as Aeson
 import Data.Text (Text, pack)
 import System.Exit
@@ -33,7 +36,7 @@ withTMVar var action = do
   liftIO $ atomically $ putTMVar var a
   pure b
 
-withTMVar_ :: MonadIO m => TMVar a -> (a -> m a) -> m ()
+withTMVar_ :: MonadIO m => TMVar a -> (a -> m ()) -> m ()
 withTMVar_ var action = do
   withTMVar var $ \a -> do
     action a
@@ -54,6 +57,9 @@ addressNetwork = \case
 
 isTestnetAddress :: Api.AddressAny -> Bool
 isTestnetAddress = maybe False (== Ledger.Testnet) . addressNetwork
+
+-- findCommitableUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra
+-- findCommitableUTxOWithExactly target utxos = undefined
 
 findUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
 findUTxOWithExactly target utxos =
@@ -90,3 +96,17 @@ txOutDatumIsFuel _ = False
 
 txOutIsFuel :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Bool
 txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
+
+fuelIsPresent :: Api.UTxO Api.BabbageEra -> Bool
+fuelIsPresent = not . Map.null . Map.filter (txOutIsFuel) . Api.unUTxO
+
+mkCommitUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
+mkCommitUTxOWithExactly wantedAmount utxo =
+  trace ("Initial value: " <> show utxo) $ trace ("Final value: " <> show result) result
+  where
+    result = Map.foldrWithKey getValue Nothing nonFuelUtxos
+    nonFuelUtxos = Map.filter (not . txOutIsFuel) $ Api.unUTxO utxo
+    getValue k v b =
+      b <|> (case txOutValue v == wantedAmount of
+        True -> trace "We found one!" $ Just $ Api.UTxO $ Map.singleton k v
+        False -> trace "We casn't use this one" $ Nothing)
