@@ -255,17 +255,18 @@ handleChannelRefund state refundRequest = do
 handleSubmitTx :: MonadIO m => HydraPayState -> Text -> BS.ByteString -> m (Either Text Text)
 handleSubmitTx state l1Address tx = do
   availability <- isAvailable l1Address
-  if availability then do
-    setAvailability l1Address False
-    eTx :: Either Text TxId <- submitTxCbor state tx
-    case eTx of
-      Left err -> return $ Left err
-      Right txid -> do
-        waitForTxInput state $ mkTxInput txid 0
-        setAvailability l1Address True
-        return $ Right $ unTxId txid
-  else do
-    return $ Left "Address resource currently unavailable. Please wait..."
+  case availability of
+    True -> do
+      setAvailability l1Address False
+      eTx :: Either Text TxId <- submitTxCbor state tx
+      case eTx of
+        Left err -> return $ Left err
+        Right txid -> do
+          waitForTxInput state $ mkTxInput txid 0
+          setAvailability l1Address True
+          return $ Right $ unTxId txid
+    False -> do
+      return $ Left "Address resource currently unavailable. Please wait..."
   where
     isAvailable :: MonadIO m => Text -> m Bool
     isAvailable addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
@@ -284,6 +285,11 @@ handleSubmitTx state l1Address tx = do
         pure aa
       case lookupRes of
         [] -> do
+          _ <- runInsertReturningList $ insert (DB.db ^. DB.db_addressAvailability) $ insertExpressions
+            [ DB.AddressAvailability default_ (val_ $ addr) (val_ $ False)
+            ]
+          return ()
+
           return ()
         _:_ -> do
           _ <- runUpdate $
