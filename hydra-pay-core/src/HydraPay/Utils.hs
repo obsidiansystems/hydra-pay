@@ -4,7 +4,6 @@ module HydraPay.Utils where
 
 import Debug.Trace
 import Control.Applicative
-import Data.Traversable
 import Data.Aeson as Aeson
 import Data.Text (Text, pack)
 import System.Exit
