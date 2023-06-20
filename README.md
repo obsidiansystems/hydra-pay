@@ -64,6 +64,12 @@ We assume at this time you are knowledgeable about Hydra and the basic Hydra Hea
 
 First party haskell libraries `hydra-pay-core` and `hydra-pay` provide direct access to powerful features like:
 * A simple, powerful, and customizable logger with automatic rotation, file size limits, and file management.
+* A set of workers to carry out tasks in parallel, maximizing throughput. 
+* Automated transaction batching to have the least downtime when waiting for L1 transactions to be observed on-chain.
+* An automated process for moving heads through the lifecycle based on indexer and on-chain information.
+* Automated refunding of L1 addresses when failures are detected, ensuring your funds are always sent back to you.
+* Automatic restarting of Hydra Nodes so you never lose your state (or funds).
+* An internal indexer that tracks head state in high detail.
 * Automated node management with integrated logging and error tracking, providing a convenient interface for interaction and information.
 * A typesafe GADT based interface into cardano-cli that allows easy:
   * Tip and Protocol Parameter queries

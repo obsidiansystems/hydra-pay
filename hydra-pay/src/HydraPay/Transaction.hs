@@ -33,11 +33,9 @@ withProtocolParamsFile pparams action = do
 fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
 fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
-    let cfg = mkEvalConfig a socketPath paramsPath
+    let cfg = mkEvalConfig a paramsPath
     fmap (TxId . T.pack) $
       eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
-  where
-    socketPath = a ^. nodeInfo . nodeInfo_socketPath
 
 fanoutToL1AddressTx :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
 fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
@@ -52,9 +50,9 @@ fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
 tempTxDir :: FilePath
 tempTxDir = "tx"
 
--- | Given node information, and a path to the node socket and protocol parameters create an EvalConfig for running the Tx monad
-mkEvalConfig :: HasNodeInfo a => a -> FilePath -> FilePath -> EvalConfig
-mkEvalConfig a nsFp ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just nsFp)
+-- | Given node information and a path to the protocol parameters create an EvalConfig for running the Tx monad
+mkEvalConfig :: HasNodeInfo a => a -> FilePath -> EvalConfig
+mkEvalConfig a ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . fromIntegral)) (Just ppFp) False (Just (ni ^. nodeInfo_socketPath))
   where
     ni = a ^. nodeInfo
 
