@@ -6,6 +6,7 @@ import Data.Time
 import Data.Int
 import Data.Maybe
 import Data.Text (Text)
+import Data.Traversable
 import qualified Data.Text as T
 
 import Control.Lens hiding ((<.))
@@ -33,40 +34,71 @@ import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
 
 getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> m (Map Int32 PaymentChannelInfo)
-getPaymentChannelsInfo a addr = do
-  results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
+getPaymentChannelsInfo a addr = Db.runBeam a $ do
+  channels :: [(Db.HydraHead, Db.PaymentChannel)] <- runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+    head_ <- all_ (Db.db ^. Db.db_heads)
+    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
     guard_ (paymentChannel ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head_, paymentChannel)
-  pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
-  where
+
+  fmap mconcat $ for channels $ \(head_, chan) -> do
+    commits <- runSelectReturningList $ select $ do
+      observedCommits_ <- all_ (Db.db ^. Db.db_observedCommits)
+      guard_ (observedCommits_ ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ head_ ^. Db.hydraHead_id))
+      pure observedCommits_
+    let
+      pinfo = dbPaymentChannelToInfo addr head_ chan commits
+      -- head_ chan commits 
+    pure $ Map.singleton (pinfo ^. paymentChannelInfo_id) pinfo 
+
+      where
     addrStr = Api.serialiseAddress addr
 
 getPaymentChannelInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text PaymentChannelInfo)
 getPaymentChannelInfo a me pid = do
-  result <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningOne $ select $ do
-    paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head_ <- all_ (Db.db ^. Db.db_heads)
-    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_id ==. val_ (SqlSerial pid))
-    pure (head_, paymentChannel)
-  pure $ maybeToEither "Failed to get payment channel" $ uncurry (dbPaymentChannelToInfo me) <$> result
+  Db.runBeam a $ runExceptT $ do
+    (head_, pc) <- ExceptT $ fmap (maybeToEither "Failed to get payment channel") $ runSelectReturningOne $ select $ do
+      paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
+      head_ <- all_ (Db.db ^. Db.db_heads)
+      guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+      guard_ (paymentChannel ^. Db.paymentChannel_id ==. val_ (SqlSerial pid))
+      pure (head_, paymentChannel)
+    commits <- runSelectReturningList $ select $ do
+      observedCommits_ <- all_ (Db.db ^. Db.db_observedCommits)
+      guard_ (observedCommits_ ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ head_ ^. Db.hydraHead_id))
+      pure observedCommits_
+    pure $ dbPaymentChannelToInfo me head_ pc commits 
 
-
-dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> PaymentChannelInfo
-dbPaymentChannelToInfo addr hh pc =
+dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> [Db.ObservedCommit]  -> PaymentChannelInfo
+dbPaymentChannelToInfo addr hh pc commits =
   PaymentChannelInfo
     { _paymentChannelInfo_id = pc ^. Db.paymentChannel_id . to unSerial
     , _paymentChannelInfo_name = pc ^. Db.paymentChannel_name
     , _paymentChannelInfo_createdAt = pc ^. Db.paymentChannel_createdAt
     , _paymentChannelInfo_expiry = pc ^. Db.paymentChannel_expiry
     , _paymentChannelInfo_other = other
-    , _paymentChannelInfo_status = paymentChannelStatusToInfoStatus (pc ^. Db.paymentChannel_commits) $ pc ^. Db.paymentChannel_status
+    , _paymentChannelInfo_status =
+        case shouldClose of
+          True -> PaymentChannelDisplayStatus_Closing
+          False ->
+            case pc ^. Db.paymentChannel_status of
+              PaymentChannelStatus_Initialized | length commits >= 2 -> PaymentChannelDisplayStatus_Opening 
+              PaymentChannelStatus_Initialized -> 
+                case isInitiator of
+                  True -> PaymentChannelDisplayStatus_WaitingForAccept 
+                  False -> PaymentChannelDisplayStatus_WantsYourApproval
+              PaymentChannelStatus_Open -> PaymentChannelDisplayStatus_Open
+              status -> otherStatuses status
     , _paymentChannelInfo_initiator = isInitiator
     }
   where
     isInitiator = addrStr == hh ^. Db.hydraHead_first
+    shouldClose = pc ^. Db.paymentChannel_shouldClose
+
+    otherStatuses status
+      | status < PaymentChannelStatus_Initialized = PaymentChannelDisplayStatus_Initializing
+      | otherwise = PaymentChannelDisplayStatus_Error  
 
     other = case isInitiator of
       True -> hh ^. Db.hydraHead_second
