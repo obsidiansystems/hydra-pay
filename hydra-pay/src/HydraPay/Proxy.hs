@@ -99,7 +99,7 @@ queryProxyInfo a headId addr = do
     Nothing -> do
       runExceptT $ do
         let
-          prefix = T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr
+          prefix = show headId <> "-" <> (T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr)
           proxyKeysPath = "proxy-keys"
         (vk, sk) <- ExceptT $ runCardanoCli a $ keyGen $ keyGenTemplate proxyKeysPath $ prefix <> ".cardano"
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
