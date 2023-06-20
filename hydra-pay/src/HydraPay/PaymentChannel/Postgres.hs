@@ -345,3 +345,13 @@ getHydraHeadStatusQ headId = do
     guard_ (head_ ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
     pure head_
   pure $ maybe HydraHeadStatus_Unknown Db._hydraHead_status mHead
+
+checkAddressAvailability :: MonadBeam Postgres m => Api.AddressAny -> m Bool
+checkAddressAvailability addr = do
+  isAvail <- runSelectReturningOne $ select $ do
+    aa <- all_ $ Db.db ^. Db.db_addressAvailability
+    guard_ (aa ^. Db.addressAvailability_layer1Address ==. val_ (T.pack $ show addr))
+    pure $ aa ^. Db.addressAvailability_isAvailable
+  case isAvail of
+    Nothing -> return True
+    Just avail -> return avail
