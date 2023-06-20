@@ -251,3 +251,45 @@ handleChannelRefund state refundRequest = do
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"
     eitherAddrDeserialise txt = fmap (first T.pack) $ runExceptT $
       ExceptT $ pure $ mayToEitherAddr $ Api.deserialiseAddress Api.AsAddressAny $ txt
+
+handleSubmitTx :: MonadIO m => HydraPayState -> Text -> BS.ByteString -> m (Either Text Text)
+handleSubmitTx state l1Address tx = do
+  availability <- isAvailable l1Address
+  if availability then do
+    setAvailability l1Address False
+    eTx :: Either Text TxId <- submitTxCbor state tx
+    case eTx of
+      Left err -> return $ Left err
+      Right txid -> do
+        waitForTxInput state $ mkTxInput txid 0
+        setAvailability l1Address True
+        return $ Right $ unTxId txid
+  else do
+    return $ Left "Address resource currently unavailable. Please wait..."
+  where
+    isAvailable :: MonadIO m => Text -> m Bool
+    isAvailable addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      lookupRes <- runSelectReturningList $ select $ do
+        aa <- all_ (DB.db ^. DB.db_addressAvailability)
+        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
+        pure aa
+      case lookupRes of
+        [] -> return True
+        res:_ -> return $ res ^. DB.addressAvailability_isAvailable
+    setAvailability :: MonadIO m =>Text -> Bool -> m ()
+    setAvailability addr avail = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      lookupRes <- runSelectReturningList $ select $ do
+        aa <- all_ (DB.db ^. DB.db_addressAvailability)
+        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
+        pure aa
+      case lookupRes of
+        [] -> do
+          return ()
+        _:_ -> do
+          _ <- runUpdate $
+            update
+            (DB.db ^. DB.db_addressAvailability)
+            (\aa -> aa ^. DB.addressAvailability_isAvailable <-. val_ avail)
+            (\aa -> aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
+          return ()
+
