@@ -19,6 +19,7 @@ import Data.Bool (bool)
 import Data.Foldable
 import Data.Traversable
 import Data.Aeson (encode, eitherDecode)
+import Data.Aeson.Lens
 import qualified Data.Text as T
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -265,7 +266,7 @@ runHydraHead a headId configs = liftIO $ do
             let
               apiPort = config ^. hydraNodeConfig_apiPort
               isReporter = commsThreadIsHeadStateReporter $ CommsThreadConfig config headStatus nodeStatus inputs
-              loggerName = bool "commsThread" "reporterThread" isReporter <> tShow (config ^. hydraNodeConfig_nodeId)
+              loggerName = "Head " <> tShow headId <> "-" <> bool "commsThread" "reporterThread" isReporter <> "-node" <> tShow (config ^. hydraNodeConfig_nodeId)
             logInfo a loggerName "Waiting for API"
             waitForApi apiPort
             runClient "127.0.0.1" (fromIntegral apiPort) "/" $ \conn -> do
@@ -289,25 +290,50 @@ runHydraHead a headId configs = liftIO $ do
                       logInfo a loggerName $ "Received(" <> tShow status <> ") " <> tShow serverOutput
                       case serverOutput of
                         HeadIsInitializing _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Initialized
+                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Initialized
                         HeadIsOpen _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Open
+                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Open
                         HeadIsClosed _ _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Closed
+                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Closed
                         ReadyToFanout _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ do
+                          when isReporter $ do
                             atomically $ writeTBQueue inputs Fanout
                         HeadIsFinalized _ _ -> do
-                          when isReporter $ when (status == HydraNodeStatus_PeersConnected) $ Db.runBeam a $ do
+                          when isReporter $ Db.runBeam a $ do
                             updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Finalized
                             addPaymentChannelTask' $ PaymentChannelReq_Cleanup headId
                         Greetings _ _ _ -> do
                           atomically $ writeTVar nodeStatus HydraNodeStatus_Replayed
                         PeerConnected _ -> do
-                          when (status == HydraNodeStatus_Replayed) $ atomically $ writeTVar nodeStatus HydraNodeStatus_PeersConnected
-                        Committed _ _ _ -> do
-                          when (status == HydraNodeStatus_Replayed) $
-                            Db.runBeam a $ paymentChannelBumpCommitCount headId
+                          atomically $ writeTVar nodeStatus HydraNodeStatus_PeersConnected
+                        Committed _ party _ -> do
+                          let
+                            mVkey = party ^? key "vkey" . _String
+                          case mVkey of
+                            Just vkey -> do
+                              when isReporter $ Db.runBeam a $ do
+                                mCommit <- runSelectReturningOne $ select $ do
+                                  commit <- all_ (Db.db ^. Db.db_observedCommits)
+                                  guard_ ((commit ^. Db.observedCommit_vkey ==. val_ vkey) &&. (commit ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ SqlSerial headId)))
+                                  pure commit
+                                case mCommit of
+                                  Just _ -> logInfo a loggerName $ "Commit already observed"
+                                  Nothing -> do
+                                    logInfo a loggerName $ "Recording observed commit"
+                                    _ <- runInsert $ insert (Db.db ^. Db.db_observedCommits) $
+                                      (insertExpressions [ Db.ObservedCommit
+                                        default_
+                                        (val_ vkey)
+                                        current_timestamp_
+                                        (val_ $ Db.HeadId $ SqlSerial headId)
+                                      ])
+                                    pure ()
+
+                            Nothing -> do
+                              logInfo a loggerName $ "Failed to parse vkey from Committed payload: " <> tShow party
+                              pure ()
+
+                          pure ()
                         _ -> pure ()
 
                       when (status == HydraNodeStatus_Replayed || status == HydraNodeStatus_PeersConnected) $ do
@@ -319,6 +345,9 @@ runHydraHead a headId configs = liftIO $ do
                 case result of
                   Left err@(SomeException _) -> do
                     logInfo a loggerName $ "Receive failed: " <> tShow err
+                    status <- Db.runBeam a $ getPaymentChannelStatusQ headId
+
+                    when (status == PaymentChannelStatus_Done) $ killThread <=< atomically $ readTMVar communicationThread
                     threadDelay 250000
                   Right _ ->
                     pure ()
@@ -335,106 +364,6 @@ runHydraHead a headId configs = liftIO $ do
       threadDelay 250000
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus nodeRunner inputs outputs
   pure $ RunningHydraHead headStatus (foldOf each handles)
-
-spawnHydraNodeApiConnectionThread
-  :: (HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a, MonadIO m)
-  => a -> Int32 -> CommsThreadConfig -> m ThreadId
-spawnHydraNodeApiConnectionThread a headId cfg@(CommsThreadConfig config headStatus nodeStatus inputs) = do
-  liftIO $ forkIO $ withFile (config ^. hydraNodeConfig_threadLogFile) AppendMode $ \logFile -> forever $ do
-    let
-      apiPort = config ^. hydraNodeConfig_apiPort
-      isReporter = commsThreadIsHeadStateReporter cfg
-      loggerName = bool "commsThread" "reporterThread" isReporter
-    logInfo a loggerName "Waiting for API to be available"
-    waitForApi apiPort
-    logInfo a loggerName "API available connecting..."
-    runClient "127.0.0.1" (fromIntegral apiPort) "/" $ \conn -> do
-      -- We are connected so the nodes will be "replaying"
-      atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replaying
-      requestThreadId <- forkIO $ forever $ do
-        cInput <- atomically $ peekTBQueue inputs
-        logInfo a "sendingThread" $ "Sending input: " <> tShow cInput
-        LBS.hPutStr logFile $ encode cInput <> "\n"
-        hFlush logFile
-        -- TODO(skylar): Check for exception here
-        sendDataMessage conn $ WS.Text (encode cInput) Nothing
-        _ <- atomically $ readTBQueue inputs
-        logInfo a "sendingThread" $ "Message sent: " <> tShow cInput
-        pure ()
-      flip finally (killThread requestThreadId) $ withPingThread conn 60 (pure ()) $ forever $ do
-        result <- try $ do
-          payload <- WS.receiveData conn
-          logInfo a loggerName "Got new message, logging"
-          LBS.hPutStr logFile $ payload <> "\n"
-          hFlush logFile
-          case eitherDecode payload of
-            Right res -> do
-              status <- atomically $ readTVar nodeStatus
-              logInfo a loggerName $ "Node is " <> tShow status
-              logInfo a loggerName $ "Valid message, processing...\n" <> tShow res
-              case status of
-                HydraNodeStatus_Replaying -> handleHydraNodeApiResponseOther loggerName isReporter res
-                _ -> handleHydraNodeApiResponse loggerName isReporter res
-            Left err -> do
-              logInfo a loggerName $ "Invalid message received: " <> tShow payload <> " " <> T.pack err
-        case result of
-          Left err@(SomeException _) -> do
-            logInfo a loggerName $ "Message Handler failed: " <> tShow err
-            threadDelay 250000
-          Right _ ->
-            pure ()
-  where
-    handleHydraNodeApiResponseOther loggerName isReporter = \case
-      Greetings {} -> do
-        logInfo a loggerName "Hydra Node Replay Complete"
-        atomically $ writeTVar nodeStatus $ HydraNodeStatus_Replayed
-      _ -> pure ()
-    -- Update hydra-pay state based on hydra node responses
-    handleHydraNodeApiResponse loggerName isReporter = \case
-      PeerConnected _ -> do
-        logInfo a loggerName "Hydra Node ready"
-        atomically $ writeTVar nodeStatus $ HydraNodeStatus_PeersConnected
-      PostTxOnChainFailed _ _ -> do
-        logInfo a loggerName "Hydra Node failed to submit transaction on chain (check for fuel)"
-      HeadIsInitializing _ _ -> do
-        when (commsThreadIsHeadStateReporter cfg) $ do
-          logInfo a loggerName "Head is initializing (waiting for commits)"
-          atomically $ writeTVar headStatus $ HydraHead_Initializing
-      HeadIsOpen _ _ -> do
-        when (commsThreadIsHeadStateReporter cfg) $ do
-          logInfo a loggerName "Head is open"
-          atomically $ writeTVar headStatus $ HydraHead_Open
-          Db.runBeam a $ updatePaymentChannelStatusQ headId PaymentChannelStatus_Open
-      HeadIsClosed hid _ deadline -> do
-        when isReporter $ do
-          logInfo a loggerName $ "Head is closed: " <> tShow hid <> "\ntimeout: " <> tShow deadline
-          atomically $ writeTVar headStatus $ HydraHead_Closed
-          atomically $ writeTVar nodeStatus $ HydraNodeStatus_Closed
-      ReadyToFanout hid -> do
-        when isReporter $ do
-          logInfo a loggerName $ "Ready to Fanout:" <> tShow hid
-          traceM $ "Ready to Fanout: STATUS PRE"
-          status <- atomically $ readTVar nodeStatus
-          traceM $ "Ready to Fanout: STATUS" <> show status
-          -- when (status /= HydraNodeStatus_Replaying) $ do
-            -- liftIO $ atomically $ writeTBQueue pendingCommands Fanout
-      HeadIsFinalized _ utxoJson -> when isReporter $ do
-        case Aeson.fromJSON utxoJson of
-          Aeson.Error e ->
-            print e
-          Aeson.Success (Api.UTxO utxoMap :: Api.UTxO Api.BabbageEra) -> do
-            let addressAndValues = txOutAddressAndValue <$> Map.elems utxoMap
-                -- Combine UTxOs going to the same address
-                addressAndValuesTotal = Map.fromListWith (<>) addressAndValues
-            iforM_ addressAndValuesTotal $ \proxyAddr val -> Db.runBeam a $ do
-              mChainAddress <- getProxyChainAddressAndSigningKey proxyAddr
-              forM_ mChainAddress $ \(chainAddress, skPath) -> do
-                let lovelace = Api.selectLovelace val
-                    toL1Adddress = chainAddress
-                Right pparams <- runCardanoCli a getProtocolParameters
-                liftIO $ fanoutToL1Address a pparams proxyAddr (T.unpack skPath) toL1Adddress $ fromIntegral lovelace
-              pure ()
-      _ -> pure ()
 
 txOutAddressAndValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> (Api.AddressAny, Api.Value)
 txOutAddressAndValue (Api.TxOut (Api.AddressInEra _ a) val _ _) = (Api.toAddressAny a, Api.txOutValueToValue val)

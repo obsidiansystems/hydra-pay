@@ -100,6 +100,14 @@ txOutIsFuel (Api.TxOut _ _ datum _) = txOutDatumIsFuel datum
 fuelIsPresent :: Api.UTxO Api.BabbageEra -> Bool
 fuelIsPresent = not . Map.null . Map.filter (txOutIsFuel) . Api.unUTxO
 
+firstNonFuelUTxO :: Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
+firstNonFuelUTxO utxo = result
+  where
+    result = Map.foldrWithKey getValue Nothing nonFuelUtxos
+    nonFuelUtxos = Map.filter (not . txOutIsFuel) $ Api.unUTxO utxo
+    getValue k v b =
+      b <|> (Just $ Api.UTxO $ Map.singleton k v)
+
 mkCommitUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
 mkCommitUTxOWithExactly wantedAmount utxo =
   trace ("Initial value: " <> show utxo) $ trace ("Final value: " <> show result) result

@@ -48,6 +48,7 @@ data PaymentChannelReq
   | PaymentChannelReq_Commit Int32 Text Api.Lovelace
   | PaymentChannelReq_Fanout Int32
   | PaymentChannelReq_Cleanup Int32
+  | PaymentChannelReq_Poke
   deriving Generic
 
 data FundRequest = FundRequest

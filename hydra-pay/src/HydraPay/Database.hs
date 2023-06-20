@@ -32,6 +32,7 @@ data HydraHeadsT f = HydraHead
   , _hydraHead_secondBalance :: C f (Maybe Int32)
   , _hydraHead_ledgerGenesis :: C f Text
   , _hydraHead_ledgerProtocolParams :: C f Text
+  , _hydraHead_chainId :: C f (Maybe Text)
   }
   deriving (Generic)
 
@@ -93,6 +94,7 @@ data PaymentChannelsT f = PaymentChannel
   , _paymentChannel_expiry :: C f UTCTime
   , _paymentChannel_status :: C f PaymentChannelStatus
   , _paymentChannel_commits :: C f Int32
+  , _paymentChannel_shouldClose :: C f Bool
   }
   deriving (Generic)
 
@@ -106,6 +108,25 @@ instance Table PaymentChannelsT where
 instance Beamable (PrimaryKey PaymentChannelsT)
 
 type PaymentChannel = PaymentChannelsT Identity
+
+data ObservedCommitsT f = ObservedCommit
+  { _observedCommit_id :: C f (SqlSerial Int32)
+  , _observedCommit_vkey :: C f Text
+  , _observedCommit_time :: C f UTCTime
+  , _observedCommit_head :: PrimaryKey HydraHeadsT f
+  }
+  deriving (Generic)
+
+instance Beamable ObservedCommitsT
+
+instance Table ObservedCommitsT where
+  data PrimaryKey ObservedCommitsT f = ObservedCommitId (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = ObservedCommitId . _observedCommit_id
+
+instance Beamable (PrimaryKey ObservedCommitsT)
+
+type ObservedCommit = ObservedCommitsT Identity
 
 data TransactionsT f = Transaction
   { _transaction_id :: C f (SqlSerial Int32)
@@ -151,6 +172,7 @@ data Db f = Db
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   , _db_transactions :: f (TableEntity TransactionsT)
   , _db_paymentChanTask :: f (TableEntity PaymentChannelTaskT)
+  , _db_observedCommits :: f (TableEntity ObservedCommitsT)
   }
   deriving (Generic)
 
@@ -167,6 +189,7 @@ makeLenses ''PaymentChannelsT
 makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT
 makeLenses ''ProxiesT
+makeLenses ''ObservedCommitsT
 makeLenses ''Db
 
 hydraHeadId :: HydraHead -> Int32

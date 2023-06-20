@@ -40,10 +40,8 @@ makeLenses ''PaymentChannelManager
 data PaymentChannelStatus
   = PaymentChannelStatus_Unknown
   | PaymentChannelStatus_Created
-  | PaymentChannelStatus_Initializing
   | PaymentChannelStatus_Initialized
   | PaymentChannelStatus_Open
-  | PaymentChannelStatus_Closing
   | PaymentChannelStatus_Closed
   | PaymentChannelStatus_Finalized
   | PaymentChannelStatus_Error

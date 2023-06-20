@@ -8,7 +8,7 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Control.Lens
+import Control.Lens hiding ((<.))
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.IO.Class
@@ -246,6 +246,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ Nothing)
                           (val_ $ chain ^. hydraChainConfig_ledgerGenesis . to T.pack)
                           (val_ $ chain ^. hydraChainConfig_ledgerProtocolParams . to T.pack)
+                          (val_ Nothing)
                         ]
     _ <- runInsertReturningList $ insert (Db.db ^. Db.db_paymentChannels) $
       insertExpressions [ Db.PaymentChannel
@@ -254,8 +255,9 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ primaryKey newHead)
                           current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
-                          (val_ PaymentChannelStatus_Initializing)
+                          (val_ PaymentChannelStatus_Created)
                           (val_ 0)
+                          (val_ False)
                         ]
     pure newHead
   pure $ primaryKey dbHead
@@ -263,17 +265,20 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second
 
-closePaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-closePaymentChannelQ headId = updatePaymentChannelStatusQ headId PaymentChannelStatus_Closed
-
-closingPaymentChannelQ :: (MonadBeam Postgres m) => Int32 -> m ()
-closingPaymentChannelQ headId = updatePaymentChannelStatusQ headId PaymentChannelStatus_Closing
-
 updatePaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> PaymentChannelStatus -> m ()
 updatePaymentChannelStatusQ headId status = do
-  runUpdate $ update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
-    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
+  mChan <- runSelectReturningOne $ select $ do
+    chan <- all_ $ Db.db ^. Db.db_paymentChannels
+    guard_ (chan ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
+    pure chan
+
+  case mChan of
+    Just chan -> do
+      when (chan ^. Db.paymentChannel_status < status) $ runUpdate $ update (Db.db ^. Db.db_paymentChannels)
+        (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
+        (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId))
+        )
+    Nothing -> pure ()
 
 getPaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> m PaymentChannelStatus
 getPaymentChannelStatusQ headId = do
