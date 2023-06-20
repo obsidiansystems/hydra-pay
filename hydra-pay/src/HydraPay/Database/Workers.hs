@@ -18,7 +18,6 @@ import Database.Beam.Backend
 import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgValueSyntax)
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 
 data RefundRequest = RefundRequest
   { _refundRequest_hydraHead :: Int32

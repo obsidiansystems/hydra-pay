@@ -85,9 +85,9 @@ addProxyInfo hid addr pinfo = do
       anyConflict onConflictDoNothing
 
   -- Create the linkages for the new proxy info
-  for_ result $ \pi -> do
+  for_ result $ \pi_ -> do
     runInsertReturningList $ insert (Db.db ^. Db.db_proxyHead) $ insertExpressions
-      [ Db.ProxyHead default_ (val_ $ pk pi) (val_ $ Db.HeadId $ SqlSerial hid)
+      [ Db.ProxyHead default_ (val_ $ pk pi_) (val_ $ Db.HeadId $ SqlSerial hid)
       ]
 
   pure $ headMaybe result >>= dbProxyInfoToProxyInfo

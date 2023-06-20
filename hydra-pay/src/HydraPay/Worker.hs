@@ -2,7 +2,6 @@
 
 module HydraPay.Worker where
 
-import Control.Lens (iso)
 import Data.Text (Text)
 import Database.Beam
 import Database.Beam.Postgres

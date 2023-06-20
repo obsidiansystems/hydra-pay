@@ -113,7 +113,7 @@ getExpiredPaymentChannels a now = do
     proxies <- join_ (Db.db ^. Db.db_proxies) (\proxy -> (head_ ^. Db.hydraHead_first) ==. (proxy ^. Db.proxy_chainAddress))
     guard_ (paymentChannel ^. Db.paymentChannel_status ==. val_ PaymentChannelStatus_Initialized &&. paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
     pure (head_, paymentChannel, proxies)
-  forM results $ \(head', paymentChan, prox) -> return $ RefundRequest
+  forM results $ \(head', _, prox) -> return $ RefundRequest
     { _refundRequest_hydraHead = unSerial $ Db._hydraHead_id head'
     , _refundRequest_hydraAddress = Db._proxy_hydraAddress prox
     , _refundRequest_signingKeyPath = T.unpack $ Db._proxy_signingKeyPath prox
@@ -160,13 +160,6 @@ dbTransactionToTransactionInfo addr t =
    then TransactionSent
    else TransactionReceived
   )
-
-paymentChannelBumpCommitCount :: (MonadIO m, MonadBeamInsertReturning Postgres m) => Int32 -> m ()
-paymentChannelBumpCommitCount hid = do
-  runUpdate $
-    update (Db.db ^. Db.db_paymentChannels)
-    (\channel -> channel ^. Db.paymentChannel_commits <-. current_ (channel ^. Db.paymentChannel_commits) + 1)
-    (\channel -> channel ^. Db.paymentChannel_head ==. val_ (Db.HeadId $ SqlSerial hid))
 
 sendAdaInChannel :: (MonadIO m, MonadBeamInsertReturning Postgres m) => Int32 -> Api.AddressAny -> Int32 -> m (Either Text (Int32, TransactionInfo))
 sendAdaInChannel hid you amount = runExceptT $ do

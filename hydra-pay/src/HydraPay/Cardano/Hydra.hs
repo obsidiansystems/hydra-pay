@@ -3,7 +3,6 @@
 module HydraPay.Cardano.Hydra where
 
 import Prelude hiding (log)
-import Debug.Trace (traceM, traceShow)
 
 import System.IO
 import System.Which
@@ -13,7 +12,6 @@ import System.Directory
 
 import Data.Int
 import Data.Word
-import Data.Maybe
 import Data.Text (Text)
 import Data.Bool (bool)
 import Data.Foldable
@@ -29,18 +27,14 @@ import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Proxy
 import HydraPay.Logging
-import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
 import HydraPay.Database.Workers
 import HydraPay.PaymentChannel.Postgres
-import Database.Beam.Postgres
 import HydraPay.PaymentChannel (PaymentChannelStatus(..))
-import HydraPay.PaymentChannel.Postgres (updatePaymentChannelStatusQ, paymentChannelBumpCommitCount)
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
 import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
-import HydraPay.Transaction
 import qualified HydraPay.Database as Db
 
 import qualified Cardano.Api as Api
@@ -59,7 +53,6 @@ import Control.Concurrent.STM
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
-import qualified Data.ByteString.Lazy as LBS
 
 
 import Network.WebSockets (runClient, sendDataMessage, withPingThread)
@@ -213,7 +206,6 @@ ensureHeadNodesReady state h = do
   liftIO $ atomically $ do
     statuses <- for (h ^. hydraHead_handles) $ \headHandle -> do
       readTVar $ headHandle ^. hydraNode_status
-    traceM $ "==> STATUS" <> show statuses
     let
       ready = all (== HydraNodeStatus_PeersConnected) statuses
 
@@ -238,7 +230,7 @@ waitForApi port = do
     Right _ -> pure ()
 
 runHydraHead
-  :: (MonadIO m, HasLogger a, HasNodeInfo a, Db.HasDbConnectionPool a)
+  :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a)
   => a
   -> Int32
   -> [HydraNodeConfig]
@@ -306,9 +298,9 @@ runHydraHead a headId configs = liftIO $ do
                           atomically $ writeTVar nodeStatus HydraNodeStatus_Replayed
                         PeerConnected _ -> do
                           atomically $ writeTVar nodeStatus HydraNodeStatus_PeersConnected
-                        Committed _ party _ -> do
+                        Committed _ party_ _ -> do
                           let
-                            mVkey = party ^? key "vkey" . _String
+                            mVkey = party_ ^? key "vkey" . _String
                           case mVkey of
                             Just vkey -> do
                               when isReporter $ Db.runBeam a $ do
@@ -330,7 +322,7 @@ runHydraHead a headId configs = liftIO $ do
                                     pure ()
 
                             Nothing -> do
-                              logInfo a loggerName $ "Failed to parse vkey from Committed payload: " <> tShow party
+                              logInfo a loggerName $ "Failed to parse vkey from Committed payload: " <> tShow party_
                               pure ()
 
                           pure ()
@@ -375,10 +367,10 @@ getNodeFor :: RunningHydraHead -> Api.AddressAny -> Maybe HydraNode
 getNodeFor hHead addr = Map.lookup addr $ hHead ^. hydraHead_handles
 
 sendClientInput :: (MonadIO m) => RunningHydraHead -> Maybe Api.AddressAny -> ClientInput -> m (Either Text ())
-sendClientInput runningHead mAddress input = liftIO $ do
+sendClientInput runningHead mAddress input_ = liftIO $ do
   case mNode of
     Just node -> do
-      atomically $ writeTBQueue (node ^. hydraNode_inputs) input
+      atomically $ writeTBQueue (node ^. hydraNode_inputs) input_
       pure $ Right ()
     Nothing -> pure $ Left "Falied to send client input, unable to locate suitable node"
   where
@@ -521,7 +513,6 @@ getRunningHead :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 
 getRunningHead a hid = do
   logInfo a "getRunningHead" $ "Fetching head " <> tShow hid
   liftIO $ withTMVar runningHeads $ \running -> do
-    traceM $ "RUNNING => " <> show (Map.keys running)
     case Map.lookup hid running of
       Just h -> pure (running, Right h)
       Nothing -> pure (running, Left $ "Running head with id " <> tShow hid <> " couldn't be found")
@@ -544,7 +535,7 @@ trackRunningHead a hid hydraHead = do
   where
     runningHeads = a ^. hydraHeadManager . hydraHeadManager_runningHeads
 
-untrackRunningHead :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> m ()
+untrackRunningHead :: (MonadIO m, HasHydraHeadManager a) => a -> Int32 -> m ()
 untrackRunningHead a hid = do
   withTMVar runningHeads $ \running -> do
     case Map.lookup hid running of
@@ -587,13 +578,9 @@ spinUpHead a hid = runExceptT $ do
   case mHead of
     Nothing -> throwError $ "Invalid head id" <> tShow hid
     Just dbHead -> do
-      traceM $ "spinUpHead: Found head: " <>  show (Db._hydraHead_id dbHead)
       nodeConfigs <- ExceptT $ deriveConfigFromDbHead a dbHead
-      traceM $ "spinUpHead: Configs retrieved"
       hydraHead <- lift $ runHydraHead a hid nodeConfigs
-      traceM $ "spinUpHead: Ran Hydra Head"
       out <- ExceptT $ trackRunningHead a hid hydraHead
-      traceM $ "spinUpHead: Tracked Running Head"
       pure out
 
 newHydraHeadManager :: MonadIO m => m HydraHeadManager
@@ -621,7 +608,7 @@ terminateRunningHeads (HydraHeadManager channels) = do
 
 terminateRunningHead :: MonadIO m => TMVar RunningHydraHead -> m ()
 terminateRunningHead hVar =
-  withTMVar_ hVar $ \hydraHead@(RunningHydraHead _ handles) -> liftIO $ do
+  withTMVar_ hVar $ \(RunningHydraHead _ handles) -> liftIO $ do
     for_ handles $ \(HydraNode _ nodeHandleRef thread _ runner _ _) -> do
       killThread runner
       mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
@@ -638,7 +625,7 @@ getAddressUTxO a hid addr = runExceptT $ do
     let node = unsafeAnyNode rh
     result <- runExceptT $ do
       output <- liftIO $ atomically $ dupTChan $ node ^. hydraNode_outputs
-      sendClientInput rh Nothing $ GetUTxO
+      ExceptT $ sendClientInput rh Nothing $ GetUTxO
       pure output
     pure (rh, result)
 
