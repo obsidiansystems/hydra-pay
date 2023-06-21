@@ -2,7 +2,7 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
-### Unreleased
+### Version v0.3.0
 
 * Ensure Hydra Node interaction threads currently executing blocking calls when asked to close; close immediately when execution is yielded back to them
 * Proxies now pay directly back to their L1 counterpart when they receive the UTxO from a finalized head
