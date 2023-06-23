@@ -139,7 +139,7 @@ commsThreadIsHeadStateReporter cfg =
 -- | Transaction ID on preview from the Hydra 0.10.0 release
 -- https://github.com/input-output-hk/hydra/releases/tag/0.10.0
 previewScriptTxId :: TxId
-previewScriptTxId = TxId "d237926e174a2ca386174a5810d30f0ca6db352219dd7eacdc7d5969ae75d58f"
+previewScriptTxId = TxId "a2c5979c4ee91637cf7d12b56d64fecc88aab3e46010193355e654db47348d87"
 
 loopbackAddress :: String
 loopbackAddress = "127.0.0.1"
@@ -164,8 +164,8 @@ mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparam
              (p1 ^. proxyInfo_hydraSigningKey)
              [p2 ^. proxyInfo_hydraVerificationKey]
              scriptsTxId
-             (p1 ^. proxyInfo_signingKey)
-             [p2 ^. proxyInfo_verificationKey]
+             (p1 ^. proxyInfo_internalWalletSigningKey)
+             [p2 ^. proxyInfo_internalWalletVerificationKey]
              genesis
              pparams
              (ninfo ^. nodeInfo_magic)
@@ -184,8 +184,8 @@ mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparam
              (p2 ^. proxyInfo_hydraSigningKey)
              [p1 ^. proxyInfo_hydraVerificationKey]
              scriptsTxId
-             (p2 ^. proxyInfo_signingKey)
-             [p1 ^. proxyInfo_verificationKey]
+             (p2 ^. proxyInfo_internalWalletSigningKey)
+             [p1 ^. proxyInfo_internalWalletVerificationKey]
              genesis
              pparams
              (ninfo ^. nodeInfo_magic)
@@ -357,7 +357,7 @@ runHydraHead a headId configs = liftIO $ do
         Left (SomeException e) -> log $ "Hydra node encountered an error: " <> T.pack (show e)
         Right ec -> log $ "Hydra node exited with: " <> T.pack (show ec)
       threadDelay 250000
-    pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus nodeRunner inputs outputs
+    pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_port) (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus nodeRunner inputs outputs
   pure $ RunningHydraHead $ foldOf each handles
 
 txOutAddressAndValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> (Api.AddressAny, Api.Value)
@@ -427,9 +427,9 @@ hydraNodeArgs cfg = join
      , cfg ^. hydraNodeConfig_cardanoSigningKey
      ]
    , cfg ^. hydraNodeConfig_cardanoVerificationKeys ^.. traversed . to cardanoVerificationKeyArg . folded
-   , [ "--ledger-genesis"
-     , cfg ^. hydraNodeConfig_ledgerGenesis
-     , "--ledger-protocol-parameters"
+   , [ -- "--ledger-genesis"
+     -- , cfg ^. hydraNodeConfig_ledgerGenesis
+     "--ledger-protocol-parameters"
      , cfg ^. hydraNodeConfig_ledgerProtocolParams
      , "--testnet-magic"
      , cfg ^. hydraNodeConfig_magic . to show
@@ -601,7 +601,7 @@ terminateRunningHeads (HydraHeadManager channels) = do
 terminateRunningHead :: MonadIO m => TMVar RunningHydraHead -> m ()
 terminateRunningHead hVar =
   withTMVar_ hVar $ \(RunningHydraHead handles) -> liftIO $ do
-    for_ handles $ \(HydraNode _ nodeHandleRef thread _ runner _ _) -> do
+    for_ handles $ \(HydraNode _ _ nodeHandleRef thread _ runner _ _) -> do
       killThread runner
       mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
       forM_ mNodeHandle $ \nodeHandle@(_, out, err, _) -> do

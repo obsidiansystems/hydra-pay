@@ -43,6 +43,7 @@ library
     , websockets
     , which
     , async
+    , http-client
 
   default-extensions:
     ConstraintKinds
