@@ -26,10 +26,13 @@ import qualified HydraPay.Database as Db
 
 data ProxyInfo = ProxyInfo
   { _proxyInfo_address :: Api.AddressAny
+  , _proxyInfo_internalWalletAddress :: Api.AddressAny
   , _proxyInfo_verificationKey :: FilePath
   , _proxyInfo_signingKey :: FilePath
   , _proxyInfo_hydraVerificationKey :: FilePath
   , _proxyInfo_hydraSigningKey :: FilePath
+  , _proxyInfo_internalWalletVerificationKey :: FilePath
+  , _proxyInfo_internalWalletSigningKey :: FilePath
   }
   deriving (Eq, Show)
 
@@ -77,10 +80,13 @@ addProxyInfo hid addr pinfo = do
                            default_
                            (val_ $ Api.serialiseAddress addr)
                            (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
+                           (val_ $ pinfo ^. proxyInfo_internalWalletAddress . to (Api.serialiseAddress))
                            (val_ $ pinfo ^. proxyInfo_verificationKey . to (T.pack))
                            (val_ $ pinfo ^. proxyInfo_signingKey . to (T.pack))
                            (val_ $ pinfo ^. proxyInfo_hydraVerificationKey . to (T.pack))
                            (val_ $ pinfo ^. proxyInfo_hydraSigningKey . to (T.pack))
+                           (val_ $ pinfo ^. proxyInfo_internalWalletVerificationKey . to (T.pack))
+                           (val_ $ pinfo ^. proxyInfo_internalWalletSigningKey . to (T.pack))
                     ])
       anyConflict onConflictDoNothing
 
@@ -102,9 +108,11 @@ queryProxyInfo a headId addr = do
           prefix = show headId <> "-" <> (T.unpack $ T.takeEnd 8 $ Api.serialiseAddress addr)
           proxyKeysPath = "proxy-keys"
         (vk, sk) <- ExceptT $ runCardanoCli a $ keyGen $ keyGenTemplate proxyKeysPath $ prefix <> ".cardano"
+        (ivk, isk) <- ExceptT $ runCardanoCli a $ keyGen $ keyGenTemplate proxyKeysPath $ prefix <> ".internal"
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
+        internalWalletAddress <- ExceptT $ runCardanoCli a $ buildAddress ivk
         (hvk, hsk) <- ExceptT $ hydraKeyGen $ proxyKeysPath </> (prefix <> ".hydra")
-        let newInfo = ProxyInfo proxyAddr vk sk hvk hsk
+        let newInfo = ProxyInfo proxyAddr internalWalletAddress vk sk hvk hsk ivk isk
         ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo headId addr newInfo
     Just info -> do
       pure $ Right info
@@ -113,7 +121,10 @@ dbProxyInfoToProxyInfo :: Db.ProxyInfo -> Maybe ProxyInfo
 dbProxyInfoToProxyInfo pinfo =
   ProxyInfo
   <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_hydraAddress)
+  <*> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_internalWalletAddress)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_verificationKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_signingKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_hydraVerificationKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_hydraSigningKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_internalWalletVerificationKeyPath)
+  <*> (pure $ T.unpack $ pinfo ^. Db.proxy_internalWalletSigningKeyPath)

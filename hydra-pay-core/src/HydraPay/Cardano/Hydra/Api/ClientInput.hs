@@ -19,3 +19,11 @@ data ClientInput
 
 instance FromJSON ClientInput
 instance ToJSON ClientInput
+
+data DraftCommitTxRequest = DraftCommitTxRequest
+  { utxos :: Value
+  }
+  deriving (Generic)
+
+instance FromJSON DraftCommitTxRequest
+instance ToJSON DraftCommitTxRequest

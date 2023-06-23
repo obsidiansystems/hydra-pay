@@ -55,10 +55,14 @@ data ProxiesT f = ProxyInfo
    { _proxy_id :: C f (SqlSerial Int32)
    , _proxy_chainAddress :: C f Text
    , _proxy_hydraAddress :: C f Text
+   , _proxy_internalWalletAddress :: C f Text
    , _proxy_verificationKeyPath :: C f Text
    , _proxy_signingKeyPath :: C f Text
    , _proxy_hydraVerificationKeyPath :: C f Text
    , _proxy_hydraSigningKeyPath :: C f Text
+   -- NOTE(skylar): Internal wallet replaces fuel for Hydra Nodes
+   , _proxy_internalWalletVerificationKeyPath :: C f Text
+   , _proxy_internalWalletSigningKeyPath :: C f Text
    }
    deriving (Generic)
 
