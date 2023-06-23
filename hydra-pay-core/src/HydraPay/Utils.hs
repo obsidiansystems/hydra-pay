@@ -57,9 +57,6 @@ addressNetwork = \case
 isTestnetAddress :: Api.AddressAny -> Bool
 isTestnetAddress = maybe False (== Ledger.Testnet) . addressNetwork
 
--- findCommitableUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra
--- findCommitableUTxOWithExactly target utxos = undefined
-
 findUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
 findUTxOWithExactly target utxos =
   case Map.size exactMatchesOnly of

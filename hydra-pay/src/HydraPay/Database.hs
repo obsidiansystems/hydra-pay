@@ -5,6 +5,7 @@ module HydraPay.Database where
 
 import Control.Lens
 import Control.Monad.IO.Class
+import HydraPay.Cardano.Hydra.Status
 
 import Data.Time
 import Data.Int
@@ -33,6 +34,8 @@ data HydraHeadsT f = HydraHead
   , _hydraHead_ledgerGenesis :: C f Text
   , _hydraHead_ledgerProtocolParams :: C f Text
   , _hydraHead_chainId :: C f (Maybe Text)
+  , _hydraHead_status :: C f HydraHeadStatus
+  , _hydraHead_shouldClose :: C f Bool
   }
   deriving (Generic)
 
@@ -70,8 +73,18 @@ instance Beamable (PrimaryKey ProxiesT)
 
 type ProxyInfo = ProxiesT Identity
 
+instance BA.HasColumnType HydraHeadStatus where
+  defaultColumnType = const $ Beam.defaultColumnType $ Proxy @Text
+
 instance BA.HasColumnType PaymentChannelStatus where
   defaultColumnType = const $ Beam.defaultColumnType $ Proxy @Text
+
+instance FromBackendRow Postgres HydraHeadStatus where
+  fromBackendRow = do
+    row <- fromBackendRow
+    case readMaybe row of
+      Just x -> pure x
+      Nothing -> fail $ "Unknown HydraHeadStatus: " <> row
 
 instance FromBackendRow Postgres PaymentChannelStatus where
   fromBackendRow = do
@@ -79,6 +92,11 @@ instance FromBackendRow Postgres PaymentChannelStatus where
     case readMaybe row of
       Just x -> pure x
       Nothing -> fail $ "Unknown PaymentChannelStatus: " <> row
+
+instance HasSqlValueSyntax PgValueSyntax HydraHeadStatus where
+  sqlValueSyntax = sqlValueSyntax . T.pack . show
+
+instance HasSqlEqualityCheck Postgres HydraHeadStatus
 
 instance HasSqlValueSyntax PgValueSyntax PaymentChannelStatus where
   sqlValueSyntax = sqlValueSyntax . T.pack . show
