@@ -27,11 +27,11 @@ import HydraPay.Logging
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra
+import HydraPay.Cardano.Hydra.Status
 import HydraPay.Database.Workers (RefundRequest(..))
 import HydraPay.Proxy
 import HydraPay.Transaction
 import qualified HydraPay.Database as DB
-import HydraPay.PaymentChannel
 
 import Control.Concurrent (threadDelay)
 
@@ -243,9 +243,9 @@ handleChannelRefund state refundRequest = do
                   -- Mark payment channel as closed
                   DB.runBeam (_hydraPay_databaseConnectionPool state) $ runUpdate $
                     update
-                    (DB.db ^. DB.db_paymentChannels)
-                    (\channel -> channel ^. DB.paymentChannel_status <-. val_ PaymentChannelStatus_Closed)
-                    (\channel -> channel ^. DB.paymentChannel_head ==. val_ (DB.HeadId (SqlSerial (_refundRequest_hydraHead refundRequest))))
+                    (DB.db ^. DB.db_heads)
+                    (\head_ -> head_ ^. DB.hydraHead_status <-. val_ HydraHeadStatus_Closed)
+                    (\head_ -> head_ ^. DB.hydraHead_id ==. val_ (SqlSerial (_refundRequest_hydraHead refundRequest)))
                   return $ Right $ unTxId txid
   where
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"

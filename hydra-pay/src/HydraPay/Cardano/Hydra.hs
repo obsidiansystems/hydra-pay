@@ -27,6 +27,7 @@ import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Proxy
 import HydraPay.Logging
+import HydraPay.Cardano.Hydra.Status
 import HydraPay.Cardano.Hydra.ChainConfig (HydraChainConfig(..))
 import HydraPay.Cardano.Node
 import HydraPay.Database.Workers
@@ -117,7 +118,6 @@ data TwoPartyHeadConfig = TwoPartyHeadConfig
 
 data CommsThreadConfig = CommsThreadConfig
   { _commsThreadConfig_hydraNodeConfig :: HydraNodeConfig
-  , _commsThreadConfig_headStatus :: TVar HydraHeadStatus
   , _commsThreadConfig_nodeStatus :: TVar HydraNodeStatus
   , _commsThreadConfig_inputs :: TBQueue ClientInput
   }
@@ -236,7 +236,6 @@ runHydraHead
   -> [HydraNodeConfig]
   -> m RunningHydraHead
 runHydraHead a headId configs = liftIO $ do
-  headStatus <- newTVarIO HydraHead_Uninitialized
   let log = logDebug a "node-supervisor"
   handles <- for configs $ \config -> do
     nodeStatus <- newTVarIO HydraNodeStatus_Unavailable
@@ -257,7 +256,7 @@ runHydraHead a headId configs = liftIO $ do
           comms <- forkIO $ do
             let
               apiPort = config ^. hydraNodeConfig_apiPort
-              isReporter = commsThreadIsHeadStateReporter $ CommsThreadConfig config headStatus nodeStatus inputs
+              isReporter = commsThreadIsHeadStateReporter $ CommsThreadConfig config nodeStatus inputs
               loggerName = "Head " <> tShow headId <> "-" <> bool "commsThread" "reporterThread" isReporter <> "-node" <> tShow (config ^. hydraNodeConfig_nodeId)
             logInfo a loggerName "Waiting for API"
             waitForApi apiPort
@@ -282,17 +281,21 @@ runHydraHead a headId configs = liftIO $ do
                       logInfo a loggerName $ "Received(" <> tShow status <> ") " <> tShow serverOutput
                       case serverOutput of
                         HeadIsInitializing _ _ -> do
-                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Initialized
+                          when isReporter $ Db.runBeam a $ do
+                            updateHydraHeadStatusQ headId $ HydraHeadStatus_Initialized
+                            tryUpdatePaymentChannelForHeadStatusQ headId $ PaymentChannelStatus_WaitingForAccept
                         HeadIsOpen _ _ -> do
-                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Open
+                          when isReporter $ Db.runBeam a $ do
+                            updateHydraHeadStatusQ headId $ HydraHeadStatus_Open
+                            tryUpdatePaymentChannelForHeadStatusQ headId $ PaymentChannelStatus_Open
                         HeadIsClosed _ _ _ -> do
-                          when isReporter $ Db.runBeam a $ updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Closed
+                          when isReporter $ Db.runBeam a $ updateHydraHeadStatusQ headId $ HydraHeadStatus_Closed
                         ReadyToFanout _ -> do
                           when isReporter $ do
                             atomically $ writeTBQueue inputs Fanout
                         HeadIsFinalized _ _ -> do
                           when isReporter $ Db.runBeam a $ do
-                            updatePaymentChannelStatusQ headId $ PaymentChannelStatus_Finalized
+                            updateHydraHeadStatusQ headId $ HydraHeadStatus_Finalized
                             addPaymentChannelTask' $ PaymentChannelReq_Cleanup headId
                         Greetings _ _ _ -> do
                           atomically $ writeTVar nodeStatus HydraNodeStatus_Replayed
@@ -337,9 +340,9 @@ runHydraHead a headId configs = liftIO $ do
                 case result of
                   Left err@(SomeException _) -> do
                     logInfo a loggerName $ "Receive failed: " <> tShow err
-                    status <- Db.runBeam a $ getPaymentChannelStatusQ headId
+                    status <- Db.runBeam a $ getHydraHeadStatusQ headId
 
-                    when (status == PaymentChannelStatus_Done) $ killThread <=< atomically $ readTMVar communicationThread
+                    when (status == HydraHeadStatus_Done) $ killThread <=< atomically $ readTMVar communicationThread
                     threadDelay 250000
                   Right _ ->
                     pure ()
@@ -355,7 +358,7 @@ runHydraHead a headId configs = liftIO $ do
         Right ec -> log $ "Hydra node exited with: " <> T.pack (show ec)
       threadDelay 250000
     pure $ Map.singleton (config ^. hydraNodeConfig_for) $ HydraNode (config ^. hydraNodeConfig_apiPort) process communicationThread nodeStatus nodeRunner inputs outputs
-  pure $ RunningHydraHead headStatus (foldOf each handles)
+  pure $ RunningHydraHead $ foldOf each handles
 
 txOutAddressAndValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> (Api.AddressAny, Api.Value)
 txOutAddressAndValue (Api.TxOut (Api.AddressInEra _ a) val _ _) = (Api.toAddressAny a, Api.txOutValueToValue val)
@@ -563,10 +566,9 @@ startupExistingHeads a = do
 activeHydraHeads :: MonadBeam Postgres m => m [Db.HydraHead]
 activeHydraHeads = do
   runSelectReturningList $ select $ do
-    heads_ <- all_ (Db.db ^. Db.db_heads)
-    paymentChan_ <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-    guard_ (paymentChan_ ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
-    pure $ heads_
+    head_ <- all_ (Db.db ^. Db.db_heads)
+    guard_ (head_ ^. Db.hydraHead_status /=. val_ HydraHeadStatus_Done)
+    pure $ head_
 
 spinUpHead :: (MonadIO m, MonadBeam Postgres m, MonadBeamInsertReturning Postgres m, Db.HasDbConnectionPool a, HasLogger a, HasNodeInfo a, HasPortRange a, HasHydraHeadManager a) => a -> Int32 -> m (Either Text ())
 spinUpHead a hid = runExceptT $ do
@@ -593,22 +595,12 @@ newHydraHeadManager = do
 terminateRunningHeads :: MonadIO m => HydraHeadManager -> m ()
 terminateRunningHeads (HydraHeadManager channels) = do
   withTMVar channels $ \running -> do
-    for_ (Map.elems running) $ \headVar -> do
-      withTMVar headVar $ \hydraHead@(RunningHydraHead _ handles) -> do
-        for_ handles $ \(HydraNode _ nodeHandleRef thread _ runner _ _) -> liftIO $ do
-          killThread runner
-          mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
-          forM_ mNodeHandle $ \nodeHandle@(_, out, err, _) -> do
-            cleanupProcess nodeHandle
-            maybe (pure ()) hClose out
-            maybe (pure ()) hClose err
-          killThread <=< atomically $ readTMVar thread
-        pure (hydraHead, ())
+    for_ (Map.elems running) terminateRunningHead
     pure (running, ())
 
 terminateRunningHead :: MonadIO m => TMVar RunningHydraHead -> m ()
 terminateRunningHead hVar =
-  withTMVar_ hVar $ \(RunningHydraHead _ handles) -> liftIO $ do
+  withTMVar_ hVar $ \(RunningHydraHead handles) -> liftIO $ do
     for_ handles $ \(HydraNode _ nodeHandleRef thread _ runner _ _) -> do
       killThread runner
       mNodeHandle <- atomically $ tryReadTMVar nodeHandleRef
