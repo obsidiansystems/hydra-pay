@@ -81,6 +81,7 @@ dbPaymentChannelToInfo addr hh pc _ =
     , _paymentChannelInfo_other = other
     , _paymentChannelInfo_status = pc ^. Db.paymentChannel_status
     , _paymentChannelInfo_initiator = isInitiator
+    , _paymentChannelInfo_balance = balance
     }
   where
     isInitiator = addrStr == hh ^. Db.hydraHead_first
@@ -90,6 +91,26 @@ dbPaymentChannelToInfo addr hh pc _ =
       False -> hh ^. Db.hydraHead_first
 
     addrStr = Api.serialiseAddress addr
+
+    -- | Payment Channel Balance varies depending on the status of the channel.
+    -- While the other party hasn't accepted it shows the balance the initiator
+    -- commited and once ther other party commits it's their respective balance.
+    balance :: Api.Lovelace
+    balance =
+      let selfBalance = if isInitiator then hh ^. Db.hydraHead_firstBalance else fromMaybe 0 $ hh ^. Db.hydraHead_secondBalance
+      in fromIntegral $ case pc ^. Db.paymentChannel_status of
+        PaymentChannelStatus_Submitting ->
+          hh ^. Db.hydraHead_firstBalance
+        PaymentChannelStatus_WaitingForAccept ->
+          hh ^. Db.hydraHead_firstBalance
+        PaymentChannelStatus_Opening ->
+          selfBalance
+        PaymentChannelStatus_Open ->
+          selfBalance
+        PaymentChannelStatus_Closing ->
+          selfBalance
+        PaymentChannelStatus_Error ->
+          0
 
 getPaymentChannelDetails :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
 getPaymentChannelDetails a addr pcId = do
