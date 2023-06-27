@@ -4,7 +4,6 @@ module HydraPay.Utils where
 
 import Debug.Trace
 import Control.Applicative
-import Data.Traversable
 import Data.Aeson as Aeson
 import Data.Text (Text, pack)
 import System.Exit
@@ -57,9 +56,6 @@ addressNetwork = \case
 
 isTestnetAddress :: Api.AddressAny -> Bool
 isTestnetAddress = maybe False (== Ledger.Testnet) . addressNetwork
-
--- findCommitableUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra
--- findCommitableUTxOWithExactly target utxos = undefined
 
 findUTxOWithExactly :: Api.Lovelace -> Api.UTxO Api.BabbageEra -> Maybe (Api.UTxO Api.BabbageEra)
 findUTxOWithExactly target utxos =

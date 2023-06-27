@@ -1,7 +1,6 @@
 module ParseConfig where
 
 import Options.Applicative
-import Data.Semigroup ((<>))
 import Data.Maybe (fromMaybe)
 import HydraPay.Config
 
