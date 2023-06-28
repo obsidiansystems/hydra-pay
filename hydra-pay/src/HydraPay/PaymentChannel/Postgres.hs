@@ -81,6 +81,7 @@ dbPaymentChannelToInfo addr hh pc _ =
     , _paymentChannelInfo_other = other
     , _paymentChannelInfo_status = pc ^. Db.paymentChannel_status
     , _paymentChannelInfo_initiator = isInitiator
+    , _paymentChannelInfo_balance = balance
     }
   where
     isInitiator = addrStr == hh ^. Db.hydraHead_first
@@ -90,6 +91,23 @@ dbPaymentChannelToInfo addr hh pc _ =
       False -> hh ^. Db.hydraHead_first
 
     addrStr = Api.serialiseAddress addr
+
+    balance :: Maybe Api.Lovelace
+    balance =
+      let selfBalance = if isInitiator then hh ^. Db.hydraHead_firstBalance else fromMaybe 0 $ hh ^. Db.hydraHead_secondBalance
+      in fromIntegral <$> case pc ^. Db.paymentChannel_status of
+        PaymentChannelStatus_Submitting ->
+          if isInitiator then Just (hh ^. Db.hydraHead_firstBalance) else Nothing
+        PaymentChannelStatus_WaitingForAccept ->
+          if isInitiator then Just (hh ^. Db.hydraHead_firstBalance) else Nothing
+        PaymentChannelStatus_Opening ->
+          Just selfBalance
+        PaymentChannelStatus_Open ->
+          Just selfBalance
+        PaymentChannelStatus_Closing ->
+          Just selfBalance
+        PaymentChannelStatus_Error ->
+          Nothing
 
 getPaymentChannelDetails :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
 getPaymentChannelDetails a addr pcId = do

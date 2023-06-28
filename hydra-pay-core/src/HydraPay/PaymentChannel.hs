@@ -57,6 +57,7 @@ data PaymentChannelInfo = PaymentChannelInfo
   , _paymentChannelInfo_other :: Text
   , _paymentChannelInfo_status :: PaymentChannelStatus
   , _paymentChannelInfo_initiator :: Bool
+  , _paymentChannelInfo_balance :: Maybe Api.Lovelace
   }
   deriving (Eq, Show, Generic)
 
