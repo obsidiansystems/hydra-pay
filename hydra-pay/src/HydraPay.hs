@@ -167,7 +167,7 @@ payFuelTo fromAddr skPath toAddr lovelace =
 
 payToProxyTx :: Api.AddressAny -> Int32 -> ProxyInfo -> Tx ()
 payToProxyTx addr lovelace proxy = do
-  Output {..} <- output (proxy ^. proxyInfo_address . to addressString) $ fromString $ show lovelace <> " lovelace"
+  Output {..} <- output (proxy ^. proxyInfo_address . to (addressString . unProxyAddress)) $ fromString $ show lovelace <> " lovelace"
   void $ selectInputs oValue addrStr
   changeAddress addrStr
   void $ balanceNonAdaAssets addrStr

@@ -19,13 +19,14 @@ import qualified Data.Text as T
 import System.FilePath
 
 import HydraPay.Utils
+import HydraPay.Types
 import HydraPay.Cardano.Cli
 import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra.Tools
 import qualified HydraPay.Database as Db
 
 data ProxyInfo = ProxyInfo
-  { _proxyInfo_address :: Api.AddressAny
+  { _proxyInfo_address :: ProxyAddress
   , _proxyInfo_internalWalletAddress :: Api.AddressAny
   , _proxyInfo_verificationKey :: FilePath
   , _proxyInfo_signingKey :: FilePath
@@ -79,7 +80,7 @@ addProxyInfo hid addr pinfo = do
       (insertExpressions [ Db.ProxyInfo
                            default_
                            (val_ $ Api.serialiseAddress addr)
-                           (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress))
+                           (val_ $ pinfo ^. proxyInfo_address . to (Api.serialiseAddress . unProxyAddress))
                            (val_ $ pinfo ^. proxyInfo_internalWalletAddress . to (Api.serialiseAddress))
                            (val_ $ pinfo ^. proxyInfo_verificationKey . to (T.pack))
                            (val_ $ pinfo ^. proxyInfo_signingKey . to (T.pack))
@@ -112,7 +113,7 @@ queryProxyInfo a headId addr = do
         proxyAddr <- ExceptT $ runCardanoCli a $ buildAddress vk
         internalWalletAddress <- ExceptT $ runCardanoCli a $ buildAddress ivk
         (hvk, hsk) <- ExceptT $ hydraKeyGen $ proxyKeysPath </> (prefix <> ".hydra")
-        let newInfo = ProxyInfo proxyAddr internalWalletAddress vk sk hvk hsk ivk isk
+        let newInfo = ProxyInfo (ProxyAddress proxyAddr) internalWalletAddress vk sk hvk hsk ivk isk
         ExceptT $ fmap (maybeToEither "Failed to read Proxy Info from database") $ addProxyInfo headId addr newInfo
     Just info -> do
       pure $ Right info
@@ -120,7 +121,7 @@ queryProxyInfo a headId addr = do
 dbProxyInfoToProxyInfo :: Db.ProxyInfo -> Maybe ProxyInfo
 dbProxyInfoToProxyInfo pinfo =
   ProxyInfo
-  <$> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_hydraAddress)
+  <$> (fmap ProxyAddress $ Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_hydraAddress)
   <*> (Api.deserialiseAddress Api.AsAddressAny $ pinfo ^. Db.proxy_internalWalletAddress)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_verificationKeyPath)
   <*> (pure $ T.unpack $ pinfo ^. Db.proxy_signingKeyPath)
