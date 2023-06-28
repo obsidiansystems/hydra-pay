@@ -2,11 +2,22 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
-### Unreleased
+### Version v0.3.0
 
+* Ensure Hydra Node interaction threads currently executing blocking calls when asked to close; close immediately when execution is yielded back to them
+* Proxies now pay directly back to their L1 counterpart when they receive the UTxO from a finalized head
+* Automatic transaction batching, when HydraPay is instructed to pay to or out of proxy addresses; instead of submitting separate transactions it will now batch to the best of its ability to limit transaction wait times, and avoid contention 
+* Automated state progression: When a head is started, we use information from the proxy addresses, and the hydra nodes to automatically send Client inputs to the head, meaning the lifecycle is now self-managing and self-repairing
+* Internal indexer: We now do our best to scrutinize and persist events observed by each node on each head
+* Add a worker to handle refunds when nodes fail to start for any reason
+* Introduce Task Workers: A way for various internal HydraPay actions to happen in parallel with reliable execution and smart retries 
+* More reliable and less resource intensive Hydra Node/Head status tracking: The communication interface uses less threads and a single and output channel
+* Automatically restart nodes at runtime
+* Rework proxy system to have one proxy per node to be in line with Hydra best practices
 * Ensure absolute paths for cardano-cli & hydra-tools executables
 * Delegate SIGINT to cardano-node process
 * Reduce the number of reconnections to Hydra Node websocket api
+* Bump to hydra 0.10.0
 
 ### Version v0.2.0
 

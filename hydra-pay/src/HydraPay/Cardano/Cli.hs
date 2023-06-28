@@ -2,6 +2,7 @@
 
 module HydraPay.Cardano.Cli where
 
+import Debug.Trace
 import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Cardano.Node
@@ -90,7 +91,7 @@ runCardanoCli a command = do
     CardanoCliCommand_QueryUTXOs _ -> do
       fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
-        ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
+        ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack $ trace ("This was " <> str) str
 
     CardanoCliCommand_BuildAddress _ -> do
       fmap (first T.pack) $ runExceptT $ do
@@ -175,7 +176,7 @@ makeCliProcess ni command =
         base [ "query"
              , "utxo"
              , "--address"
-             , T.unpack $ Api.serialiseAddress addr
+             , trace ("The address was " <> T.unpack (Api.serialiseAddress addr)) (T.unpack $ Api.serialiseAddress addr)
              , "--testnet-magic"
              , magic
              , "--out-file"

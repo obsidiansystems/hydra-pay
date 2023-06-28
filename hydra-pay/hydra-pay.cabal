@@ -1,5 +1,5 @@
 name:          hydra-pay
-version:       0.1
+version:       0.3.0
 cabal-version: >=1.10
 build-type:    Simple
 
@@ -12,6 +12,7 @@ library
     , beam-core
     , beam-postgres
     , bytestring
+    , bytestring-aeson-orphans
     , cardano-api
     , cardano-transaction
     , containers
@@ -27,6 +28,9 @@ library
     , mtl
     , postgresql-simple
     , process
+    , rhyolite-beam-db
+    , rhyolite-beam-task-worker-backend
+    , rhyolite-beam-task-worker-types
     , reflex
     , reflex-fsnotify
     , resource-pool
@@ -38,6 +42,7 @@ library
     , typed-process
     , websockets
     , which
+    , async
 
   default-extensions:
     ConstraintKinds
@@ -67,11 +72,13 @@ library
     HydraPay.Cardano.Hydra.Tools
     HydraPay.Cardano.Node
     HydraPay.Database
+    HydraPay.Database.Workers
     HydraPay.Host
     HydraPay.PaymentChannel.Postgres
     HydraPay.Proxy
     HydraPay.Transaction
     HydraPay.Watch
+    HydraPay.Worker
 
   ghc-options:
     -Wall -Wredundant-constraints -Wincomplete-uni-patterns

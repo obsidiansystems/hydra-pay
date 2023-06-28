@@ -64,6 +64,12 @@ We assume at this time you are knowledgeable about Hydra and the basic Hydra Hea
 
 First party haskell libraries `hydra-pay-core` and `hydra-pay` provide direct access to powerful features like:
 * A simple, powerful, and customizable logger with automatic rotation, file size limits, and file management.
+* A set of workers to carry out tasks in parallel, maximizing throughput. 
+* Automated transaction batching to have the least downtime when waiting for L1 transactions to be observed on-chain.
+* An automated process for moving heads through the lifecycle based on indexer and on-chain information.
+* Automated refunding of L1 addresses when failures are detected, ensuring your funds are always sent back to you.
+* Automatic restarting of Hydra Nodes so you never lose your state (or funds).
+* An internal indexer that tracks head state in high detail.
 * Automated node management with integrated logging and error tracking, providing a convenient interface for interaction and information.
 * A typesafe GADT based interface into cardano-cli that allows easy:
   * Tip and Protocol Parameter queries
@@ -447,7 +453,7 @@ We have a couple important reasons for using this Proxy Address mapping:
 
 - More convenient fund management: Instead of having to promptly commit funds only when a Head is starting; users can add funds to their proxy address. This gives developers the freedom to orchestrate the timing of head creation and closing however they like, and users the confidence to participate meaningfully with ever Init/Fanout cycle without having to actively micro-manage their funds and Head commitments.
 
-The proxy address scheme will be updated/deprecated based on future changes to Hydra Pay like the upcoming [Commit from External Wallet](https://github.com/orgs/input-output-hk/projects/21/views/7) on the Hydra roadmap. 
+The support for the proxy address scheme wil be maintained alongside the upcoming [Commit from External Wallet](https://github.com/orgs/input-output-hk/projects/21/views/7) update that will allow user wallets to participate directly with Heads.
 
 #### Head Commit
 

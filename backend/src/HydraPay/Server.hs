@@ -35,7 +35,6 @@ import Data.Map (Map)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Map as Map
-import Data.Aeson ((.:))
 import Data.Aeson as Aeson
 import Data.Aeson.Types as Aeson
 import Data.Maybe
@@ -44,7 +43,6 @@ import System.IO ( IOMode(WriteMode), openFile, Handle, hClose )
 import Network.WebSockets.Client
 
 import Control.Monad.Reader
-import Control.Monad.Fail
 
 import Common.Helpers
 import HydraPay.Logging
@@ -78,7 +76,6 @@ import Control.Concurrent.STM (newBroadcastTChanIO, dupTChan, TChan)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM.TChan (readTChan, writeTChan)
 import Control.Monad.Loops (untilJust, iterateUntilM)
-import Data.Aeson.Types (parseMaybe)
 import Control.Monad.Except
 import Control.Monad.Trans.Maybe (runMaybeT, MaybeT (MaybeT))
 import System.IO.Temp (withTempFile)
@@ -666,9 +663,9 @@ submitTxOnHead state addr (HeadSubmitTx name toAddr lovelaceAmount) =
             pure . Just $ nominalDiffTimeToSeconds $ diffUTCTime endTime startTime
           else pure Nothing
 
-      ServerOutput.TxInvalid headId theUtxo tx valError -> do
+      ServerOutput.TxInvalid headId_ theUtxo tx valError -> do
         let
-          parsedError = HydraPay.Api.TxInvalid headId theUtxo tx valError <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
+          parsedError = HydraPay.Api.TxInvalid headId_ theUtxo tx valError <$ (guard . (== txid) =<< parseMaybe (withObject "tx" (.: "id")) tx)
         _ <- throwError $ fromMaybe (ProcessError "Tx Invalid") parsedError
         pure Nothing
       _ -> pure Nothing

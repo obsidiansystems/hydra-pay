@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module HydraPay.Database where
 
 import Control.Lens
@@ -10,11 +11,18 @@ import Data.Int
 import Data.Pool
 import Data.Proxy (Proxy(..))
 import Data.Text (Text)
+import qualified Data.Text as T
 import Database.Beam
+import qualified Database.Beam.AutoMigrate as Beam
 import Database.Beam.Postgres
+import Database.Beam.Postgres.Syntax (PgValueSyntax)
 import Database.Beam.Backend.SQL
 import qualified Database.Beam.AutoMigrate as BA
 import Database.PostgreSQL.Simple (withTransaction)
+import Text.Read (readMaybe)
+
+import HydraPay.Database.Workers
+import HydraPay.PaymentChannel
 
 data HydraHeadsT f = HydraHead
   { _hydraHead_id :: C f (SqlSerial Int32)
@@ -24,22 +32,25 @@ data HydraHeadsT f = HydraHead
   , _hydraHead_secondBalance :: C f (Maybe Int32)
   , _hydraHead_ledgerGenesis :: C f Text
   , _hydraHead_ledgerProtocolParams :: C f Text
+  , _hydraHead_chainId :: C f (Maybe Text)
   }
   deriving (Generic)
 
 instance Beamable HydraHeadsT
 
 instance Table HydraHeadsT where
-  data PrimaryKey HydraHeadsT f = HeadID (C f (SqlSerial Int32))
+  data PrimaryKey HydraHeadsT f = HeadId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = HeadID . _hydraHead_id
+  primaryKey = HeadId . _hydraHead_id
 
 instance Beamable (PrimaryKey HydraHeadsT)
 
 type HydraHead = HydraHeadsT Identity
+type HeadId = PrimaryKey HydraHeadsT Identity
 
 data ProxiesT f = ProxyInfo
-   { _proxy_chainAddress :: C f Text
+   { _proxy_id :: C f (SqlSerial Int32)
+   , _proxy_chainAddress :: C f Text
    , _proxy_hydraAddress :: C f Text
    , _proxy_verificationKeyPath :: C f Text
    , _proxy_signingKeyPath :: C f Text
@@ -51,33 +62,71 @@ data ProxiesT f = ProxyInfo
 instance Beamable ProxiesT
 
 instance Table ProxiesT where
-  data PrimaryKey ProxiesT f = ProxyID (C f Text)
+  data PrimaryKey ProxiesT f = ProxyId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = ProxyID . _proxy_chainAddress
+  primaryKey = ProxyId . _proxy_id
 
 instance Beamable (PrimaryKey ProxiesT)
 
 type ProxyInfo = ProxiesT Identity
 
+instance BA.HasColumnType PaymentChannelStatus where
+  defaultColumnType = const $ Beam.defaultColumnType $ Proxy @Text
+
+instance FromBackendRow Postgres PaymentChannelStatus where
+  fromBackendRow = do
+    row <- fromBackendRow
+    case readMaybe row of
+      Just x -> pure x
+      Nothing -> fail $ "Unknown PaymentChannelStatus: " <> row
+
+instance HasSqlValueSyntax PgValueSyntax PaymentChannelStatus where
+  sqlValueSyntax = sqlValueSyntax . T.pack . show
+
+instance HasSqlEqualityCheck Postgres PaymentChannelStatus
+
+
 data PaymentChannelsT f = PaymentChannel
   { _paymentChannel_id :: C f (SqlSerial Int32)
   , _paymentChannel_name :: C f Text
   , _paymentChannel_head :: PrimaryKey HydraHeadsT f
+  , _paymentChannel_createdAt :: C f UTCTime
   , _paymentChannel_expiry :: C f UTCTime
-  , _paymentChannel_open :: C f Bool
+  , _paymentChannel_status :: C f PaymentChannelStatus
+  , _paymentChannel_commits :: C f Int32
+  , _paymentChannel_shouldClose :: C f Bool
   }
   deriving (Generic)
 
 instance Beamable PaymentChannelsT
 
 instance Table PaymentChannelsT where
-  data PrimaryKey PaymentChannelsT f = PaymentChannelID (C f (SqlSerial Int32))
+  data PrimaryKey PaymentChannelsT f = PaymentChannelId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = PaymentChannelID . _paymentChannel_id
+  primaryKey = PaymentChannelId . _paymentChannel_id
 
 instance Beamable (PrimaryKey PaymentChannelsT)
 
 type PaymentChannel = PaymentChannelsT Identity
+
+data ObservedCommitsT f = ObservedCommit
+  { _observedCommit_id :: C f (SqlSerial Int32)
+  , _observedCommit_vkey :: C f Text
+  , _observedCommit_time :: C f UTCTime
+  , _observedCommit_head :: PrimaryKey HydraHeadsT f
+  }
+  deriving (Generic)
+
+instance Beamable ObservedCommitsT
+
+instance Table ObservedCommitsT where
+  data PrimaryKey ObservedCommitsT f = ObservedCommitId (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = ObservedCommitId . _observedCommit_id
+
+instance Beamable (PrimaryKey ObservedCommitsT)
+
+type ObservedCommit = ObservedCommitsT Identity
 
 data TransactionsT f = Transaction
   { _transaction_id :: C f (SqlSerial Int32)
@@ -91,19 +140,39 @@ data TransactionsT f = Transaction
 instance Beamable TransactionsT
 
 instance Table TransactionsT where
-  data PrimaryKey TransactionsT f = TransactionID (C f (SqlSerial Int32))
+  data PrimaryKey TransactionsT f = TransactionId (C f (SqlSerial Int32))
     deriving (Generic)
-  primaryKey = TransactionID . _transaction_id
+  primaryKey = TransactionId . _transaction_id
 
 instance Beamable (PrimaryKey TransactionsT)
 
 type Transaction = TransactionsT Identity
 
+-- | Associates a given Proxy Address with a Head and therefore a node.
+data ProxyHeadT f = ProxyHead
+  { _proxyHead_id :: C f (SqlSerial Int32)
+  , _proxyHead_proxy :: PrimaryKey ProxiesT f
+  , _proxyHead_head :: PrimaryKey HydraHeadsT f
+  }
+  deriving (Generic)
+
+instance Beamable ProxyHeadT
+
+instance Table ProxyHeadT where
+  data PrimaryKey ProxyHeadT f = ProxyHeadId (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = ProxyHeadId . _proxyHead_id
+
+instance Beamable (PrimaryKey ProxyHeadT)
+
 data Db f = Db
   { _db_proxies :: f (TableEntity ProxiesT)
   , _db_heads :: f (TableEntity HydraHeadsT)
+  , _db_proxyHead :: f (TableEntity ProxyHeadT)
   , _db_paymentChannels :: f (TableEntity PaymentChannelsT)
   , _db_transactions :: f (TableEntity TransactionsT)
+  , _db_paymentChanTask :: f (TableEntity PaymentChannelTaskT)
+  , _db_observedCommits :: f (TableEntity ObservedCommitsT)
   }
   deriving (Generic)
 
@@ -115,13 +184,12 @@ class HasDbConnectionPool a where
 instance HasDbConnectionPool (Pool Connection) where
   dbConnectionPool = id
 
-newtype HeadId =
-  HeadId Int32
-
+makeLenses ''ProxyHeadT
 makeLenses ''PaymentChannelsT
 makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT
 makeLenses ''ProxiesT
+makeLenses ''ObservedCommitsT
 makeLenses ''Db
 
 hydraHeadId :: HydraHead -> Int32
