@@ -9,13 +9,14 @@ import Data.Map (Map)
 import System.IO
 import System.Process
 
+import HydraPay.Types
 import HydraPay.Cardano.Hydra.Api
 import HydraPay.PortRange
 import qualified Cardano.Api as Api
 
 -- | A running Hydra Head
 data RunningHydraHead = RunningHydraHead
-  { _hydraHead_handles :: Map Api.AddressAny HydraNode
+  { _hydraHead_handles :: Map ProxyAddress HydraNode
   }
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)

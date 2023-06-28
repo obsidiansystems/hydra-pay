@@ -74,10 +74,29 @@ data CardanoCliCommand :: * -> * where
   CardanoCliCommand_GetTxId :: FilePath -> CardanoCliCommand (Either Text TxId)
   CardanoCliCommand_TxInExists :: TxInput -> CardanoCliCommand (Either Text Bool)
 
+  CardanoCliCommand_SignTx :: FilePath -> FilePath -> FilePath -> CardanoCliCommand (Either Text ())
+  CardanoCliCommand_WitnessTx :: FilePath -> FilePath -> FilePath -> CardanoCliCommand (Either Text ())
+  CardanoCliCommand_AssembleTx :: FilePath -> [FilePath] -> FilePath -> CardanoCliCommand (Either Text ())
+
 runCardanoCli :: (HasNodeInfo a, MonadIO m) => a -> CardanoCliCommand b -> m b
 runCardanoCli a command = do
   ensureNodeSocket a
   case command of
+    CardanoCliCommand_WitnessTx _ _ _ -> do
+      fmap (first T.pack) $ runExceptT $ do
+        str <- ExceptT $ eitherReadProcess cp
+        pure ()
+
+    CardanoCliCommand_AssembleTx _ _ _ -> do
+      fmap (first T.pack) $ runExceptT $ do
+        str <- ExceptT $ eitherReadProcess cp
+        pure ()
+
+    CardanoCliCommand_SignTx _ _ _ -> do
+      fmap (first T.pack) $ runExceptT $ do
+        str <- ExceptT $ eitherReadProcess cp
+        pure ()
+
     CardanoCliCommand_QueryTip -> do
       fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
@@ -135,14 +154,23 @@ queryTip = CardanoCliCommand_QueryTip
 getProtocolParameters :: CardanoCliCommand (Either Text Api.ProtocolParameters)
 getProtocolParameters = CardanoCliCommand_GetProtocolParams
 
-queryUTxOs :: Api.AddressAny -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))
-queryUTxOs = CardanoCliCommand_QueryUTXOs
+queryUTxOs :: ToAddress a => a -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))
+queryUTxOs = CardanoCliCommand_QueryUTXOs . toAddress
 
 keyGen :: KeyGenConfig -> CardanoCliCommand (Either Text (FilePath, FilePath))
 keyGen = CardanoCliCommand_KeyGen
 
 submitTxFile :: FilePath -> CardanoCliCommand (Either Text Text)
 submitTxFile = CardanoCliCommand_SubmitTxFile
+
+signTx :: FilePath -> FilePath -> FilePath -> CardanoCliCommand (Either Text ())
+signTx = CardanoCliCommand_SignTx
+
+witnessTx :: FilePath -> FilePath -> FilePath -> CardanoCliCommand (Either Text ())
+witnessTx = CardanoCliCommand_WitnessTx
+
+assembleTx :: FilePath -> [FilePath] -> FilePath -> CardanoCliCommand (Either Text ())
+assembleTx = CardanoCliCommand_AssembleTx
 
 getTxId :: FilePath -> CardanoCliCommand (Either Text TxId)
 getTxId = CardanoCliCommand_GetTxId
@@ -202,6 +230,39 @@ makeCliProcess ni command =
 
       CardanoCliCommand_GetTxId file ->
         base ["transaction", "txid", "--tx-file", file]
+
+      CardanoCliCommand_SignTx skPath txFile outFile -> do
+        base [ "transaction"
+             , "sign"
+             , "--tx-body-file"
+             , txFile
+             , "--signing-key-file"
+             , skPath
+             , "--out-file"
+             , outFile
+             ]
+      CardanoCliCommand_WitnessTx skPath txFile outFile -> do
+        base [ "transaction"
+             , "witness"
+             , "--signing-key-file"
+             , skPath
+             , "--tx-body-file"
+             , txFile
+             , "--out-file"
+             , outFile
+             ]
+
+      CardanoCliCommand_AssembleTx txFile witnessFiles outFile -> do
+        base $ [ "transaction"
+             , "assemble"
+             , "--tx-body-file"
+             , txFile
+             ]
+             <> (mconcat $ fmap (\x -> ["--witness-file", x]) witnessFiles)
+             <>
+             [ "--out-file"
+             , outFile
+             ]
 
     base = proc cardanoCliPath
 

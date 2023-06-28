@@ -100,7 +100,7 @@ data HydraNodeConfig = HydraNodeConfig
   , _hydraNodeConfig_logFile :: FilePath
   , _hydraNodeConfig_logErrFile :: FilePath
   , _hydraNodeConfig_threadLogFile :: FilePath
-  , _hydraNodeConfig_for :: Api.AddressAny
+  , _hydraNodeConfig_for :: ProxyAddress
   }
 
 data TwoPartyHeadConfig = TwoPartyHeadConfig
@@ -366,10 +366,10 @@ txOutAddressAndValue (Api.TxOut (Api.AddressInEra _ a) val _ _) = (Api.toAddress
 unsafeAnyNode :: RunningHydraHead -> HydraNode
 unsafeAnyNode = head . Map.elems . _hydraHead_handles
 
-getNodeFor :: RunningHydraHead -> Api.AddressAny -> Maybe HydraNode
+getNodeFor :: RunningHydraHead -> ProxyAddress -> Maybe HydraNode
 getNodeFor hHead addr = Map.lookup addr $ hHead ^. hydraHead_handles
 
-sendClientInput :: (MonadIO m) => RunningHydraHead -> Maybe Api.AddressAny -> ClientInput -> m (Either Text ())
+sendClientInput :: (MonadIO m) => RunningHydraHead -> Maybe ProxyAddress -> ClientInput -> m (Either Text ())
 sendClientInput runningHead mAddress input_ = liftIO $ do
   case mNode of
     Just node -> do
@@ -610,8 +610,8 @@ terminateRunningHead hVar =
         maybe (pure ()) hClose err
       killThread <=< atomically $ readTMVar thread
 
-getAddressUTxO :: (MonadIO m, HasLogger a, HasHydraHeadManager a) => a -> Int32 -> Api.AddressAny -> m (Either Text (Api.UTxO Api.BabbageEra))
-getAddressUTxO a hid addr = runExceptT $ do
+getAddressUTxO :: (MonadIO m, HasLogger a, HasHydraHeadManager a, ToAddress b) => a -> Int32 -> b -> m (Either Text (Api.UTxO Api.BabbageEra))
+getAddressUTxO a hid b = runExceptT $ do
   runningHeadVar <- ExceptT $ getRunningHead a hid
   chan <- ExceptT $ withTMVar runningHeadVar $ \rh -> do
     let node = unsafeAnyNode rh
@@ -630,6 +630,8 @@ getAddressUTxO a hid addr = runExceptT $ do
          Aeson.Error e -> pure $ Left $ "Failed to decode GetUTxOResponse: " <> T.pack e
       CommandFailed GetUTxO -> pure $ Left "GetUTxO: Command Failed"
       _ -> retry
+  where
+    addr = toAddress b
 
 addPaymentChannelTask' :: MonadBeam Postgres m => PaymentChannelReq -> m ()
 addPaymentChannelTask' payload = runInsert $ insert (Db._db_paymentChanTask Db.db) $

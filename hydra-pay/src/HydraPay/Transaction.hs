@@ -3,6 +3,7 @@
 
 module HydraPay.Transaction where
 
+import HydraPay.Types
 import Control.Lens ((^.), to)
 import Control.Monad
 import Control.Monad.IO.Class
@@ -57,5 +58,5 @@ mkEvalConfig a ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . from
   where
     ni = a ^. nodeInfo
 
-addressString :: Api.AddressAny -> String
-addressString = T.unpack . Api.serialiseAddress
+addressString :: ToAddress a => a -> String
+addressString = T.unpack . Api.serialiseAddress . toAddress

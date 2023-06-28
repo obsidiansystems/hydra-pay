@@ -68,15 +68,18 @@ findUTxOWithExactly target utxos =
     exactMatchesOnly = filterForExact utxos
     filterForExact = Map.take 1 . Map.filter (\x -> txOutValue x == target) . Api.unUTxO
 
+ada :: Integer -> Api.Lovelace
+ada x = fromIntegral $ x * 1000000
+
 txOutValue :: Api.TxOut Api.CtxUTxO Api.BabbageEra -> Api.Lovelace
 txOutValue (Api.TxOut _ (Api.TxOutValue _ value) _ _) = Api.selectLovelace value
 txOutValue _ = 0
 
-totalLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace = sum . fmap (txOutValue) . filter (not . txOutIsFuel) . Map.elems . Api.unUTxO
+totalLovelaceWithoutFuel :: Api.UTxO Api.BabbageEra -> Api.Lovelace
+totalLovelaceWithoutFuel = sum . fmap (txOutValue) . filter (not . txOutIsFuel) . Map.elems . Api.unUTxO
 
-totalLovelace' :: Api.UTxO Api.BabbageEra -> Api.Lovelace
-totalLovelace' = sum . fmap (txOutValue) . Map.elems . Api.unUTxO
+totalLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
+totalLovelace = sum . fmap (txOutValue) . Map.elems . Api.unUTxO
 
 totalFuelLovelace :: Api.UTxO Api.BabbageEra -> Api.Lovelace
 totalFuelLovelace = sum . fmap (txOutValue) . filter txOutIsFuel . Map.elems . Api.unUTxO
