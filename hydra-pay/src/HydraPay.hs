@@ -260,7 +260,10 @@ handleSubmitTx state l1Address tx = do
       setAvailability l1Address False
       eTx :: Either Text TxId <- submitTxCbor state tx
       case eTx of
-        Left err -> return $ Left err
+        Left err -> do
+          -- When error is encountered, ensure the L1 Address is available again
+          setAvailability l1Address True
+          return $ Left err
         Right txid -> do
           waitForTxInput state $ mkTxInput txid 0
           setAvailability l1Address True
