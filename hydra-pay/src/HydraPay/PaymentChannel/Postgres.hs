@@ -350,7 +350,7 @@ checkAddressAvailability :: MonadBeam Postgres m => Api.AddressAny -> m Bool
 checkAddressAvailability addr = do
   isAvail <- runSelectReturningOne $ select $ do
     aa <- all_ $ Db.db ^. Db.db_addressAvailability
-    guard_ (aa ^. Db.addressAvailability_layer1Address ==. val_ (T.pack $ show addr))
+    guard_ (aa ^. Db.addressAvailability_layer1Address ==. val_ (Api.serialiseAddress addr))
     pure $ aa ^. Db.addressAvailability_isAvailable
   case isAvail of
     Nothing -> return True
