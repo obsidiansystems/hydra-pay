@@ -254,7 +254,7 @@ handleChannelRefund state refundRequest = do
 
 handleSubmitTx :: MonadIO m => HydraPayState -> Text -> BS.ByteString -> m (Either Text Text)
 handleSubmitTx state l1Address tx = do
-  availability <- isAvailable l1Address
+  availability <- checkAddressAvailability l1Address
   case availability of
     True -> do
       setAvailability l1Address False
@@ -271,28 +271,26 @@ handleSubmitTx state l1Address tx = do
     False -> do
       return $ Left "Address resource currently unavailable. Please wait..."
   where
-    isAvailable :: MonadIO m => Text -> m Bool
-    isAvailable addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
-      lookupRes <- runSelectReturningList $ select $ do
+    queryAddressAvailability :: MonadIO m => Text -> m [DB.AddressAvailabilityT Identity]
+    queryAddressAvailability addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      runSelectReturningList $ select $ do
         aa <- all_ (DB.db ^. DB.db_addressAvailability)
         guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
         pure aa
+    checkAddressAvailability :: MonadIO m => Text -> m Bool
+    checkAddressAvailability addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      lookupRes <- queryAddressAvailability addr
       case lookupRes of
         [] -> return True
         res:_ -> return $ res ^. DB.addressAvailability_isAvailable
     setAvailability :: MonadIO m =>Text -> Bool -> m ()
     setAvailability addr avail = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
-      lookupRes <- runSelectReturningList $ select $ do
-        aa <- all_ (DB.db ^. DB.db_addressAvailability)
-        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
-        pure aa
+      lookupRes <- queryAddressAvailability l1Address
       case lookupRes of
         [] -> do
           _ <- runInsertReturningList $ insert (DB.db ^. DB.db_addressAvailability) $ insertExpressions
             [ DB.AddressAvailability default_ (val_ $ addr) (val_ $ False)
             ]
-          return ()
-
           return ()
         _:_ -> do
           _ <- runUpdate $
