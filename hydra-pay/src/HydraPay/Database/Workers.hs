@@ -38,6 +38,7 @@ data PaymentChannelReq
   | PaymentChannelReq_Join Int32 Text Api.Lovelace
   | PaymentChannelReq_SpinUpHead Int32
   | PaymentChannelReq_Cleanup Int32
+  | PaymentChannelReq_SubmitTxWork Text ByteString -- takes an L1 Address and a Tx
   deriving Generic
 
 data FundRequest = FundRequest

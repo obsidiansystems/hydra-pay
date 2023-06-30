@@ -145,6 +145,24 @@ instance Beamable (PrimaryKey ObservedCommitsT)
 
 type ObservedCommit = ObservedCommitsT Identity
 
+data AddressAvailabilityT f = AddressAvailability
+  { _addressAvailability_id :: C f (SqlSerial Int32)
+  , _addressAvailability_layer1Address :: C f Text
+  , _addressAvailability_isAvailable :: C f Bool
+  }
+  deriving (Generic)
+
+instance Beamable AddressAvailabilityT
+
+instance Table AddressAvailabilityT where
+  data PrimaryKey AddressAvailabilityT f = AddressAvailabilityId (C f (SqlSerial Int32))
+    deriving (Generic)
+  primaryKey = AddressAvailabilityId . _addressAvailability_id
+
+instance Beamable (PrimaryKey AddressAvailabilityT)
+
+type AddressAvailability = AddressAvailabilityT Identity
+
 data TransactionsT f = Transaction
   { _transaction_id :: C f (SqlSerial Int32)
   , _transaction_head :: PrimaryKey HydraHeadsT f
@@ -190,6 +208,7 @@ data Db f = Db
   , _db_transactions :: f (TableEntity TransactionsT)
   , _db_paymentChanTask :: f (TableEntity PaymentChannelTaskT)
   , _db_observedCommits :: f (TableEntity ObservedCommitsT)
+  , _db_addressAvailability :: f (TableEntity AddressAvailabilityT)
   }
   deriving (Generic)
 
@@ -207,6 +226,7 @@ makeLenses ''TransactionsT
 makeLenses ''HydraHeadsT
 makeLenses ''ProxiesT
 makeLenses ''ObservedCommitsT
+makeLenses ''AddressAvailabilityT
 makeLenses ''Db
 
 hydraHeadId :: HydraHead -> Int32

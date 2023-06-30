@@ -29,6 +29,7 @@ import HydraPay.Cardano.Node
 import HydraPay.Cardano.Hydra
 import HydraPay.Cardano.Hydra.Status
 import HydraPay.Database.Workers (RefundRequest(..))
+import HydraPay.PaymentChannel.Postgres (checkAddressAvailability)
 import HydraPay.Proxy
 import HydraPay.Transaction
 import qualified HydraPay.Database as DB
@@ -251,3 +252,50 @@ handleChannelRefund state refundRequest = do
     mayToEitherAddr = maybeToEither "Failed to deserialize to Any Address"
     eitherAddrDeserialise txt = fmap (first T.pack) $ runExceptT $
       ExceptT $ pure $ mayToEitherAddr $ Api.deserialiseAddress Api.AsAddressAny $ txt
+
+handleSubmitTx :: MonadIO m => HydraPayState -> Text -> BS.ByteString -> m (Either Text Text)
+handleSubmitTx state l1Address tx = do
+  case Api.deserialiseAddress Api.AsAddressAny l1Address of
+    Nothing -> return $ Left "handleSubmitTx: Could not deserialise address"
+    Just addr -> do
+      availability <- DB.runBeam (_hydraPay_databaseConnectionPool state) $ checkAddressAvailability addr
+      case availability of
+        True -> do
+          setAvailability l1Address False
+          eTx :: Either Text TxId <- submitTxCbor state tx
+          case eTx of
+            Left err -> do
+              -- When error is encountered, ensure the L1 Address is available again
+              setAvailability l1Address True
+              return $ Left err
+            Right txid -> do
+              _ <- waitForTxInput state $ mkTxInput txid 0
+              setAvailability l1Address True
+              return $ Right $ unTxId txid
+        False -> do
+          return $ Left "Address resource currently unavailable. Please wait..."
+  where
+    queryAddressAvailability :: MonadIO m => Text -> m [DB.AddressAvailabilityT Identity]
+    queryAddressAvailability addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      runSelectReturningList $ select $ do
+        aa <- all_ (DB.db ^. DB.db_addressAvailability)
+        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ addr)
+        pure aa
+
+    setAvailability :: MonadIO m =>Text -> Bool -> m ()
+    setAvailability addr avail = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
+      lookupRes <- queryAddressAvailability l1Address
+      case lookupRes of
+        [] -> do
+          _ <- runInsertReturningList $ insert (DB.db ^. DB.db_addressAvailability) $ insertExpressions
+            [ DB.AddressAvailability default_ (val_ $ addr) (val_ $ False)
+            ]
+          return ()
+        _:_ -> do
+          _ <- runUpdate $
+            update
+            (DB.db ^. DB.db_addressAvailability)
+            (\aa -> aa ^. DB.addressAvailability_isAvailable <-. val_ avail)
+            (\aa -> aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
+          return ()
+
