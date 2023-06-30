@@ -269,7 +269,7 @@ handleSubmitTx state l1Address tx = do
               setAvailability l1Address True
               return $ Left err
             Right txid -> do
-              waitForTxInput state $ mkTxInput txid 0
+              _ <- waitForTxInput state $ mkTxInput txid 0
               setAvailability l1Address True
               return $ Right $ unTxId txid
         False -> do
@@ -279,8 +279,9 @@ handleSubmitTx state l1Address tx = do
     queryAddressAvailability addr = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
       runSelectReturningList $ select $ do
         aa <- all_ (DB.db ^. DB.db_addressAvailability)
-        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ l1Address)
+        guard_ (aa ^. DB.addressAvailability_layer1Address ==. val_ addr)
         pure aa
+
     setAvailability :: MonadIO m =>Text -> Bool -> m ()
     setAvailability addr avail = DB.runBeam (_hydraPay_databaseConnectionPool state) $ do
       lookupRes <- queryAddressAvailability l1Address
