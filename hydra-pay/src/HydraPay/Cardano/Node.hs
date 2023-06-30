@@ -96,7 +96,6 @@ makeNodeProcess :: Handle -> Handle -> NodeConfig -> CreateProcess
 makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _) =
   cardanoCp { std_out = UseHandle outHandle
             , std_err = UseHandle errHandle
-            , delegate_ctlc = True
             }
   where
     cardanoCp = proc cardanoNodePath
