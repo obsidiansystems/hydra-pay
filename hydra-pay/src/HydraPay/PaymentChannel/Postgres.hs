@@ -285,7 +285,6 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (addOneDayInterval_ current_timestamp_)
                           (val_ PaymentChannelStatus_Submitting)
                           (val_ 0)
-                          (val_ False)
                         ]
     pure newHead
   pure $ primaryKey dbHead

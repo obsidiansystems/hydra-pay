@@ -112,7 +112,6 @@ data PaymentChannelsT f = PaymentChannel
   , _paymentChannel_expiry :: C f UTCTime
   , _paymentChannel_status :: C f PaymentChannelStatus
   , _paymentChannel_commits :: C f Int32
-  , _paymentChannel_shouldClose :: C f Bool
   }
   deriving (Generic)
 
