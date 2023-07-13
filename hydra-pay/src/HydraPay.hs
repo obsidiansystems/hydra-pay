@@ -9,7 +9,6 @@ import System.Directory
 import System.IO
 import System.IO.Temp
 
-import Control.Exception (catch)
 import Data.Aeson.Lens
 import Data.Bifunctor
 
@@ -49,6 +48,7 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import Cardano.Transaction hiding (TxId)
 import Cardano.Transaction.CardanoApi
 import Cardano.Transaction.Extras (evalRawNoSubmit)
+import Cardano.Transaction.Eval
 
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
@@ -99,20 +99,20 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
     withHydraHeadManager $ \manager -> do
       action $ HydraPayState ni pool l manager
 
-sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath
-    fmap (TxId . T.pack) $
-      eval cfg (payFuelTo fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
+    (fmap . fmap) (TxId . T.pack) $
+      evalEither cfg (payFuelTo fromAddr skPath toAddr amount)
 
 getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams hid addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a hid addr
-  ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
+  ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
     let cfg = mkEvalConfig a paramsPath
-    txLbs <- fmap LBS.pack $ evalTx cfg $ payToProxyTx addr lovelace proxyInfo
-    pure $ fmap (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
+    txLbs <- ExceptT $ (fmap . fmap) LBS.pack $ evalTxEither cfg $ payToProxyTx addr lovelace proxyInfo
+    ExceptT $ pure $ (fmap) (BS.pack . T.unpack) $ maybeToEither "Failed to decode cborhex" $ txLbs ^? key "cborHex" . _String
 
 assumeWitnessed :: BS.ByteString -> BS.ByteString
 assumeWitnessed bs = do
@@ -236,11 +236,13 @@ handleChannelRefund state refundRequest = do
           case ePparams of
             Left err -> return $ Left err
             Right pparams -> do
-              txid <- fanoutToL1Address state pparams hydraAddr (_refundRequest_signingKeyPath refundRequest) chainAddr $ _refundRequest_amount refundRequest
-              eRes <- runExceptT $ ExceptT $ waitForTxInput state $ mkTxInput txid 0
-              case eRes of
+              result <- runExceptT $ do
+                txid <- ExceptT $ fanoutToL1Address state pparams hydraAddr (_refundRequest_signingKeyPath refundRequest) chainAddr $ _refundRequest_amount refundRequest
+                eRes <- ExceptT $ waitForTxInput state $ mkTxInput txid 0
+                pure (eRes, txid)
+              case result of
                 Left txErr -> return $ Left txErr
-                Right _ -> do
+                Right (_, txid) -> do
                   -- Mark payment channel as closed
                   DB.runBeam (_hydraPay_databaseConnectionPool state) $ runUpdate $
                     update
