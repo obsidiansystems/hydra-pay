@@ -21,7 +21,6 @@ import System.IO
 import System.IO.Temp
 
 import HydraPay.Cardano.Node
-import HydraPay.Types (TxId(..))
 
 -- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
 withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
