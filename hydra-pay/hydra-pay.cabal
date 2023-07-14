@@ -74,7 +74,6 @@ library
     HydraPay.Cardano.Node
     HydraPay.Database
     HydraPay.Database.Workers
-    HydraPay.Host
     HydraPay.PaymentChannel.Postgres
     HydraPay.Proxy
     HydraPay.Transaction
