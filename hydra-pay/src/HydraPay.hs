@@ -50,6 +50,8 @@ import Cardano.Transaction.CardanoApi
 import Cardano.Transaction.Extras (evalRawNoSubmit)
 import Cardano.Transaction.Eval
 
+import qualified Network.HTTP.Client as HTTP
+
 import Data.Pool
 import Gargoyle.PostgreSQL.Connect
 import Database.Beam.Postgres
@@ -64,6 +66,7 @@ data HydraPayState = HydraPayState
   , _hydraPay_databaseConnectionPool :: Pool Connection
   , _hydraPay_logger :: Logger
   , _hydraPay_hydraHeadManager :: HydraHeadManager
+  , _hydraPay_httpManager :: HTTP.Manager
   }
 
 makeLenses ''HydraPayState
@@ -94,10 +97,11 @@ data HydraPayConfig = HydraPayConfig
 
 runHydraPay :: HydraPayConfig -> (HydraPayState -> IO a) -> IO a
 runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db $ \pool -> do
+  httpManager <- HTTP.newManager HTTP.defaultManagerSettings
   withResource pool DB.doAutomigrate
   withCardanoNode ncfg $ \ni -> do
     withHydraHeadManager $ \manager -> do
-      action $ HydraPayState ni pool l manager
+      action $ HydraPayState ni pool l manager httpManager
 
 sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
@@ -163,7 +167,7 @@ payFuelTo fromAddr skPath toAddr lovelace =
 
 payToProxyTx :: Api.AddressAny -> Int32 -> ProxyInfo -> Tx ()
 payToProxyTx addr lovelace proxy = do
-  Output {..} <- output (proxy ^. proxyInfo_address . to addressString) $ fromString $ show lovelace <> " lovelace"
+  Output {..} <- output (proxy ^. proxyInfo_address . to (addressString . unProxyAddress)) $ fromString $ show lovelace <> " lovelace"
   void $ selectInputs oValue addrStr
   changeAddress addrStr
   void $ balanceNonAdaAssets addrStr

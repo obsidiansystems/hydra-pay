@@ -3,6 +3,7 @@
 
 module HydraPay.Transaction where
 
+import HydraPay.Types
 import Control.Lens ((^.), to)
 import Control.Monad
 import Control.Monad.IO.Class
@@ -20,7 +21,6 @@ import System.IO
 import System.IO.Temp
 
 import HydraPay.Cardano.Node
-import HydraPay.Types (TxId(..))
 
 -- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
 withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
@@ -57,5 +57,5 @@ mkEvalConfig a ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . from
   where
     ni = a ^. nodeInfo
 
-addressString :: Api.AddressAny -> String
-addressString = T.unpack . Api.serialiseAddress
+addressString :: ToAddress a => a -> String
+addressString = T.unpack . Api.serialiseAddress . toAddress

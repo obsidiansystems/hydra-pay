@@ -251,7 +251,6 @@ getHydraHead headId = do
 
 joinPaymentChannel :: (MonadBeam Postgres m) => Int32 -> Int32 -> m ()
 joinPaymentChannel headId amount = do
-  -- TODO(skylar): Do we 'try' to get a useful error message here?
     runUpdate $
       update
       (Db.db ^. Db.db_heads)

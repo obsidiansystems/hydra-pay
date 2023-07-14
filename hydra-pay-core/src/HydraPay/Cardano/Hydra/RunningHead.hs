@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module HydraPay.Cardano.Hydra.RunningHead where
 
 import Control.Concurrent
@@ -6,19 +8,20 @@ import Data.Map (Map)
 import System.IO
 import System.Process
 
+import HydraPay.Types
 import HydraPay.Cardano.Hydra.Api
 import HydraPay.PortRange
-import qualified Cardano.Api as Api
 
 -- | A running Hydra Head
 data RunningHydraHead = RunningHydraHead
-  { _hydraHead_handles :: Map Api.AddressAny HydraNode
+  { _hydraHead_handles :: Map ProxyAddress HydraNode
   }
 
 type ProcessInfo = (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 
 data HydraNode = HydraNode
-  { _hydraNode_apiPort :: Port
+  { _hydraNode_port :: Port
+  , _hydraNode_apiPort :: Port
   , _hydraNode_processInfo :: TMVar ProcessInfo
   , _hydraNode_communicationThread :: TMVar ThreadId
   , _hydraNode_status :: TVar HydraNodeStatus
@@ -40,5 +43,3 @@ data HydraNodeRequest = HydraNodeRequest
   , _hydraNodeRequest_clientInput :: ClientInput
   , _hydraNodeRequest_mailbox :: TMVar ServerOutput
   }
-
-
