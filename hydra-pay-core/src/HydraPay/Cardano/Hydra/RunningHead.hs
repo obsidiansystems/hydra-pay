@@ -2,7 +2,6 @@
 
 module HydraPay.Cardano.Hydra.RunningHead where
 
-import Control.Lens.TH
 import Control.Concurrent
 import Control.Concurrent.STM
 import Data.Map (Map)
@@ -12,7 +11,6 @@ import System.Process
 import HydraPay.Types
 import HydraPay.Cardano.Hydra.Api
 import HydraPay.PortRange
-import qualified Cardano.Api as Api
 
 -- | A running Hydra Head
 data RunningHydraHead = RunningHydraHead

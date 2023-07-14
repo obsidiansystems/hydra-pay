@@ -84,17 +84,17 @@ runCardanoCli a command = do
   case command of
     CardanoCliCommand_WitnessTx _ _ _ -> do
       fmap (first T.pack) $ runExceptT $ do
-        str <- ExceptT $ eitherReadProcess cp
+        _ <- ExceptT $ eitherReadProcess cp
         pure ()
 
     CardanoCliCommand_AssembleTx _ _ _ -> do
       fmap (first T.pack) $ runExceptT $ do
-        str <- ExceptT $ eitherReadProcess cp
+        _ <- ExceptT $ eitherReadProcess cp
         pure ()
 
     CardanoCliCommand_SignTx _ _ _ -> do
       fmap (first T.pack) $ runExceptT $ do
-        str <- ExceptT $ eitherReadProcess cp
+        _ <- ExceptT $ eitherReadProcess cp
         pure ()
 
     CardanoCliCommand_QueryTip -> do
