@@ -529,7 +529,7 @@ runClient = do
 
 clientRequest :: InstanceRequest -> IO ()
 clientRequest req = do
-  tryRes :: (Either SomeException ()) <- try $ WS.runClient "localhost" 8010 "/" $ \conn -> do
+  tryRes :: (Either SomeException ()) <- try $ WS.runClient "127.0.0.1" 8010 "/" $ \conn -> do
     WS.sendDataMessage conn $ WS.Text (Aeson.encode req) Nothing
     payload <- WS.receiveDataMessage conn
     WS.sendClose conn $ ("We are done here" :: T.Text)
@@ -647,7 +647,7 @@ getLockTx state name addr amount = runExceptT $ do
         Just commitUtxo -> do
           let
             draftUtxo = massageUtxo commitUtxo
-          initialRequest <- adapter $ HTTP.parseRequest $ "http://localhost:" <> show port <> "/commit"
+          initialRequest <- adapter $ HTTP.parseRequest $ "http://127.0.0.1:" <> show port <> "/commit"
           let
             request =
               HTTP.setRequestManager manager $ initialRequest
