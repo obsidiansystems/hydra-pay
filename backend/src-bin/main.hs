@@ -3,7 +3,6 @@ import Frontend
 import Obelisk.Backend
 import Snap.Internal.Http.Server.Config
 import ParseConfig
-import HydraPay.Config
 import Data.ByteString.UTF8 as BSU
 
 main :: IO ()

@@ -23,6 +23,7 @@ data PaymentChannelConfig = PaymentChannelConfig
   , _paymentChannelConfig_second :: Api.AddressAny
   , _paymentChannelConfig_commitAmount :: Int32
   , _paymentChannelConfig_hydraChainConfig :: HydraChainConfig
+  , _paymentChannelConfig_useProxies :: Bool
   }
 
 makeLenses ''PaymentChannelConfig
