@@ -58,6 +58,9 @@ library
                , cryptonite
                , base64-bytestring
                , optparse-applicative
+               , hydra-pay
+               , cardano-api
+               , hydra-pay-core
 
   default-extensions:
     OverloadedStrings
@@ -71,16 +74,11 @@ library
 
   exposed-modules:
     Backend
-    ParseConfig
-    HydraPay
-    HydraPay.Server
-    HydraPay.Network
-    HydraPay.Logging
+
   other-modules:
     Paths
-    Hydra.Devnet
-    CardanoNodeInfo
-    
+    ParseConfig
+
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits
 
 executable backend

@@ -8,6 +8,7 @@ import Data.Maybe
 import Data.Text (Text)
 import Data.Traversable
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import Control.Lens hiding ((<.))
 import Control.Monad
@@ -50,8 +51,7 @@ getPaymentChannelsInfo a addr = Db.runBeam a $ do
       pure observedCommits_
     let
       pinfo = dbPaymentChannelToInfo addr head_ chan commits
-      -- head_ chan commits 
-    pure $ Map.singleton (pinfo ^. paymentChannelInfo_id) pinfo 
+    pure $ Map.singleton (pinfo ^. paymentChannelInfo_id) pinfo
 
       where
     addrStr = Api.serialiseAddress addr
@@ -140,15 +140,20 @@ getPaymentChannelDetails a addr pcId = do
         pure (currentBalance, infos)
 
 -- | Retrieves payment channels requests that have expired along with address and balance information
-getExpiredPaymentChannels :: (MonadIO m, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([RefundRequest])
+getExpiredPaymentChannels :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([RefundRequest])
 getExpiredPaymentChannels a now = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
     proxies <- join_ (Db.db ^. Db.db_proxies) (\proxy -> (head_ ^. Db.hydraHead_first) ==. (proxy ^. Db.proxy_chainAddress))
-    guard_ (paymentChannel ^. Db.paymentChannel_status <. val_ PaymentChannelStatus_Opening &&. paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
+    guard_ (paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
     pure (head_, paymentChannel, proxies)
-  forM results $ \(head', _, prox) -> return $ RefundRequest
+
+  let
+    resultsFiltered =
+      filter (\(head', p, prox) -> p ^. Db.paymentChannel_status < PaymentChannelStatus_Open) results
+
+  forM resultsFiltered $ \(head', _, prox) -> return $ RefundRequest
     { _refundRequest_hydraHead = unSerial $ Db._hydraHead_id head'
     , _refundRequest_hydraAddress = Db._proxy_hydraAddress prox
     , _refundRequest_signingKeyPath = T.unpack $ Db._proxy_signingKeyPath prox
@@ -258,7 +263,7 @@ joinPaymentChannel headId amount = do
       (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
 
 createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Db.HeadId
-createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
+createPaymentChannel a (PaymentChannelConfig name first second amount chain useProxies) = do
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
   dbHead <- do
@@ -274,6 +279,7 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ Nothing)
                           (val_ HydraHeadStatus_Created)
                           (val_ False)
+                          (val_ useProxies)
                         ]
     _ <- runInsertReturningList $ insert (Db.db ^. Db.db_paymentChannels) $
       insertExpressions [ Db.PaymentChannel

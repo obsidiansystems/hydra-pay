@@ -36,6 +36,7 @@ data HydraHeadsT f = HydraHead
   , _hydraHead_chainId :: C f (Maybe Text)
   , _hydraHead_status :: C f HydraHeadStatus
   , _hydraHead_shouldClose :: C f Bool
+  , _hydraHead_usesProxies :: C f Bool
   }
   deriving (Generic)
 
