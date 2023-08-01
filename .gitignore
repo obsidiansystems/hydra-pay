@@ -22,3 +22,12 @@ static.out
 /config/backend/api-key
 /keystore/
 /node-logs/
+/bank.addr
+/cardano-node-db/
+/hydra-head-persistence/
+/hydra-node-logs/
+/hydra-pay-db/
+/log/
+/logs/
+/proxy-keys/
+/worker-thread.error.log

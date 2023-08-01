@@ -9,7 +9,6 @@ import System.Which
 import System.Process
 import System.FilePath
 import System.Directory
-
 import Data.Int
 import Data.Word
 import Data.Text (Text)
@@ -21,8 +20,6 @@ import Data.Aeson.Lens
 import qualified Data.Text as T
 import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Aeson as Aeson
-
 import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Proxy
@@ -35,16 +32,13 @@ import HydraPay.PaymentChannel.Postgres
 import HydraPay.PaymentChannel (PaymentChannelStatus(..))
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
-import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus)
+import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus, Party, utxo)
 import qualified HydraPay.Database as Db
-
 import qualified Cardano.Api as Api
-
 import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
-
 import Control.Lens
 import Control.Exception
 import Control.Concurrent
@@ -54,6 +48,7 @@ import Control.Concurrent.STM
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
+import Cardano.Api.Extras
 
 
 import Network.WebSockets (runClient, sendDataMessage, withPingThread)
@@ -103,9 +98,20 @@ data HydraNodeConfig = HydraNodeConfig
   , _hydraNodeConfig_for :: ProxyAddress
   }
 
+data Party =
+  ProxyParty ProxyInfo | NonProxyParty Api.AddressAny ProxyInfo
+
+getPartyProxyInfo :: Party -> ProxyInfo
+getPartyProxyInfo (ProxyParty p) = p
+getPartyProxyInfo (NonProxyParty _ p) = p
+
+getPartyAddress :: Party -> ProxyAddress
+getPartyAddress (ProxyParty p) = p ^. proxyInfo_address
+getPartyAddress (NonProxyParty a _) = ProxyAddress a
+
 data TwoPartyHeadConfig = TwoPartyHeadConfig
-  { _twoPartyHeadConfig_firstParty :: ProxyInfo
-  , _twoPartyHeadConfig_secondParty :: ProxyInfo
+  { _twoPartyHeadConfig_firstParty :: Party
+  , _twoPartyHeadConfig_secondParty :: Party
   , _twoPartyHeadConfig_firstPersistDir :: FilePath
   , _twoPartyHeadConfig_secondPersistDir :: FilePath
   , _twoPartyHeadConfig_firstLogOutFile :: FilePath
@@ -136,11 +142,6 @@ commsThreadIsHeadStateReporter cfg =
   -- NOTE currently we just make the first node the state reported
   cfg ^. commsThreadConfig_hydraNodeConfig . hydraNodeConfig_nodeId . to (==1)
 
--- | Transaction ID on preview from the Hydra 0.10.0 release
--- https://github.com/input-output-hk/hydra/releases/tag/0.10.0
-previewScriptTxId :: TxId
-previewScriptTxId = TxId "a2c5979c4ee91637cf7d12b56d64fecc88aab3e46010193355e654db47348d87"
-
 loopbackAddress :: String
 loopbackAddress = "127.0.0.1"
 
@@ -151,7 +152,12 @@ hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")
 
 mkTwoPartyHydraNodeConfigs :: (HasNodeInfo a, HasLogger a, MonadIO m) => a -> TxId -> PortRange -> HydraChainConfig -> TwoPartyHeadConfig -> m (Either Text [HydraNodeConfig])
-mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparams) (TwoPartyHeadConfig p1 p2 p1dir p2dir p1log p2log p1LogErr p2LogErr p1tlog p2tlog) = runExceptT $ do
+mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparams) (TwoPartyHeadConfig party1 party2 p1dir p2dir p1log p2log p1LogErr p2LogErr p1tlog p2tlog) = runExceptT $ do
+  let
+    p1 = getPartyProxyInfo party1
+    p2 = getPartyProxyInfo party2
+    p1For = getPartyAddress party1
+    p2For = getPartyAddress party2
   pa <- ExceptT $ allocatePorts a prange 6
   case allocatedPorts pa of
     [firstPort, firstApiPort, firstMonitorPort, secondPort, secondApiPort, secondMonitorPort] -> do
@@ -174,7 +180,7 @@ mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparam
              p1log
              p1LogErr
              p1tlog
-             (p1 ^. proxyInfo_address)
+             p1For
            , HydraNodeConfig
              2
              secondPort
@@ -194,7 +200,7 @@ mkTwoPartyHydraNodeConfigs a scriptsTxId prange (HydraChainConfig genesis pparam
              p2log
              p2LogErr
              p2tlog
-             (p2 ^. proxyInfo_address)
+             p2For
            ]
     _ -> throwError "Failed to allocate ports"
   where
@@ -322,6 +328,7 @@ runHydraHead a headId configs = liftIO $ do
                                         current_timestamp_
                                         (val_ $ Db.HeadId $ SqlSerial headId)
                                       ])
+                                    -- joinPaymentChannel headId
                                     pure ()
 
                             Nothing -> do
@@ -335,6 +342,7 @@ runHydraHead a headId configs = liftIO $ do
                         atomically $ writeTChan outputs $ serverOutput
 
                     Left _ -> do
+
                       logInfo a loggerName $ "Failed to parse payload: " <> tShow payload
 
                 case result of
@@ -368,6 +376,12 @@ unsafeAnyNode = head . Map.elems . _hydraHead_handles
 
 getNodeFor :: RunningHydraHead -> ProxyAddress -> Maybe HydraNode
 getNodeFor hHead addr = Map.lookup addr $ hHead ^. hydraHead_handles
+
+getNodeFor' :: RunningHydraHead -> ProxyAddress -> Either Text HydraNode
+getNodeFor' hHead addr =
+  case Map.lookup addr $ hHead ^. hydraHead_handles of
+    Nothing -> Left $ "Failed to get node for " <> Api.serialiseAddress addr
+    Just node -> Right node
 
 sendClientInput :: (MonadIO m) => RunningHydraHead -> Maybe ProxyAddress -> ClientInput -> m (Either Text ())
 sendClientInput runningHead mAddress input_ = liftIO $ do
@@ -476,6 +490,11 @@ deriveConfigFromDbHead a hh = runExceptT $ do
   secondProxy <- ExceptT $ queryProxyInfo a (Db.hydraHeadId hh) second
 
   let
+    (firstParty, secondParty) =
+      case hh ^. Db.hydraHead_usesProxies of
+        True -> (ProxyParty firstProxy, ProxyParty secondProxy)
+        False -> (NonProxyParty (unsafeToAddressAny $ hh ^. Db.hydraHead_first) firstProxy, NonProxyParty (unsafeToAddressAny $ hh ^. Db.hydraHead_second) secondProxy)
+
     suffixFirst = (T.unpack $ (tShow $ Db.hydraHeadId hh) <> "-" <> T.takeEnd 8 firstText)
     suffixSecond = (T.unpack $ (tShow $ Db.hydraHeadId hh) <> "-" <> T.takeEnd 8 secondText)
     persistFirst = headPersistDir </> suffixFirst
@@ -488,8 +507,8 @@ deriveConfigFromDbHead a hh = runExceptT $ do
     tlogSecond = headNodeLogsDir </> (suffixSecond <> ".thread.log")
 
     headConfig = TwoPartyHeadConfig
-      firstProxy
-      secondProxy
+      firstParty
+      secondParty
       persistFirst
       persistSecond
       logFirst
@@ -503,7 +522,7 @@ deriveConfigFromDbHead a hh = runExceptT $ do
     createDirectoryIfMissing True persistFirst
     createDirectoryIfMissing True persistSecond
 
-  nodeConfigs <- ExceptT $ mkTwoPartyHydraNodeConfigs a previewScriptTxId (a ^. portRange) chain headConfig
+  nodeConfigs <- ExceptT $ mkTwoPartyHydraNodeConfigs a (a ^. nodeInfo . nodeInfo_hydraScriptsTxId) (a ^. portRange) chain headConfig
   pure nodeConfigs
 
 headPersistDir :: FilePath
@@ -614,22 +633,20 @@ getAddressUTxO :: (MonadIO m, HasLogger a, HasHydraHeadManager a, ToAddress b) =
 getAddressUTxO a hid b = runExceptT $ do
   runningHeadVar <- ExceptT $ getRunningHead a hid
   chan <- ExceptT $ withTMVar runningHeadVar $ \rh -> do
-    let node = unsafeAnyNode rh
+
     result <- runExceptT $ do
+      node <- ExceptT $ pure $ getNodeFor' rh $ ProxyAddress addr
       output <- liftIO $ atomically $ dupTChan $ node ^. hydraNode_outputs
-      ExceptT $ sendClientInput rh Nothing $ GetUTxO
+      ExceptT $ sendClientInput rh (Just $ ProxyAddress addr) $ GetUTxO
       pure output
     pure (rh, result)
 
   ExceptT $ liftIO $ atomically $ do
     o <- readTChan chan
     case o of
-      GetUTxOResponse _ utxoJson ->
-       case Aeson.fromJSON utxoJson of
-         Aeson.Success utxo' -> pure $ Right $ filterUTxOByAddress addr utxo'
-         Aeson.Error e -> pure $ Left $ "Failed to decode GetUTxOResponse: " <> T.pack e
+      GetUTxOResponse _ utxo -> pure $ Right $ filterUTxOByAddress addr utxo
       CommandFailed GetUTxO -> pure $ Left "GetUTxO: Command Failed"
-      _ -> retry
+      x -> pure $ Left $ "Got something else: " <> tShow x
   where
     addr = toAddress b
 

@@ -82,13 +82,6 @@ instance FromJSON DraftCommitTxResponse where
     hex <- o .: "cborHex"
     pure $ DraftCommitTxResponse hex
 
--- instance FromJSON DraftCommitTxResponse where
---   parseJSON v = do
---     env <- parseJSON v
---     case Api.deserialiseFromTextEnvelope (Api.proxyToAsType Proxy) env of
---       Left e -> fail $ show e
---       Right tx -> pure $ DraftCommitTxResponse tx
-
 massageUtxo :: Api.UTxO Api.BabbageEra -> UTxO' TxOutWithWitness
 massageUtxo utxo =
   UTxO $ fmap (flip TxOutWithWitness Nothing) $ Api.unUTxO utxo

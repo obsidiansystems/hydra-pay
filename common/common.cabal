@@ -41,7 +41,7 @@ library
     Hydra.ServerOutput
     Hydra.ClientInput
     Hydra.Snapshot
-    HydraPay.Api
-    HydraPay.Config
+    -- HydraPay.Api
+    -- HydraPay.Config
 
   ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -fno-show-valid-hole-fits

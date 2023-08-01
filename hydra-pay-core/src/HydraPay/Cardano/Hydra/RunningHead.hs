@@ -35,7 +35,7 @@ data HydraNodeStatus
   | HydraNodeStatus_Replaying
   | HydraNodeStatus_Replayed
   | HydraNodeStatus_PeersConnected
-  | HydraNodeStatus_Closed -- ^ TODO do we need this? Should we be removing this node after it is close? But what about if we haven't fanned out yet
+  | HydraNodeStatus_Closed
   deriving (Eq, Show)
 
 data HydraNodeRequest = HydraNodeRequest

@@ -1,5 +1,5 @@
 name:          hydra-pay
-version:       0.1
+version:       1.0.0
 cabal-version: >=1.10
 build-type:    Simple
 
@@ -44,6 +44,11 @@ library
     , which
     , async
     , http-client
+    , http-conduit
+    , snap-server
+    , websockets-snap
+    , optparse-applicative
+    , cardano-ledger-core
 
   default-extensions:
     ConstraintKinds
@@ -67,7 +72,10 @@ library
   exposed-modules:
     Cardano.Transaction.CardanoApi
     Cardano.Transaction.Extras
+    Cardano.Api.Extras
     HydraPay
+    HydraPay.Config
+    HydraPay.Path
     HydraPay.Cardano.Cli
     HydraPay.Cardano.Hydra
     HydraPay.Cardano.Hydra.Tools
@@ -76,10 +84,24 @@ library
     HydraPay.Database.Workers
     HydraPay.PaymentChannel.Postgres
     HydraPay.Proxy
+    HydraPay.Bank
     HydraPay.Transaction
     HydraPay.Watch
     HydraPay.Worker
+    HydraPay.State
+    HydraPay.Api
+    HydraPay.Instance
+    HydraPay.Client
 
   ghc-options:
     -Wall -Wredundant-constraints -Wincomplete-uni-patterns
     -Wincomplete-record-updates -O -fno-show-valid-hole-fits
+
+executable hydra-pay
+  main-is: main.hs
+  hs-source-dirs: src-bin
+  ghc-options: -Wall -Wredundant-constraints -Wincomplete-uni-patterns -Wincomplete-record-updates -O -threaded -fno-show-valid-hole-fits
+  if impl(ghcjs)
+    buildable: False
+  build-depends: base
+               , hydra-pay
