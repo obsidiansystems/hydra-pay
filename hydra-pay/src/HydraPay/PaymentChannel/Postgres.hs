@@ -8,27 +8,21 @@ import Data.Maybe
 import Data.Text (Text)
 import Data.Traversable
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
-
 import Control.Lens hiding ((<.))
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
-
 import HydraPay.Logging
 import HydraPay.PaymentChannel
 import HydraPay.Cardano.Hydra.ChainConfig
 import HydraPay.Cardano.Hydra.Status
 import HydraPay.Database.Workers (RefundRequest(..))
 import HydraPay.Utils
-
 import Data.Map (Map)
 import qualified Data.Map as Map
-
 import qualified Cardano.Api as Api
 import qualified HydraPay.Database as Db
-
 import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
@@ -140,7 +134,7 @@ getPaymentChannelDetails a addr pcId = do
         pure (currentBalance, infos)
 
 -- | Retrieves payment channels requests that have expired along with address and balance information
-getExpiredPaymentChannels :: (MonadIO m, HasLogger a, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([RefundRequest])
+getExpiredPaymentChannels :: (MonadIO m, Db.HasDbConnectionPool a) => a -> UTCTime -> m ([RefundRequest])
 getExpiredPaymentChannels a now = do
   results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
@@ -151,7 +145,7 @@ getExpiredPaymentChannels a now = do
 
   let
     resultsFiltered =
-      filter (\(head', p, prox) -> p ^. Db.paymentChannel_status < PaymentChannelStatus_Open) results
+      filter (\(_, p, _) -> p ^. Db.paymentChannel_status < PaymentChannelStatus_Open) results
 
   forM resultsFiltered $ \(head', _, prox) -> return $ RefundRequest
     { _refundRequest_hydraHead = unSerial $ Db._hydraHead_id head'

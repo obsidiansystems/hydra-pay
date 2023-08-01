@@ -13,13 +13,12 @@ import HydraPay.Database.Workers
 import Prelude hiding (log)
 
 import Cardano.Api.Extras
-import Control.Concurrent (forkIO, killThread, threadDelay, ThreadId(..))
+import Control.Concurrent (forkIO, killThread, threadDelay)
 import Cardano.Transaction
 import Cardano.Transaction.Eval
 import Control.Lens ((^.), (^?), to, view)
 import Control.Monad
 import Control.Monad.Error.Class
-import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
 import qualified Data.Aeson as Aeson
 import Data.Aeson.Lens (key, _String)
@@ -29,18 +28,14 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.Foldable
 import Data.Int (Int32)
 import Data.Pool (Pool, withResource)
-import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import System.IO
 import System.IO.Temp
 import Data.Time
 import Data.Traversable
-import Database.Beam
 import Database.Beam.Backend.SQL.BeamExtensions (SqlSerial(..))
-import Database.Beam.Postgres
 import qualified Database.Beam.Postgres as Pg
-import Rhyolite.DB.Beam.Types (WrapColumnar(..))
 import Rhyolite.Task.Beam.Worker
 
 -- import Backend.App
@@ -50,7 +45,6 @@ import HydraPay.Bank
 import HydraPay.Cardano.Hydra.Api.ClientInput as CI
 import HydraPay.Database
 import qualified HydraPay.Database as Db
-import HydraPay.Database.Workers
 import HydraPay.Proxy
 import HydraPay.Utils
 import HydraPay.Logging
@@ -60,7 +54,6 @@ import HydraPay.Cardano.Hydra.Status
 import HydraPay.PaymentChannel.Postgres
 import HydraPay.Transaction
 import HydraPay.Types
-import HydraPay.State
 
 import Control.Exception
 
@@ -243,7 +236,7 @@ spawnWorkers pool state = do
 
 -- This worker searches for refunds and creates task worker requests for them
 watchRefundTasks :: MonadIO m => Pool Pg.Connection -> HydraPayState -> m (IO ())
-watchRefundTasks pool state = do
+watchRefundTasks _ state = do
   tid <- liftIO $ forkIO $ forever $ do
     now <- getCurrentTime
     _ <- Db.runBeam state $ runExceptT $ do
@@ -308,7 +301,6 @@ paymentChannelWorker state conn workerId = taskWorkerWithoutHasRun conn (_db_pay
         _ <- ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
           let
             cfg = mkEvalConfig state paramsPath
-            bankStr = bank ^. bank_address . to addressString
 
           cleanupTx <- ExceptT $ (fmap . fmap) (TxId . T.pack) $ evalEither cfg $ do
             toFirst <- fmap oValue $ output firstAddrStr $ mkLovelaceValue $ fromIntegral $ firstInternalTotal - 1000000
@@ -318,7 +310,7 @@ paymentChannelWorker state conn workerId = taskWorkerWithoutHasRun conn (_db_pay
             changeAddress firstAddrStr
             sign $ firstInfo ^. proxyInfo_internalWalletSigningKey
             sign $ secondInfo ^. proxyInfo_internalWalletSigningKey
-          waitForTxInput state $ mkTxInput cleanupTx 0
+          _ <- waitForTxInput state $ mkTxInput cleanupTx 0
           untrackRunningHead state headId
           Db.runBeam state $ updateHydraHeadStatusQ headId $ HydraHeadStatus_Done
         pure ()
