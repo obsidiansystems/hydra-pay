@@ -4,10 +4,12 @@ This project's release branch is `master`. This log is written from the perspect
 
 ### Version v1.0.0
 
+* Extend the instance executable to act as client
 * *Breaking Change* Reduce dependencies
 * *Breaking Change* Unify features of core libraries and application
 * Introduce instances
 * Make proxies optional
+* Ensure all processes are correctly bracketed on close
 * Payment channel first API
 * Integrate external commit
 * *Breaking Change* Bump to hydra 0.11.0
