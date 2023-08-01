@@ -1,6 +1,5 @@
 (builtins.mapAttrs (system: _: (import ./. { inherit system; }).hydra-pay)
   { "x86_64-linux" = null;
-    "x86_64-darwin" = null;
   })
 //
 (let
