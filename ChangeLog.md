@@ -5,10 +5,12 @@ branch: when changes hit `master`, they are considered released.
 
 ### Version v1.0.0
 
+* Extend the instance executable to act as client
 * Reduce dependencies
 * Unify features of core libraries and application
 * Introduce instances
 * Make proxies optional
+* Ensure all processes are correctly bracketed on close
 * Payment channel first API
 * Integrate external commit
 * Bump to hydra 0.11.0
