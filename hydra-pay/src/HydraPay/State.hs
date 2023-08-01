@@ -4,6 +4,7 @@
 
 module HydraPay.State where
 
+import Data.Pool
 import Data.Int
 import Control.Lens
 import Data.Bifunctor (first)
@@ -29,9 +30,6 @@ import HydraPay.Cardano.Node
 import Data.Aeson.Lens
 import HydraPay.Transaction
 import HydraPay.Cardano.Hydra
-import Data.Pool (Pool, withResource)
-import Database.Beam.Postgres
-import qualified Database.Beam.Postgres as Pg
 import HydraPay.Logging
 import HydraPay.Proxy
 import HydraPay.PortRange
@@ -53,7 +51,6 @@ import qualified Cardano.Api.Shelley as Api
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
 import qualified Network.HTTP.Client as HTTP
-import qualified Network.HTTP.Simple as HTTP
 
 hydraNodePath :: FilePath
 hydraNodePath = $(staticWhich "hydra-node")

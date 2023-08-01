@@ -5,6 +5,7 @@ module HydraPay.Cardano.Node where
 import Data.Int
 import qualified Data.Text as T
 
+import HydraPay.Types
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath
 import System.IO
@@ -31,6 +32,7 @@ data NodeConfig = NodeConfig
   , _nodeConfig_socketPath :: FilePath
   , _nodeConfig_topology :: FilePath
   , _nodeConfig_magic :: Int32
+  , _nodeConfig_hydraScriptsTxId :: TxId
   }
   deriving (Eq, Show)
 
@@ -40,6 +42,7 @@ data NodeInfo = NodeInfo
   { _nodeInfo_socketPath :: FilePath
   , _nodeInfo_magic :: Int32
   , _nodeInfo_socketReady :: TMVar ()
+  , _nodeInfo_hydraScriptsTxId :: TxId
   }
   deriving (Eq)
 
@@ -80,7 +83,7 @@ withCardanoNode cfg action = do
       withCreateProcess (makeNodeProcess outHandle errHandle cfg) $ \_ _ _ ph -> do
         ready <- newEmptyTMVarIO
         let
-          ninfo = NodeInfo (cfg ^. nodeConfig_socketPath) (cfg ^. nodeConfig_magic) ready
+          ninfo = NodeInfo (cfg ^. nodeConfig_socketPath) (cfg ^. nodeConfig_magic) ready (cfg ^. nodeConfig_hydraScriptsTxId)
           (path, file) = pathAndFile $ ninfo ^. nodeInfo_socketPath
 
         -- Fork the FRP layer so we can still run the action
@@ -97,7 +100,7 @@ withCardanoNode cfg action = do
         action ninfo `finally` (killThread socketWatchThreadId)
 
 makeNodeProcess :: Handle -> Handle -> NodeConfig -> CreateProcess
-makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _) =
+makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _ _) =
   cardanoCp { std_out = UseHandle outHandle
             , std_err = UseHandle errHandle
             }

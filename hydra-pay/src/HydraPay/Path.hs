@@ -28,3 +28,15 @@ previewChainConfig = "config/backend/preview/config.json"
 
 previewChainTopology :: FilePath
 previewChainTopology = "config/backend/preview/topology.json"
+
+preprodChainConfig :: FilePath
+preprodChainConfig = "config/preprod/config.json"
+
+preprodChainTopology :: FilePath
+preprodChainTopology = "config/preprod/topology.json"
+
+mainnetChainConfig :: FilePath
+mainnetChainConfig = "config/mainnet/config.json"
+
+mainnetChainTopology :: FilePath
+mainnetChainTopology = "config/mainnet/topology.json"

@@ -1,5 +1,5 @@
 name:          hydra-pay
-version:       0.1
+version:       1.0.0
 cabal-version: >=1.10
 build-type:    Simple
 
@@ -89,6 +89,9 @@ library
     HydraPay.Watch
     HydraPay.Worker
     HydraPay.State
+    HydraPay.Api
+    HydraPay.Instance
+    HydraPay.Client
 
   ghc-options:
     -Wall -Wredundant-constraints -Wincomplete-uni-patterns

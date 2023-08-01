@@ -9,7 +9,6 @@ import System.Which
 import System.Process
 import System.FilePath
 import System.Directory
-
 import Data.Int
 import Data.Word
 import Data.Text (Text)
@@ -21,8 +20,6 @@ import Data.Aeson.Lens
 import qualified Data.Text as T
 import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Aeson as Aeson
-
 import HydraPay.Types
 import HydraPay.Utils
 import HydraPay.Proxy
@@ -35,16 +32,13 @@ import HydraPay.PaymentChannel.Postgres
 import HydraPay.PaymentChannel (PaymentChannelStatus(..))
 import HydraPay.PortRange
 import HydraPay.Cardano.Hydra.RunningHead
-import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus, Party)
+import HydraPay.Cardano.Hydra.Api hiding (headId, headStatus, Party, utxo)
 import qualified HydraPay.Database as Db
-
 import qualified Cardano.Api as Api
-
 import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
-
 import Control.Lens
 import Control.Exception
 import Control.Concurrent
@@ -54,7 +48,6 @@ import Control.Concurrent.STM
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class
 import Control.Monad.Trans.Except
-
 import Cardano.Api.Extras
 
 
@@ -148,11 +141,6 @@ commsThreadIsHeadStateReporter :: CommsThreadConfig -> Bool
 commsThreadIsHeadStateReporter cfg =
   -- NOTE currently we just make the first node the state reported
   cfg ^. commsThreadConfig_hydraNodeConfig . hydraNodeConfig_nodeId . to (==1)
-
--- | Transaction ID on preview from the Hydra 0.11.0 release
--- https://github.com/input-output-hk/hydra/releases/tag/0.11.0
-previewScriptTxId :: TxId
-previewScriptTxId = TxId "90acbeb0ebece3b5319625eedca3f6514870c9414872d9e940c6b7d7b88178fd"
 
 loopbackAddress :: String
 loopbackAddress = "127.0.0.1"
@@ -534,7 +522,7 @@ deriveConfigFromDbHead a hh = runExceptT $ do
     createDirectoryIfMissing True persistFirst
     createDirectoryIfMissing True persistSecond
 
-  nodeConfigs <- ExceptT $ mkTwoPartyHydraNodeConfigs a previewScriptTxId (a ^. portRange) chain headConfig
+  nodeConfigs <- ExceptT $ mkTwoPartyHydraNodeConfigs a (a ^. nodeInfo . nodeInfo_hydraScriptsTxId) (a ^. portRange) chain headConfig
   pure nodeConfigs
 
 headPersistDir :: FilePath
