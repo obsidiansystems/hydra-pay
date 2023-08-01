@@ -39,6 +39,8 @@ let
       };
 
       overrides = self: super: pd.overrides self super // {
+        plutus-tx = haskellLib.dontCheck super.plutus-tx;
+
         bytestring-aeson-orphans = haskellLib.doJailbreak super.bytestring-aeson-orphans;
         aeson-gadt-th = haskellLib.doJailbreak (haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme");
         string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
