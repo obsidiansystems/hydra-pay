@@ -6,26 +6,23 @@ import Data.Time
 import Data.Int
 import Data.Maybe
 import Data.Text (Text)
+import Data.Traversable
 import qualified Data.Text as T
-
 import Control.Lens hiding ((<.))
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Except
-
 import HydraPay.Logging
 import HydraPay.PaymentChannel
 import HydraPay.Cardano.Hydra.ChainConfig
+import HydraPay.Cardano.Hydra.Status
 import HydraPay.Database.Workers (RefundRequest(..))
 import HydraPay.Utils
-
 import Data.Map (Map)
 import qualified Data.Map as Map
-
 import qualified Cardano.Api as Api
 import qualified HydraPay.Database as Db
-
 import Database.Beam
 import Database.Beam.Postgres
 import Database.Beam.Postgres.Syntax (PgExpressionSyntax(..), emit)
@@ -33,37 +30,52 @@ import Database.Beam.Backend.SQL
 import Database.Beam.Backend.SQL.BeamExtensions
 
 getPaymentChannelsInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> m (Map Int32 PaymentChannelInfo)
-getPaymentChannelsInfo a addr = do
-  results <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningList $ select $ do
+getPaymentChannelsInfo a addr = Db.runBeam a $ do
+  channels :: [(Db.HydraHead, Db.PaymentChannel)] <- runSelectReturningList $ select $ do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
+    head_ <- all_ (Db.db ^. Db.db_heads)
+    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+    guard_ (head_ ^. Db.hydraHead_status /=. val_ HydraHeadStatus_Done &&. (head_ ^. Db.hydraHead_first ==. val_ addrStr ||. head_ ^. Db.hydraHead_second ==. val_ addrStr))
     pure (head_, paymentChannel)
-  pure $ Map.fromList $ fmap ((\p -> (p ^. paymentChannelInfo_id, p)) . (uncurry $ dbPaymentChannelToInfo addr)) results
-  where
+
+  fmap mconcat $ for channels $ \(head_, chan) -> do
+    commits <- runSelectReturningList $ select $ do
+      observedCommits_ <- all_ (Db.db ^. Db.db_observedCommits)
+      guard_ (observedCommits_ ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ head_ ^. Db.hydraHead_id))
+      pure observedCommits_
+    let
+      pinfo = dbPaymentChannelToInfo addr head_ chan commits
+    pure $ Map.singleton (pinfo ^. paymentChannelInfo_id) pinfo
+
+      where
     addrStr = Api.serialiseAddress addr
 
 getPaymentChannelInfo :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text PaymentChannelInfo)
 getPaymentChannelInfo a me pid = do
-  result <- Db.runQueryInTransaction a $ \conn -> runBeamPostgres conn $ runSelectReturningOne $ select $ do
-    paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
-    head_ <- all_ (Db.db ^. Db.db_heads)
-    guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
-    guard_ (paymentChannel ^. Db.paymentChannel_id ==. val_ (SqlSerial pid))
-    pure (head_, paymentChannel)
-  pure $ maybeToEither "Failed to get payment channel" $ uncurry (dbPaymentChannelToInfo me) <$> result
+  Db.runBeam a $ runExceptT $ do
+    (head_, pc) <- ExceptT $ fmap (maybeToEither "Failed to get payment channel") $ runSelectReturningOne $ select $ do
+      paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
+      head_ <- all_ (Db.db ^. Db.db_heads)
+      guard_ ((paymentChannel ^. Db.paymentChannel_head) `references_` head_)
+      guard_ (paymentChannel ^. Db.paymentChannel_id ==. val_ (SqlSerial pid))
+      pure (head_, paymentChannel)
+    commits <- runSelectReturningList $ select $ do
+      observedCommits_ <- all_ (Db.db ^. Db.db_observedCommits)
+      guard_ (observedCommits_ ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ head_ ^. Db.hydraHead_id))
+      pure observedCommits_
+    pure $ dbPaymentChannelToInfo me head_ pc commits 
 
-
-dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> PaymentChannelInfo
-dbPaymentChannelToInfo addr hh pc =
+dbPaymentChannelToInfo :: Api.AddressAny -> Db.HydraHead -> Db.PaymentChannel -> [Db.ObservedCommit]  -> PaymentChannelInfo
+dbPaymentChannelToInfo addr hh pc _ =
   PaymentChannelInfo
     { _paymentChannelInfo_id = pc ^. Db.paymentChannel_id . to unSerial
     , _paymentChannelInfo_name = pc ^. Db.paymentChannel_name
     , _paymentChannelInfo_createdAt = pc ^. Db.paymentChannel_createdAt
     , _paymentChannelInfo_expiry = pc ^. Db.paymentChannel_expiry
     , _paymentChannelInfo_other = other
-    , _paymentChannelInfo_status = paymentChannelStatusToInfoStatus (pc ^. Db.paymentChannel_commits) $ pc ^. Db.paymentChannel_status
+    , _paymentChannelInfo_status = pc ^. Db.paymentChannel_status
     , _paymentChannelInfo_initiator = isInitiator
+    , _paymentChannelInfo_balance = balance
     }
   where
     isInitiator = addrStr == hh ^. Db.hydraHead_first
@@ -73,6 +85,23 @@ dbPaymentChannelToInfo addr hh pc =
       False -> hh ^. Db.hydraHead_first
 
     addrStr = Api.serialiseAddress addr
+
+    balance :: Maybe Api.Lovelace
+    balance =
+      let selfBalance = if isInitiator then hh ^. Db.hydraHead_firstBalance else fromMaybe 0 $ hh ^. Db.hydraHead_secondBalance
+      in fromIntegral <$> case pc ^. Db.paymentChannel_status of
+        PaymentChannelStatus_Submitting ->
+          if isInitiator then Just (hh ^. Db.hydraHead_firstBalance) else Nothing
+        PaymentChannelStatus_WaitingForAccept ->
+          if isInitiator then Just (hh ^. Db.hydraHead_firstBalance) else Nothing
+        PaymentChannelStatus_Opening ->
+          Just selfBalance
+        PaymentChannelStatus_Open ->
+          Just selfBalance
+        PaymentChannelStatus_Closing ->
+          Just selfBalance
+        PaymentChannelStatus_Error ->
+          Nothing
 
 getPaymentChannelDetails :: (MonadIO m, Db.HasDbConnectionPool a) => a -> Api.AddressAny -> Int32 -> m (Either Text (Int32, Map Int32 TransactionInfo))
 getPaymentChannelDetails a addr pcId = do
@@ -111,9 +140,14 @@ getExpiredPaymentChannels a now = do
     paymentChannel <- all_ (Db.db ^. Db.db_paymentChannels)
     head_ <- join_ (Db.db ^. Db.db_heads) (\head_ -> (paymentChannel ^. Db.paymentChannel_head) `references_` head_)
     proxies <- join_ (Db.db ^. Db.db_proxies) (\proxy -> (head_ ^. Db.hydraHead_first) ==. (proxy ^. Db.proxy_chainAddress))
-    guard_ (paymentChannel ^. Db.paymentChannel_status ==. val_ PaymentChannelStatus_Initialized &&. paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
+    guard_ (paymentChannel ^. Db.paymentChannel_expiry Database.Beam.<. val_ now)
     pure (head_, paymentChannel, proxies)
-  forM results $ \(head', _, prox) -> return $ RefundRequest
+
+  let
+    resultsFiltered =
+      filter (\(_, p, _) -> p ^. Db.paymentChannel_status < PaymentChannelStatus_Open) results
+
+  forM resultsFiltered $ \(head', _, prox) -> return $ RefundRequest
     { _refundRequest_hydraHead = unSerial $ Db._hydraHead_id head'
     , _refundRequest_hydraAddress = Db._proxy_hydraAddress prox
     , _refundRequest_signingKeyPath = T.unpack $ Db._proxy_signingKeyPath prox
@@ -128,16 +162,14 @@ getHydraBalanceSlow addr = do
   let addrText = Api.serialiseAddress addr
   mbalanceFirst <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_first h), sum_ (h ^. Db.hydraHead_firstBalance))) $ do
-      heads_ <- all_ (Db.db ^. Db.db_heads)
-      paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_first ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
-      pure heads_
+      head_ <- all_ (Db.db ^. Db.db_heads)
+      guard_ (head_ ^. Db.hydraHead_first ==. val_ addrText &&. head_ ^. Db.hydraHead_status /=. val_ HydraHeadStatus_Done)
+      pure head_
   mbalanceSecond <- runSelectReturningOne $ select $ fmap snd $
     aggregate_ (\h -> (group_ (Db._hydraHead_second h), sum_ (fromMaybe_ 0 $ h ^. Db.hydraHead_secondBalance))) $ do
-      heads_ <- all_ (Db.db ^. Db.db_heads)
-      paymentChan <- join_ (Db.db ^. Db.db_paymentChannels) (\paymentChan -> (paymentChan ^. Db.paymentChannel_head) `references_` heads_)
-      guard_ (heads_ ^. Db.hydraHead_second ==. val_ addrText &&. paymentChan ^. Db.paymentChannel_status /=. val_ PaymentChannelStatus_Done)
-      pure heads_
+      head_ <- all_ (Db.db ^. Db.db_heads)
+      guard_ (head_ ^. Db.hydraHead_second ==. val_ addrText &&. head_ ^. Db.hydraHead_status /=. val_ HydraHeadStatus_Done)
+      pure head_
   pure $ Right $ mconcat
     [ fromIntegral $ fromMaybe 0 (join mbalanceFirst)
     , fromIntegral $ fromMaybe 0 (join mbalanceSecond)
@@ -218,7 +250,6 @@ getHydraHead headId = do
 
 joinPaymentChannel :: (MonadBeam Postgres m) => Int32 -> Int32 -> m ()
 joinPaymentChannel headId amount = do
-  -- TODO(skylar): Do we 'try' to get a useful error message here?
     runUpdate $
       update
       (Db.db ^. Db.db_heads)
@@ -226,7 +257,7 @@ joinPaymentChannel headId amount = do
       (\channel -> channel ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
 
 createPaymentChannel :: (MonadIO m, MonadFail m, MonadBeamInsertReturning Postgres m, HasLogger a) => a -> PaymentChannelConfig -> m Db.HeadId
-createPaymentChannel a (PaymentChannelConfig name first second amount chain) = do
+createPaymentChannel a (PaymentChannelConfig name first second amount chain useProxies) = do
   -- Persist in database
   logInfo a "createPaymentChannel" $ "Persisting new payment channel " <> name <> " with " <> (Api.serialiseAddress first) <> " and " <> (Api.serialiseAddress second)
   dbHead <- do
@@ -240,6 +271,9 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ chain ^. hydraChainConfig_ledgerGenesis . to T.pack)
                           (val_ $ chain ^. hydraChainConfig_ledgerProtocolParams . to T.pack)
                           (val_ Nothing)
+                          (val_ HydraHeadStatus_Created)
+                          (val_ False)
+                          (val_ useProxies)
                         ]
     _ <- runInsertReturningList $ insert (Db.db ^. Db.db_paymentChannels) $
       insertExpressions [ Db.PaymentChannel
@@ -248,9 +282,8 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
                           (val_ $ primaryKey newHead)
                           current_timestamp_
                           (addOneDayInterval_ current_timestamp_)
-                          (val_ PaymentChannelStatus_Created)
+                          (val_ PaymentChannelStatus_Submitting)
                           (val_ 0)
-                          (val_ False)
                         ]
     pure newHead
   pure $ primaryKey dbHead
@@ -258,8 +291,38 @@ createPaymentChannel a (PaymentChannelConfig name first second amount chain) = d
     firstText = Api.serialiseAddress first
     secondText = Api.serialiseAddress second
 
+updateHydraHeadStatusQ :: MonadBeam Postgres m => Int32 -> HydraHeadStatus -> m ()
+updateHydraHeadStatusQ headId status = do
+  mHead <- runSelectReturningOne $ select $ do
+    head_ <- all_ $ Db.db ^. Db.db_heads
+
+    guard_ (head_ ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
+    pure head_
+
+  case mHead of
+    Just head_ -> do
+      when (head_ ^. Db.hydraHead_status < status) $ runUpdate $ update (Db.db ^. Db.db_heads)
+        (\h_ -> h_ ^. Db.hydraHead_status <-. val_ status)
+        (\h_ -> h_ ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
+    Nothing -> pure ()
+
 updatePaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> PaymentChannelStatus -> m ()
-updatePaymentChannelStatusQ headId status = do
+updatePaymentChannelStatusQ pcid status = do
+  mChan <- runSelectReturningOne $ select $ do
+    chan <- all_ $ Db.db ^. Db.db_paymentChannels
+    guard_ (chan ^. Db.paymentChannel_id ==. val_ (SqlSerial pcid))
+    pure chan
+
+  case mChan of
+    Just chan -> do
+      when (chan ^. Db.paymentChannel_status < status) $ runUpdate $ update (Db.db ^. Db.db_paymentChannels)
+        (\channel -> channel ^. Db.paymentChannel_status <-. val_ status)
+        (\channel -> channel ^. Db.paymentChannel_id ==. val_ (SqlSerial pcid)
+        )
+    Nothing -> pure ()
+
+tryUpdatePaymentChannelForHeadStatusQ :: MonadBeam Postgres m => Int32 -> PaymentChannelStatus -> m ()
+tryUpdatePaymentChannelForHeadStatusQ headId status = do
   mChan <- runSelectReturningOne $ select $ do
     chan <- all_ $ Db.db ^. Db.db_paymentChannels
     guard_ (chan ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
@@ -273,10 +336,20 @@ updatePaymentChannelStatusQ headId status = do
         )
     Nothing -> pure ()
 
-getPaymentChannelStatusQ :: MonadBeam Postgres m => Int32 -> m PaymentChannelStatus
-getPaymentChannelStatusQ headId = do
-  mChan <- runSelectReturningOne $ select $ do
-    chan <- all_ $ Db.db ^. Db.db_paymentChannels
-    guard_ (chan ^. Db.paymentChannel_head ==. val_ (Db.HeadId (SqlSerial headId)))
-    pure chan
-  pure $ maybe PaymentChannelStatus_Unknown Db._paymentChannel_status mChan
+getHydraHeadStatusQ :: MonadBeam Postgres m => Int32 -> m HydraHeadStatus
+getHydraHeadStatusQ headId = do
+  mHead <- runSelectReturningOne $ select $ do
+    head_ <- all_ $ Db.db ^. Db.db_heads
+    guard_ (head_ ^. Db.hydraHead_id ==. val_ (SqlSerial headId))
+    pure head_
+  pure $ maybe HydraHeadStatus_Unknown Db._hydraHead_status mHead
+
+checkAddressAvailability :: MonadBeam Postgres m => Api.AddressAny -> m Bool
+checkAddressAvailability addr = do
+  isAvail <- runSelectReturningOne $ select $ do
+    aa <- all_ $ Db.db ^. Db.db_addressAvailability
+    guard_ (aa ^. Db.addressAvailability_layer1Address ==. val_ (Api.serialiseAddress addr))
+    pure $ aa ^. Db.addressAvailability_isAvailable
+  case isAvail of
+    Nothing -> return True
+    Just avail -> return avail

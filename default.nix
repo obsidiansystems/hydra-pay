@@ -39,6 +39,8 @@ let
       };
 
       overrides = self: super: pd.overrides self super // {
+        plutus-tx = haskellLib.dontCheck super.plutus-tx;
+
         bytestring-aeson-orphans = haskellLib.doJailbreak super.bytestring-aeson-orphans;
         aeson-gadt-th = haskellLib.doJailbreak (haskellLib.disableCabalFlag (self.callCabal2nix "aeson-gadt-th" deps.aeson-gadt-th {}) "build-readme");
         string-interpolate = haskellLib.doJailbreak (haskellLib.dontCheck super.string-interpolate);
@@ -57,26 +59,7 @@ let
             hydra.hydra-node.package.components.exes.hydra-tools
           ];
         });
-
-        backend = haskellLib.overrideCabal super.backend (drv: {
-          librarySystemDepends = (drv.librarySystemDepends or []) ++ [
-            cardano-node.cardano-node
-            cardano-node.cardano-cli
-            hydra.hydra-node.package.components.exes.hydra-node
-            hydra.hydra-node.package.components.exes.hydra-tools
-            pkgs.jq
-            pkgs.coreutils
-            livedoc-devnet-script
-          ];
-        });
       };
     });
-
-  hydra-pay-exe = pkgs.runCommandNoCC "hydra-pay" {} ''
-    mkdir -p $out
-    cp -r ${p.exe}/* $out/
-    mv $out/backend $out/hydra-pay
-  '';
-
 in
-p // {  exe = hydra-pay-exe; inherit cardano-node hydra deps;}
+p // { hydra-pay = p.ghc.hydra-pay; inherit cardano-node hydra deps;}

@@ -1,5 +1,5 @@
 name:          hydra-pay-core
-version:       0.3.0
+version:       1.0.0
 cabal-version: >=1.10
 build-type:    Simple
 
@@ -48,6 +48,7 @@ library
 
   exposed-modules:
     HydraPay.Cardano.Hydra.Api
+    HydraPay.Cardano.Hydra.Status
     HydraPay.Cardano.Hydra.Api.ClientInput
     HydraPay.Cardano.Hydra.ChainConfig
     HydraPay.Cardano.Hydra.RunningHead

@@ -3,23 +3,24 @@
 
 module HydraPay.Transaction where
 
-import Control.Exception (catch)
+import HydraPay.Types
 import Control.Lens ((^.), to)
 import Control.Monad
 import Control.Monad.IO.Class
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
 import Cardano.Transaction hiding (TxId)
+import Cardano.Transaction.Eval (evalEither)
 import qualified Data.Aeson as Aeson
 import Data.Int (Int32)
 import Data.String (fromString)
+import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory
 import System.IO
 import System.IO.Temp
 
 import HydraPay.Cardano.Node
-import HydraPay.Types (TxId(..))
 
 -- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
 withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
@@ -30,12 +31,12 @@ withProtocolParamsFile pparams action = do
     Aeson.encodeFile paramsPath pparams
     action paramsPath
 
-fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m TxId
+fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
 fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath
-    fmap (TxId . T.pack) $
-      eval cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount) `catch` \e@(EvalException _ _ _) -> print e >> pure "FAKE TX ID"
+    (fmap . fmap) (TxId . T.pack) $
+      evalEither cfg (fanoutToL1AddressTx fromAddr skPath toAddr amount)
 
 fanoutToL1AddressTx :: Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> Tx ()
 fanoutToL1AddressTx fromAddr skPath toAddr lovelace = do
@@ -56,5 +57,5 @@ mkEvalConfig a ppFp = EvalConfig Nothing (ni ^. nodeInfo_magic . to (Just . from
   where
     ni = a ^. nodeInfo
 
-addressString :: Api.AddressAny -> String
-addressString = T.unpack . Api.serialiseAddress
+addressString :: ToAddress a => a -> String
+addressString = T.unpack . Api.serialiseAddress . toAddress

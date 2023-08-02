@@ -23,6 +23,7 @@ data PaymentChannelConfig = PaymentChannelConfig
   , _paymentChannelConfig_second :: Api.AddressAny
   , _paymentChannelConfig_commitAmount :: Int32
   , _paymentChannelConfig_hydraChainConfig :: HydraChainConfig
+  , _paymentChannelConfig_useProxies :: Bool
   }
 
 makeLenses ''PaymentChannelConfig
@@ -38,39 +39,16 @@ data PaymentChannelManager = PaymentChannelManager
 makeLenses ''PaymentChannelManager
 
 data PaymentChannelStatus
-  = PaymentChannelStatus_Unknown
-  | PaymentChannelStatus_Created
-  | PaymentChannelStatus_Initialized
+  = PaymentChannelStatus_Submitting
+  | PaymentChannelStatus_WaitingForAccept
+  | PaymentChannelStatus_Opening
   | PaymentChannelStatus_Open
-  | PaymentChannelStatus_Closed
-  | PaymentChannelStatus_Finalized
+  | PaymentChannelStatus_Closing
   | PaymentChannelStatus_Error
-  | PaymentChannelStatus_Done
   deriving (Show, Eq, Ord, Read, Generic, Enum)
 
 instance ToJSON PaymentChannelStatus
 instance FromJSON PaymentChannelStatus
-
-data PaymentChannelInfoStatus
-  = PaymentChannelInfo_Pending
-  | PaymentChannelInfo_WaitingForAccept
-  | PaymentChannelInfo_Opening
-  | PaymentChannelInfo_Open
-  | PaymentChannelInfo_Closing
-  | PaymentChannelInfo_Error
-  deriving (Show, Eq, Ord, Read, Generic, Enum)
-
-instance ToJSON PaymentChannelInfoStatus
-instance FromJSON PaymentChannelInfoStatus
-
-paymentChannelStatusToInfoStatus :: Int32 -> PaymentChannelStatus -> PaymentChannelInfoStatus
-paymentChannelStatusToInfoStatus commits status
-  | status == PaymentChannelStatus_Error = PaymentChannelInfo_Error
-  | status < PaymentChannelStatus_Initialized = PaymentChannelInfo_Pending
-  | status == PaymentChannelStatus_Initialized = PaymentChannelInfo_WaitingForAccept
-  | status < PaymentChannelStatus_Open && commits == 2 = PaymentChannelInfo_Opening
-  | status == PaymentChannelStatus_Open = PaymentChannelInfo_Open
-  | otherwise = PaymentChannelInfo_Closing
 
 data PaymentChannelInfo = PaymentChannelInfo
   { _paymentChannelInfo_id :: Int32
@@ -78,13 +56,20 @@ data PaymentChannelInfo = PaymentChannelInfo
   , _paymentChannelInfo_createdAt :: UTCTime
   , _paymentChannelInfo_expiry :: UTCTime
   , _paymentChannelInfo_other :: Text
-  , _paymentChannelInfo_status :: PaymentChannelInfoStatus
+  , _paymentChannelInfo_status :: PaymentChannelStatus
   , _paymentChannelInfo_initiator :: Bool
+  , _paymentChannelInfo_balance :: Maybe Api.Lovelace
   }
   deriving (Eq, Show, Generic)
 
 instance ToJSON PaymentChannelInfo
 instance FromJSON PaymentChannelInfo
+
+isPending :: PaymentChannelStatus -> Bool
+isPending (PaymentChannelStatus_Submitting) = True
+isPending (PaymentChannelStatus_WaitingForAccept) = True
+isPending (PaymentChannelStatus_Opening) = True
+isPending _ = False
 
 data TransactionDirection =
   TransactionReceived | TransactionSent
@@ -109,13 +94,6 @@ makeLenses ''PaymentChannelInfo
 
 paymentChannelDisplayName :: PaymentChannelInfo -> Text
 paymentChannelDisplayName pinfo =
-  case paymentChannelNeedsMyAcceptance pinfo of
-    True -> "New Request"
-    False -> pinfo ^. paymentChannelInfo_name
-
-paymentChannelNeedsMyAcceptance :: PaymentChannelInfo -> Bool
-paymentChannelNeedsMyAcceptance pinfo =
-  pinfo ^. paymentChannelInfo_status . to isPending && not (pinfo ^. paymentChannelInfo_initiator)
-
-isPending :: PaymentChannelInfoStatus -> Bool
-isPending x = x < PaymentChannelInfo_Open
+  case pinfo ^. paymentChannelInfo_status of
+    PaymentChannelStatus_WaitingForAccept | pinfo ^. paymentChannelInfo_initiator . to not -> "New Request"
+    _ -> pinfo ^. paymentChannelInfo_name

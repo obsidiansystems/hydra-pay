@@ -11,6 +11,7 @@ import Data.Aeson
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time (UTCTime)
+import qualified Cardano.Api as Api
 import HydraPay.Cardano.Hydra.Api.ClientInput as X hiding (utxo, transaction)
 
 type HeadId = Text
@@ -24,8 +25,8 @@ data ServerOutput
   = PeerConnected {peer :: NodeId}
   | PeerDisconnected {peer :: NodeId}
   | HeadIsInitializing {headId :: HeadId, parties :: Set Party}
-  | Committed {headId :: HeadId, party :: Party, utxo :: Value}
-  | HeadIsOpen {headId :: HeadId, utxo :: Value}
+  | Committed {headId :: HeadId, party :: Party, utxo :: Api.UTxO Api.BabbageEra }
+  | HeadIsOpen {headId :: HeadId, utxo :: Api.UTxO Api.BabbageEra}
   | HeadIsClosed
       { headId :: HeadId
       , snapshotNumber :: SnapshotNumber
@@ -38,15 +39,15 @@ data ServerOutput
       }
   | HeadIsContested {headId :: HeadId, snapshotNumber :: SnapshotNumber}
   | ReadyToFanout {headId :: HeadId}
-  | HeadIsAborted {headId :: HeadId, utxo :: Value}
-  | HeadIsFinalized {headId :: HeadId, utxo :: Value}
+  | HeadIsAborted {headId :: HeadId, utxo :: Api.UTxO Api.BabbageEra}
+  | HeadIsFinalized {headId :: HeadId, utxo :: Api.UTxO Api.BabbageEra}
   | CommandFailed {clientInput :: ClientInput}
   | -- | Given transaction has been seen as valid in the Head. It is expected to
     -- eventually be part of a 'SnapshotConfirmed'.
     TxValid {headId :: HeadId, transaction :: Value}
   | -- | Given transaction was not not applicable to the given UTxO in time and
     -- has been dropped.
-    TxInvalid {headId :: HeadId, utxo :: Value, transaction :: Value, validationError :: ValidationError}
+    TxInvalid {headId :: HeadId, utxo :: Api.UTxO Api.BabbageEra, transaction :: Value, validationError :: ValidationError}
   | -- | Given snapshot was confirmed and included transactions can be
     -- considered final.
     SnapshotConfirmed
@@ -54,8 +55,8 @@ data ServerOutput
       , snapshot :: Value
       , signatures :: Value
       }
-  | GetUTxOResponse {headId :: HeadId, utxo :: Value}
-  | InvalidInput {reason :: String, input :: Text}
+  | GetUTxOResponse {headId :: HeadId, utxo :: Api.UTxO Api.BabbageEra }
+  | InvalidInput {reason :: String, input :: Value}
   | -- | A friendly welcome message which tells a client something about the
     -- node. Currently used for knowing what signing key the server uses (it
     -- only knows one), 'HeadStatus' and optionally (if 'HeadIsOpen' or

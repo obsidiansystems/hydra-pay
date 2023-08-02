@@ -5,6 +5,7 @@ module HydraPay.Cardano.Node where
 import Data.Int
 import qualified Data.Text as T
 
+import HydraPay.Types
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath
 import System.IO
@@ -18,8 +19,8 @@ import Control.Monad
 import Control.Monad.IO.Class
 
 import Reflex
+import Reflex.Host.Headless
 
-import HydraPay.Host
 import qualified HydraPay.Watch as Watch
 
 import Control.Concurrent
@@ -31,6 +32,7 @@ data NodeConfig = NodeConfig
   , _nodeConfig_socketPath :: FilePath
   , _nodeConfig_topology :: FilePath
   , _nodeConfig_magic :: Int32
+  , _nodeConfig_hydraScriptsTxId :: TxId
   }
   deriving (Eq, Show)
 
@@ -40,6 +42,7 @@ data NodeInfo = NodeInfo
   { _nodeInfo_socketPath :: FilePath
   , _nodeInfo_magic :: Int32
   , _nodeInfo_socketReady :: TMVar ()
+  , _nodeInfo_hydraScriptsTxId :: TxId
   }
   deriving (Eq)
 
@@ -80,23 +83,26 @@ withCardanoNode cfg action = do
       withCreateProcess (makeNodeProcess outHandle errHandle cfg) $ \_ _ _ ph -> do
         ready <- newEmptyTMVarIO
         let
-          ninfo = NodeInfo (cfg ^. nodeConfig_socketPath) (cfg ^. nodeConfig_magic) ready
+          ninfo = NodeInfo (cfg ^. nodeConfig_socketPath) (cfg ^. nodeConfig_magic) ready (cfg ^. nodeConfig_hydraScriptsTxId)
           (path, file) = pathAndFile $ ninfo ^. nodeInfo_socketPath
 
         -- Fork the FRP layer so we can still run the action
-        socketWatchThreadId <- forkIO $ runHost $ do
-          changed <- Watch.watchDir FS.defaultConfig path $ socketPred file
+        socketWatchThreadId <- forkIO $ runHeadlessApp $ do
+          pb <- getPostBuild
+          exited <- performEventAsync $ ffor pb $ \_ cb -> do
+            liftIO $ void $ forkIO $ cb =<< waitForProcess ph
+          (changed, watchThread) <- Watch.watchDir FS.defaultConfig path $ socketPred file
           performEvent_ $ ffor changed $ const $ do
             liftIO $ atomically $ putTMVar ready ()
+          performEvent_ $ ffor exited $ \_ -> liftIO $ killThread watchThread
+          delay 0.1 $ () <$ exited
 
-        _ <- forkIO $ void $ waitForProcess ph
-        action ninfo `finally` killThread socketWatchThreadId
+        action ninfo `finally` (killThread socketWatchThreadId)
 
 makeNodeProcess :: Handle -> Handle -> NodeConfig -> CreateProcess
-makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _) =
+makeNodeProcess outHandle errHandle (NodeConfig configPath dbPath socketPath topo _ _) =
   cardanoCp { std_out = UseHandle outHandle
             , std_err = UseHandle errHandle
-            , delegate_ctlc = True
             }
   where
     cardanoCp = proc cardanoNodePath

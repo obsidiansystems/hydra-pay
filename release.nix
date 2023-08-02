@@ -1,6 +1,5 @@
-(builtins.mapAttrs (system: _: (import ./. { inherit system; }).exe)
+(builtins.mapAttrs (system: _: (import ./. { inherit system; }).hydra-pay)
   { "x86_64-linux" = null;
-    "x86_64-darwin" = null;
   })
 //
 (let
@@ -27,7 +26,7 @@ in
           groupadd -r hydrapay
           useradd -r -g hydrapay hydrapay
           mkdir -p /hydrapay
-          ln -sft /hydrapay '${self.linuxExe}'/*
+          ln -sft /hydrapay '${self.hydra-pay}'/*
           chown -R hydrapay:hydrapay /hydrapay
         '';
       config = {
