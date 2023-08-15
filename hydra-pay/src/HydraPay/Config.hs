@@ -43,6 +43,9 @@ preprodScriptTxId = TxId "010f68ad75cda7983b68a7691ba1591fa9ce4cfc03ac35d1c6c90c
 previewScriptTxId :: TxId
 previewScriptTxId = TxId "90acbeb0ebece3b5319625eedca3f6514870c9414872d9e940c6b7d7b88178fd"
 
+sanchonetScriptTxId :: TxId
+sanchonetScriptTxId = TxId "0000000000000000000000000000000000000000000000000000000000000000"
+
 hydraChainConfig :: HydraChainConfig
 hydraChainConfig =
   HydraChainConfig
@@ -81,6 +84,22 @@ previewConfig = HydraPayConfig
   (defaultLogConfig "hydra-pay")
   previewNodeConfig
 
+sanchonetNodeConfig :: NodeConfig
+sanchonetNodeConfig =
+  NodeConfig
+  sanchonetChainConfig
+  cardanoNodeDb
+  (cardanoNodeDb </> "node.socket")
+  sanchonetChainTopology
+  4
+  sanchonetScriptTxId
+
+sanchonetConfig :: HydraPayConfig
+sanchonetConfig = HydraPayConfig
+  hydraPayDb
+  (defaultLogConfig "hydra-pay")
+  sanchonetNodeConfig
+
 mainnetNodeConfig :: NodeConfig
 mainnetNodeConfig =
   NodeConfig
@@ -88,7 +107,7 @@ mainnetNodeConfig =
   cardanoNodeDb
   (cardanoNodeDb </> "node.socket")
   mainnetChainTopology
-  0
+  764824073
   mainnetScriptTxId
 
 mainnetConfig :: HydraPayConfig

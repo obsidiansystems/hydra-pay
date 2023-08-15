@@ -128,7 +128,8 @@ runClient = do
       "mainnet" -> runInstance mainnetConfig
       "preprod" -> runInstance preprodConfig
       "preview" -> runInstance previewConfig
-      _ -> putStrLn "Please choose a network from the following options: mainnet | preview | preprod"
+      "sanchonet" -> runInstance sanchonetConfig
+      _ -> putStrLn "Please choose a network from the following options: mainnet | preview | preprod | sanchonet"
     Channel (Open name addrFirst addrSecond) -> do
       case mkCreate name addrFirst addrSecond of
         Right req -> clientRequest req

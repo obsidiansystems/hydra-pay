@@ -329,6 +329,8 @@ instance Aeson.FromJSON InstanceResponse where
             "error" -> pure $ PaymentChannelStatus_Error
             x -> fail $ "Invalid status text: " <> T.unpack x
 
+      x -> fail $ "Invalid tag: " <> T.unpack x
+
 mkTag :: T.Text -> (Aeson.Key, Aeson.Value)
 mkTag = ("tag" .=)
 

@@ -24,10 +24,16 @@ cardanoNodeDb :: FilePath
 cardanoNodeDb = "cardano-node-db"
 
 previewChainConfig :: FilePath
-previewChainConfig = "config/backend/preview/config.json"
+previewChainConfig = "config/preview/config.json"
 
 previewChainTopology :: FilePath
-previewChainTopology = "config/backend/preview/topology.json"
+previewChainTopology = "config/preview/topology.json"
+
+sanchonetChainConfig :: FilePath
+sanchonetChainConfig = "config/sanchonet/config.json"
+
+sanchonetChainTopology :: FilePath
+sanchonetChainTopology = "config/sanchonet/topology.json"
 
 preprodChainConfig :: FilePath
 preprodChainConfig = "config/preprod/config.json"
