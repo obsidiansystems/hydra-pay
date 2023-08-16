@@ -1,0 +1,8 @@
+{
+  "owner": "input-output-hk",
+  "repo": "cardano-node",
+  "branch": "1.35.3-configs",
+  "private": false,
+  "rev": "ea6d78c775d0f70dde979b52de022db749a2cc32",
+  "sha256": "01vp5p0d96zywbn094hds0xsi41p802c7538hb8p5w10ld7cg446"
+}

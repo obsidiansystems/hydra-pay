@@ -1,0 +1,8 @@
+{
+  "owner": "obsidiansystems",
+  "repo": "cardano-wallet",
+  "branch": "v2022-07-01_extract-coin-selection_shelley-compat",
+  "private": false,
+  "rev": "fc4ae8b7d9e9a470c8550613227bec75f70e9c73",
+  "sha256": "1qxy89p2yaka19pjrfwpva62lh7gp7awlpmdgg14gaalw7qjgzxf"
+}

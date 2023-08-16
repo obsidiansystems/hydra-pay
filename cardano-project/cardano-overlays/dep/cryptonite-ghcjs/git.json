@@ -1,0 +1,8 @@
+{
+  "url": "ssh://git@code.obsidian.systems/lodewallet/cryptonite-ghcjs.git",
+  "rev": "996712a92612a08f1c80e4dc381f014461856f8f",
+  "sha256": "14lraa833gi9x70i7vqnhs18cyfxa1nv4pvr360p9rqyqb6cxbbw",
+  "private": true,
+  "fetchSubmodules": false,
+  "branch": "master"
+}

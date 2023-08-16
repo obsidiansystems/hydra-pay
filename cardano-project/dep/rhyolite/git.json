@@ -1,0 +1,8 @@
+{
+  "url": "ssh://git@code.obsidian.systems/rhyolite/rhyolite.git",
+  "rev": "77b4d6aa7219c0ee2ccab347f716ddc8cdef0848",
+  "sha256": "0m6nxfa92bwkx2k6wpdgya1fqjq7xr5w951ai1xww70ajnadcphr",
+  "private": true,
+  "fetchSubmodules": false,
+  "branch": "master"
+}
