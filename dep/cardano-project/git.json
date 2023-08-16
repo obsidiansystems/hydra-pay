@@ -1,8 +1,0 @@
-{
-  "url": "ssh://git@code.obsidian.systems/lodewallet/cardano-project-definition.git",
-  "rev": "7320416e2461e610c915e94d03dec010bf8813aa",
-  "sha256": "11902r3s12j8zkqkahi0pmws8y5jw9177y92pq5z5f4hlr63zn7q",
-  "private": true,
-  "fetchSubmodules": false,
-  "branch": "ll/rhyolite-iv"
-}

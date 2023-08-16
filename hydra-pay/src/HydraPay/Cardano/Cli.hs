@@ -63,7 +63,7 @@ makeLenses ''KeyGenTemplate
 
 data CardanoCliCommand :: * -> * where
   CardanoCliCommand_QueryTip :: CardanoCliCommand (Either Text Aeson.Value)
-  CardanoCliCommand_GetProtocolParams :: CardanoCliCommand (Either Text Api.ProtocolParameters)
+  CardanoCliCommand_GetProtocolParams :: CardanoCliCommand (Either Text Text)
   CardanoCliCommand_QueryUTXOs :: Api.AddressAny -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))
 
   -- | Generate private and public keys in a directory
@@ -104,7 +104,7 @@ runCardanoCli a command = do
     CardanoCliCommand_GetProtocolParams -> do
       fmap (first T.pack) $ runExceptT $ do
         str <- ExceptT $ eitherReadProcess cp
-        ExceptT $ pure $ Aeson.eitherDecode $ LBS.fromStrict $ B8.pack str
+        pure $ T.pack str
 
     CardanoCliCommand_QueryUTXOs _ -> do
       fmap (first T.pack) $ runExceptT $ do
@@ -150,7 +150,7 @@ buildAddress = CardanoCliCommand_BuildAddress
 queryTip :: CardanoCliCommand (Either Text Aeson.Value)
 queryTip = CardanoCliCommand_QueryTip
 
-getProtocolParameters :: CardanoCliCommand (Either Text Api.ProtocolParameters)
+getProtocolParameters :: CardanoCliCommand (Either Text T.Text)
 getProtocolParameters = CardanoCliCommand_GetProtocolParams
 
 queryUTxOs :: ToAddress a => a -> CardanoCliCommand (Either Text (Api.UTxO Api.BabbageEra))

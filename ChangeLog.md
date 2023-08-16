@@ -2,7 +2,14 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
-### Version v1.0.0
+## Version v1.1.0
+
+* Rework nix-pinned cardano dependencies
+* *Breaking Change* Update aeson instances
+* *Breaking Change* Update to cardano node 8.1.2
+* *Breaking Change* Bump to hydra master 1e13b60a
+
+## Version v1.0.0
 
 * Extend the instance executable to act as client
 * *Breaking Change* Reduce dependencies
@@ -14,7 +21,7 @@ This project's release branch is `master`. This log is written from the perspect
 * Integrate external commit
 * *Breaking Change* Bump to hydra 0.11.0
 
-### Version v0.3.0
+## Version v0.3.0
 
 * Ensure Hydra Node interaction threads currently executing blocking calls when asked to close; close immediately when execution is yielded back to them
 * Proxies now pay directly back to their L1 counterpart when they receive the UTxO from a finalized head
@@ -31,7 +38,7 @@ This project's release branch is `master`. This log is written from the perspect
 * Reduce the number of reconnections to Hydra Node websocket api
 * Bump to hydra 0.10.0
 
-### Version v0.2.0
+## Version v0.2.0
 
 * *Breaking change*: Split haskell library into two parts: hydra-pay-core and hydra-pay. hydra-pay includes database components that cannot be included in frontend clients, while hydra-pay-core includes common components that are compatible with both frontend and backend clients.
 * Add fanout to L1 workflow

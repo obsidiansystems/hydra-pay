@@ -46,7 +46,6 @@ import qualified Data.Text as T
 import qualified HydraPay.Database as DB
 
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
@@ -99,14 +98,14 @@ waitForTxInput state txin = runExceptT $ do
       ExceptT $ waitForTxInput state txin
 
 
-sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
+sendFuelTo :: (MonadIO m, HasNodeInfo a) => a -> T.Text -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
 sendFuelTo a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath
     (fmap . fmap) (TxId . T.pack) $
       evalEither cfg (payFuelTo fromAddr skPath toAddr amount)
 
-getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> Api.ProtocolParameters -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
+getProxyTx :: (HasNodeInfo a, DB.HasDbConnectionPool a, MonadIO m) => a -> T.Text -> Int32 -> Api.AddressAny -> Int32 -> m (Either Text BS.ByteString)
 getProxyTx a pparams hid addr lovelace = DB.runBeam a $ runExceptT $ do
   proxyInfo <- ExceptT $ queryProxyInfo a hid addr
   ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
@@ -195,7 +194,7 @@ balanceAdaAssets addr = do
   if theDiffValue == mempty then pure Nothing else do
     Just <$> output addr theDiffValue
 
-sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> Api.ProtocolParameters -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
+sendHydraLovelace :: (MonadIO m, HasNodeInfo a) => a -> ProxyInfo -> T.Text -> Api.UTxO Api.BabbageEra -> Address -> Address -> Api.Lovelace -> m (Either Text (Text, Text))
 sendHydraLovelace a proxyInfo pparams utxo fromAddrStr toAddrStr lovelace = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath

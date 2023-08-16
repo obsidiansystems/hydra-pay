@@ -16,6 +16,7 @@ import Data.Int (Int32)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 import System.Directory
 import System.IO
 import System.IO.Temp
@@ -23,15 +24,15 @@ import System.IO.Temp
 import HydraPay.Cardano.Node
 
 -- | cardano-cli needs the params in a file, so we just create a temp file we can use for that purpose
-withProtocolParamsFile :: Api.ProtocolParameters -> (FilePath -> IO a) -> IO a
+withProtocolParamsFile :: T.Text -> (FilePath -> IO a) -> IO a
 withProtocolParamsFile pparams action = do
   createDirectoryIfMissing True tempTxDir
   withTempFile tempTxDir "params" $ \paramsPath handle -> do
     hClose handle
-    Aeson.encodeFile paramsPath pparams
+    T.writeFile paramsPath pparams
     action paramsPath
 
-fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> Api.ProtocolParameters -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
+fanoutToL1Address :: (MonadIO m, HasNodeInfo a) => a -> T.Text -> Api.AddressAny -> FilePath -> Api.AddressAny -> Int32 -> m (Either Text TxId)
 fanoutToL1Address a pparams fromAddr skPath toAddr amount = do
   liftIO $ withProtocolParamsFile pparams $ \paramsPath -> do
     let cfg = mkEvalConfig a paramsPath

@@ -1,8 +1,0 @@
-{
-  "url": "ssh://git@code.obsidian.systems/lodewallet/browser-extension",
-  "rev": "ae6f9202e35ce74c630da763a95071eeb337ebc8",
-  "sha256": "0hp1a6a219j1l8jikhp7yya6c55l23rw2360q0vzifgg7fjrd8i3",
-  "private": true,
-  "fetchSubmodules": false,
-  "branch": "aa/createwindow-sim"
-}
