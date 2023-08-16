@@ -46,7 +46,6 @@ import qualified Data.Text as T
 import qualified HydraPay.Database as DB
 
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
 
