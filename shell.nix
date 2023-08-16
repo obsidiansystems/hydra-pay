@@ -8,8 +8,8 @@ in
     buildInputs = [
       project.cardano-node.cardano-cli
       project.cardano-node.cardano-node
-      project.hydra.hydra-node.package.components.exes.hydra-node
-      project.hydra.hydra-node.package.components.exes.hydra-tools
+      project.hydra.hydra-node
+      project.hydra.hydra-tools-static
     ];
     inputsFrom = [
       (import ./. {}).shells.ghc

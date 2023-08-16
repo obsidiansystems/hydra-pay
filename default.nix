@@ -54,8 +54,8 @@ let
           librarySystemDepends = (drv.librarySystemDepends or []) ++ [
             cardano-node.cardano-node
             cardano-node.cardano-cli
-            hydra.hydra-node.package.components.exes.hydra-node
-            hydra.hydra-node.package.components.exes.hydra-tools
+            hydra.hydra-node
+            hydra.hydra-tools-static
           ];
         });
 
@@ -63,8 +63,8 @@ let
           librarySystemDepends = (drv.librarySystemDepends or []) ++ [
             cardano-node.cardano-node
             cardano-node.cardano-cli
-            hydra.hydra-node.package.components.exes.hydra-node
-            hydra.hydra-node.package.components.exes.hydra-tools
+            hydra.hydra-node
+            hydra.hydra-tools-static
           ];
         });
       };

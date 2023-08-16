@@ -32,16 +32,14 @@ instance HasNodeInfo BootstrapState where
   nodeInfo = bootstrap_nodeInfo
 
 
--- | Transaction ID on preview from the Hydra 0.11.0 release
--- https://github.com/input-output-hk/hydra/releases/tag/0.11.0
 mainnetScriptTxId :: TxId
 mainnetScriptTxId = TxId "eb4c5f213ffb646046cf1d3543ae240ac922deccdc99826edd9af8ad52ddb877"
 
 preprodScriptTxId :: TxId
-preprodScriptTxId = TxId "010f68ad75cda7983b68a7691ba1591fa9ce4cfc03ac35d1c6c90cae4b48f849"
+preprodScriptTxId = TxId "85424831ee6a9dea9668990547df318a246ebda3e28a0ed60c5ca4b3de87e49f"
 
 previewScriptTxId :: TxId
-previewScriptTxId = TxId "90acbeb0ebece3b5319625eedca3f6514870c9414872d9e940c6b7d7b88178fd"
+previewScriptTxId = TxId "058760d0370a965976a21ac9f11ace9b8f391d73f29b6d1b01bffdea7d0e1526"
 
 sanchonetScriptTxId :: TxId
 sanchonetScriptTxId = TxId "0000000000000000000000000000000000000000000000000000000000000000"

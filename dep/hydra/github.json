@@ -1,8 +1,7 @@
 {
-  "owner": "obsidiansystems",
-  "repo": "hydra-poc",
-  "branch": "v0.11.0",
+  "owner": "input-output-hk",
+  "repo": "hydra",
   "private": false,
-  "rev": "531cccabae9e49c5e85dc07204b3822654c1351f",
-  "sha256": "1hhdjd2w1kvr6kzq7wzr9n954dzhh6a5hlic8ixcrhkk8aib9mnk"
+  "rev": "1e13b60a7b21c5ccd6c36e3cf220547f5d443cef",
+  "sha256": "0djrzy9vigpi1y7izshc3li0rxmvbd5d5fk06ya001b9dbhjqgid"
 }
