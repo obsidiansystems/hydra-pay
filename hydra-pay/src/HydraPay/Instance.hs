@@ -93,11 +93,11 @@ runHydraPay (HydraPayConfig db ls ncfg) action = withLogger ls $ \l -> withDb db
         Right n -> logInfo hpstate "HydraPay" $ tShow n <> " heads are now running"
       flip finally (stopWorkers >> stopRefund) $ action $ hpstate
 
-runInstance :: HydraPayConfig -> IO ()
-runInstance cfg = do
+runInstance :: HydraPayConfig -> Int -> IO ()
+runInstance cfg port = do
   runHydraPay cfg $ \state -> do
     let
-      networkCfg = setPort defaultPort $ defaultConfig
+      networkCfg = setPort port $ defaultConfig
     createDirectoryIfMissing True "log"
     httpServe networkCfg $ WS.runWebSocketsSnap $ \pendingConn -> do
       conn <- WS.acceptRequest pendingConn

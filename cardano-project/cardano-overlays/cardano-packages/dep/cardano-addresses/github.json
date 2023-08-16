@@ -1,0 +1,8 @@
+{
+  "owner": "obsidiansystems",
+  "repo": "cardano-addresses",
+  "branch": "3.11.0-ghcjs-compat",
+  "private": false,
+  "rev": "91008d2d8670da68411f8f1d4dda3c6ddbc203b3",
+  "sha256": "01pgpykzljblv1z8br4lnbsw4agvjzxx9dp2pz6qxzvcsjnrzki5"
+}

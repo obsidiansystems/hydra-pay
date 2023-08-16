@@ -1,7 +1,6 @@
 { system ? builtins.currentSystem
-, android-build ? false
-, cardanoProject ? import ./dep/cardano-project {
-    inherit android-build system;
+, cardanoProject ? import ./cardano-project {
+    inherit system;
   }
 }:
 with cardanoProject;
@@ -51,12 +50,21 @@ let
           ];
         });
 
+        backend = haskellLib.overrideCabal super.backend (drv: {
+          librarySystemDepends = (drv.librarySystemDepends or []) ++ [
+            cardano-node.cardano-node
+            cardano-node.cardano-cli
+            hydra.hydra-node
+            hydra.hydra-tools-static
+          ];
+        });
+
         hydra-pay = haskellLib.overrideCabal super.hydra-pay (drv: {
           librarySystemDepends = (drv.librarySystemDepends or []) ++ [
             cardano-node.cardano-node
             cardano-node.cardano-cli
-            hydra.hydra-node.package.components.exes.hydra-node
-            hydra.hydra-node.package.components.exes.hydra-tools
+            hydra.hydra-node
+            hydra.hydra-tools-static
           ];
         });
       };

@@ -3,14 +3,16 @@
 
 module HydraPay.Api where
 
+import Data.Traversable
 import Text.Printf
 import HydraPay.PaymentChannel
 import GHC.Generics (Generic)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Control.Lens hiding (argument)
+import Control.Lens hiding (argument, (.=))
 import qualified Cardano.Api as Api
 import HydraPay.Utils
+import Data.Aeson (object, (.=), (.:), (.:?))
 import qualified Data.Aeson as Aeson
 import Data.Int
 import Data.Text (Text)
@@ -26,8 +28,73 @@ data InstanceRequest
   | CloseChannel Text
   deriving (Generic)
 
-instance Aeson.ToJSON InstanceRequest
-instance Aeson.FromJSON InstanceRequest
+instance Aeson.ToJSON InstanceRequest where
+  toJSON = \case
+    CreatePaymentChannel name p1 p2 ->
+      object [ mkTag "create"
+             , "name" .= name
+             , "participants" .= [p1, p2]
+             ]
+
+    GetStatus name ->
+      object [ mkTag "status"
+             , "name" .= name
+             ]
+
+    GetLock name addr lovelace ->
+      object [ mkTag "lock"
+             , "name" .= name
+             , "address" .= addr
+             , "lovelace" .= lovelace
+             ]
+    SendInChannel name addr lovelace ->
+      object [ mkTag "send"
+             , "name" .= name
+             , "address" .= addr
+             , "lovelace" .= lovelace
+             ]
+
+    SubmitInChannel name addr signedTx ->
+      object [ mkTag "submit"
+             , "name" .= name
+             , "address" .= addr
+             , "signed-tx" .= signedTx
+             ]
+    CloseChannel name ->
+      object [ mkTag "close"
+             , "name" .= name
+             ]
+
+instance Aeson.FromJSON InstanceRequest where
+  parseJSON = Aeson.withObject "Instance Request" $ \o -> do
+    tag :: T.Text <- o .: "tag"
+    case tag of
+      "create" -> do
+        name <- o .: "name"
+        [a,b] <- o .: "participants"
+        pure $ CreatePaymentChannel name a b
+      "status" -> do
+        name <- o .: "name"
+        pure $ GetStatus name
+      "lock" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        lovelace <- o .: "lovelace"
+        pure $ GetLock name addr lovelace
+      "send" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        lovelace <- o .: "lovelace"
+        pure $ SendInChannel name addr lovelace
+      "submit" -> do
+        name <- o .: "name"
+        address <- o .: "address"
+        signedTx <- o .: "signed-tx"
+        pure $ SubmitInChannel name address signedTx
+      "close" -> do
+        name <- o .: "name"
+        pure $ CloseChannel name
+      t -> fail $ "Encountered Invalid mkTag " <> T.unpack t
 
 data DetailedStatus = DetailedStatus
   { _detailedStatus_first :: Api.AddressAny
@@ -38,8 +105,51 @@ data DetailedStatus = DetailedStatus
   }
   deriving (Generic)
 
-instance Aeson.ToJSON DetailedStatus
-instance Aeson.FromJSON DetailedStatus
+instance Aeson.ToJSON DetailedStatus where
+  toJSON (DetailedStatus f s fb sb ts) =
+    object [ "participants" .= [particpantObj f fb, particpantObj s sb]
+           , "transactions" .= (Map.elems . fmap transactionObj $ ts)
+           ]
+    where
+      transactionObj :: TransactionInfo -> Aeson.Value
+      transactionObj (TransactionInfo tId time amount dir) =
+        object [ "id" .=  tId
+               , "to" .= toAddr
+               , "from" .= fromAddr
+               , "lovelace" .= amount
+               , "time" .= time
+               ]
+        where
+          (toAddr, fromAddr) =
+            case dir of
+              TransactionReceived -> (f, s)
+              TransactionSent -> (s, f)
+
+      particpantObj :: Api.AddressAny -> Int32 -> Aeson.Value
+      particpantObj addr balance =
+        object [ "address" .= addr
+               , "lovelace" .= balance
+               ]
+
+instance Aeson.FromJSON DetailedStatus where
+  parseJSON = Aeson.withObject "Detailed Status" $ \o -> do
+    [fp, sp] <- o .: "participants"
+    firstAddr <- fp .: "address"
+    firstBalance <- fp .: "lovelace"
+    secondAddr <- sp .: "address"
+    secondBalance <- sp.: "lovelace"
+    txns <- o .: "transactions"
+    ts <- fmap Map.fromList $ for txns $ \ti -> do
+      tid <- ti .: "id"
+      toAddr <- ti .: "to"
+      amount <- ti .: "lovelace"
+      time <- ti .: "time"
+      let
+        dir = case toAddr == firstAddr of
+          True -> TransactionReceived
+          _ -> TransactionSent
+      pure $ (tid, TransactionInfo tid time amount dir)
+    pure $ DetailedStatus firstAddr firstBalance secondAddr secondBalance ts
 
 data FundInternalWallet = FundInternalWallet
   { _fundInternal_internalWalletAddress :: Api.AddressAny
@@ -88,6 +198,141 @@ data InstanceResponse
   | SendTx Text SendTxRaw
   | SuccessMessage Text
   deriving (Generic)
+
+instance Aeson.ToJSON InstanceResponse where
+  toJSON = \case
+    NewPaymentChannel name (FundInternalWallet addr payload) ->
+      object [ mkTag "new"
+             , "name" .= name
+             , "address" .= addr
+             , "tx" .= payload
+             ]
+
+    InstanceError errorMsg ->
+      object [ mkTag "error"
+             , "message" .= errorMsg
+             ]
+
+    LockAttempt name result ->
+      object $ [ "name" .= name
+               ] <>
+               (case result of
+                  LockFundInternal (FundInternalWallet addr payload) ->
+                    [ mkTag "payToInternalWalletTx"
+                    , "address" .= addr
+                    , "tx" .= payload
+                    ]
+                  LockInChannel (FundPaymentChannel amount payload witnessPayload) ->
+                    [ mkTag "lockTx"
+                    , "lovelace" .= amount
+                    , "tx" .= payload
+                    , "witness" .= witnessPayload
+                    ]
+                  LockCreateOutput amount payload ->
+                    [ mkTag "createOutputTx"
+                    , "lovelace" .= amount
+                    , "tx" .= payload
+                    ]
+               )
+
+    SendTx name (SendTxRaw fromAddr toAddr amount payload) -> do
+      object $ [ mkTag "sendTx"
+               , "name" .= name
+               , "from" .= fromAddr
+               , "to" .= toAddr
+               , "lovelace" .= amount
+               , "tx" .= payload
+               ]
+
+    SuccessMessage msg -> do
+      object [ mkTag "success"
+             , "message" .= msg
+             ]
+
+    ChannelStatus name status mStatus ->
+      object $ [ mkTag "status"
+               , "name" .= name
+               , "status" .= statusText status
+               ] <>
+               (case mStatus of
+                  Just ds -> [ "details" .= ds]
+                  Nothing -> [])
+      where
+        statusText :: PaymentChannelStatus -> T.Text
+        statusText = \case
+          PaymentChannelStatus_Submitting -> "submitting"
+          PaymentChannelStatus_WaitingForAccept -> "waitingForAccept"
+          PaymentChannelStatus_Opening -> "opening"
+          PaymentChannelStatus_Open -> "open"
+          PaymentChannelStatus_Closing -> "closing"
+          PaymentChannelStatus_Error -> "error"
+
+instance Aeson.FromJSON InstanceResponse where
+  parseJSON = Aeson.withObject "Instance Response" $ \o -> do
+    tag :: T.Text <- o .: "tag"
+    case tag of
+      "new" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        payload <- o .: "tx"
+        pure $ NewPaymentChannel name $ FundInternalWallet addr payload
+
+      "error" -> do
+        message <- o .: "message"
+        pure $ InstanceError message
+
+      "payToInternalWalletTx" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        payload <- o .: "tx"
+        pure $ LockAttempt name $ LockFundInternal (FundInternalWallet addr payload)
+
+      "lockTx" -> do
+        name <- o .: "name"
+        amount <- o .: "lovelace"
+        payload <- o .: "tx"
+        witnessPayload <- o .: "witness"
+        pure $ LockAttempt name $ LockInChannel (FundPaymentChannel amount payload witnessPayload)
+
+      "createOutputTx" -> do
+        name <- o .: "name"
+        amount <- o .: "lovelace"
+        payload <- o .: "tx"
+        pure $ LockAttempt name $ LockCreateOutput amount payload
+
+      "sendTx" -> do
+        name <- o .: "name"
+        fromAddr <- o .: "from"
+        toAddr <- o .: "to"
+        amount <- o .: "lovelace"
+        payload <- o .: "tx"
+        pure $ SendTx name (SendTxRaw fromAddr toAddr amount payload)
+
+      "success" -> do
+        msg <- o .: "message"
+        pure $ SuccessMessage msg
+
+      "status" -> do
+        name <- o .: "name"
+        statusText <- o .: "status"
+        mStatus <- o .:? "details"
+        status <- parseStatus statusText
+        pure $ ChannelStatus name status mStatus
+        where
+          parseStatus :: MonadFail m => T.Text -> m PaymentChannelStatus
+          parseStatus = \case
+            "submitting" -> pure $ PaymentChannelStatus_Submitting
+            "waitingForAccept" -> pure $ PaymentChannelStatus_WaitingForAccept
+            "opening" -> pure $ PaymentChannelStatus_Opening
+            "open" -> pure $ PaymentChannelStatus_Open
+            "closing" -> pure $ PaymentChannelStatus_Closing
+            "error" -> pure $ PaymentChannelStatus_Error
+            x -> fail $ "Invalid status text: " <> T.unpack x
+
+      x -> fail $ "Invalid tag: " <> T.unpack x
+
+mkTag :: T.Text -> (Aeson.Key, Aeson.Value)
+mkTag = ("tag" .=)
 
 makeLenses ''DetailedStatus
 makeLenses ''FundInternalWallet
@@ -177,6 +422,3 @@ formatLovelaceAsAda amount = T.pack $ printf "%.2f" $ (fromIntegral amount :: Do
 
 toShortAddress :: Api.AddressAny -> Text
 toShortAddress = T.takeEnd 8 . Api.serialiseAddress
-
-instance Aeson.ToJSON InstanceResponse
-instance Aeson.FromJSON InstanceResponse
