@@ -20,8 +20,8 @@ hydraChainProtocolParameters = "config/backend/hydra/protocol-parameters.json"
 hydraPayDb :: FilePath
 hydraPayDb = "hydra-pay-db"
 
-cardanoNodeDb :: FilePath
-cardanoNodeDb = "cardano-node-db"
+mkNodeDb :: FilePath -> FilePath
+mkNodeDb prefix = prefix <> "-node-db"
 
 previewChainConfig :: FilePath
 previewChainConfig = "config/preview/config.json"

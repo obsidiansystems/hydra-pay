@@ -32,8 +32,8 @@ import HydraPay.Instance
 import HydraPay.Config
 
 data Command
-  = Instance Text
-  | Channel ChannelCommand
+  = Instance Text Int
+  | Channel ChannelCommand Int
 
 data ChannelCommand
   = Open Text Text Text
@@ -44,14 +44,19 @@ data ChannelCommand
   | DoClose Text
   deriving (Show)
 
+portOption :: Parser Int
+portOption = option auto (value defaultPort <> long "port" <> short 'p')
+
 parseChannelCommand :: Parser Command
-parseChannelCommand = fmap Channel $ subparser $
-  command "status" (info parseStatus (progDesc "Get the status of a payment channel"))
-  <> command "open" (info parseOpen (progDesc "Open a new payment channel"))
-  <> command "lock" (info parseLock (progDesc "Lock funds in a payment channel"))
-  <> command "send" (info parseSend (progDesc "Send ADA in a payment channel"))
-  <> command "submit" (info parseSubmit (progDesc "Submit a signed transaction received from 'send'"))
-  <> command "close" (info parseClose (progDesc "Close a payment channel"))
+parseChannelCommand = Channel <$> channelCommands <*> portOption
+  where
+    channelCommands = subparser $
+      command "status" (info parseStatus (progDesc "Get the status of a payment channel"))
+      <> command "open" (info parseOpen (progDesc "Open a new payment channel"))
+      <> command "lock" (info parseLock (progDesc "Lock funds in a payment channel"))
+      <> command "send" (info parseSend (progDesc "Send ADA in a payment channel"))
+      <> command "submit" (info parseSubmit (progDesc "Submit a signed transaction received from 'send'"))
+      <> command "close" (info parseClose (progDesc "Close a payment channel"))
 
 parseClose :: Parser ChannelCommand
 parseClose = DoClose <$> argument str (metavar "<name>")
@@ -72,7 +77,7 @@ parseOpen :: Parser ChannelCommand
 parseOpen = Open <$> argument str (metavar "<name>") <*> argument str (metavar "<address>") <*> argument str (metavar "<address>")
 
 parseInstance :: Parser Command
-parseInstance = Instance <$> argument str (metavar "<network-name>")
+parseInstance = Instance <$> argument str (metavar "<network-name>") <*> portOption
 
 parseCommand :: Parser Command
 parseCommand = subparser $
@@ -124,36 +129,36 @@ runClient = do
   let opts = info (parseCommand <**> helper) fullDesc
   cmd <- customExecParser (prefs showHelpOnEmpty) opts
   case cmd of
-    Instance networkName -> case networkName of
-      "mainnet" -> runInstance mainnetConfig
-      "preprod" -> runInstance preprodConfig
-      "preview" -> runInstance previewConfig
-      "sanchonet" -> runInstance sanchonetConfig
+    Instance networkName port -> case networkName of
+      "mainnet" -> runInstance mainnetConfig port
+      "preprod" -> runInstance preprodConfig port
+      "preview" -> runInstance previewConfig port
+      "sanchonet" -> runInstance sanchonetConfig port
       _ -> putStrLn "Please choose a network from the following options: mainnet | preview | preprod | sanchonet"
-    Channel (Open name addrFirst addrSecond) -> do
+    Channel (Open name addrFirst addrSecond) port -> do
       case mkCreate name addrFirst addrSecond of
-        Right req -> clientRequest req
+        Right req -> clientRequest req port
         Left err -> putStrLn $ T.unpack err
-    Channel (Lock name addr amount) -> do
+    Channel (Lock name addr amount) port -> do
       case mkLock name addr amount of
-        Right req -> clientRequest req
+        Right req -> clientRequest req port
         Left err -> putStrLn $ T.unpack err
-    Channel (Status name) -> clientRequest $ GetStatus name
-    Channel (Send name addr amount) ->
+    Channel (Status name) port -> clientRequest (GetStatus name) port
+    Channel (Send name addr amount) port ->
       case mkSend name addr amount of
-        Right req -> clientRequest req
+        Right req -> clientRequest req port
         Left err -> putStrLn $ T.unpack err
-    Channel (Submit name addr file) -> do
+    Channel (Submit name addr file) port -> do
       result <- runExceptT $ mkSubmit name file addr
       case result of
-        Right req -> clientRequest req
+        Right req -> clientRequest req port
         Left err -> putStrLn $ T.unpack err
-    Channel (DoClose name) ->
-      clientRequest (CloseChannel name)
+    Channel (DoClose name) port ->
+      clientRequest (CloseChannel name) port
 
-clientRequest :: InstanceRequest -> IO ()
-clientRequest req = do
-  tryRes :: (Either SomeException ()) <- try $ WS.runClient "127.0.0.1" defaultPort "/" $ \conn -> do
+clientRequest :: InstanceRequest -> Int -> IO ()
+clientRequest req port = do
+  tryRes :: (Either SomeException ()) <- try $ WS.runClient "127.0.0.1" port "/" $ \conn -> do
     WS.sendDataMessage conn $ WS.Text (Aeson.encode req) Nothing
     payload <- WS.receiveDataMessage conn
     WS.sendClose conn $ ("We are done here" :: T.Text)
@@ -165,7 +170,7 @@ clientRequest req = do
       Just resp -> T.putStrLn $ makeHumanReadable resp
       Nothing -> T.putStrLn "Failed to decode response from instance, is your instance the same version as this client?"
   case tryRes of
-    Left reason -> putStrLn $ "Failed to connect to HydraPay instance at " <> show defaultPort <> " " <> show reason
+    Left reason -> putStrLn $ "Failed to connect to HydraPay instance at " <> show port <> " " <> show reason
     _ -> pure ()
   pure ()
 

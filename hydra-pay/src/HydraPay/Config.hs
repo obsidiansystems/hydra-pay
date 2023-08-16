@@ -56,11 +56,13 @@ preprodNodeConfig :: NodeConfig
 preprodNodeConfig =
   NodeConfig
   preprodChainConfig
-  cardanoNodeDb
-  (cardanoNodeDb </> "node.socket")
+  dbPath
+  (dbPath </> "node.socket")
   preprodChainTopology
   1
   preprodScriptTxId
+  where
+    dbPath = mkNodeDb "preprod"
 
 preprodConfig :: HydraPayConfig
 preprodConfig = HydraPayConfig
@@ -72,11 +74,13 @@ previewNodeConfig :: NodeConfig
 previewNodeConfig =
   NodeConfig
   previewChainConfig
-  cardanoNodeDb
-  (cardanoNodeDb </> "node.socket")
+  dbPath
+  (dbPath </> "node.socket")
   previewChainTopology
   2
   previewScriptTxId
+  where
+    dbPath = mkNodeDb "preview"
 
 previewConfig :: HydraPayConfig
 previewConfig = HydraPayConfig
@@ -88,11 +92,13 @@ sanchonetNodeConfig :: NodeConfig
 sanchonetNodeConfig =
   NodeConfig
   sanchonetChainConfig
-  cardanoNodeDb
-  (cardanoNodeDb </> "node.socket")
+  dbPath
+  (dbPath </> "node.socket")
   sanchonetChainTopology
   4
   sanchonetScriptTxId
+  where
+    dbPath = mkNodeDb "sanchonet"
 
 sanchonetConfig :: HydraPayConfig
 sanchonetConfig = HydraPayConfig
@@ -104,11 +110,13 @@ mainnetNodeConfig :: NodeConfig
 mainnetNodeConfig =
   NodeConfig
   mainnetChainConfig
-  cardanoNodeDb
-  (cardanoNodeDb </> "node.socket")
+  dbPath
+  (dbPath </> "node.socket")
   mainnetChainTopology
   764824073
   mainnetScriptTxId
+  where
+    dbPath = mkNodeDb "mainnet"
 
 mainnetConfig :: HydraPayConfig
 mainnetConfig = HydraPayConfig
