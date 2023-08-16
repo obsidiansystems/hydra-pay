@@ -130,11 +130,11 @@ runClient = do
   cmd <- customExecParser (prefs showHelpOnEmpty) opts
   case cmd of
     Instance networkName port -> case networkName of
-      "mainnet" -> runInstance mainnetConfig port
+      -- "mainnet" -> runInstance mainnetConfig port
       "preprod" -> runInstance preprodConfig port
       "preview" -> runInstance previewConfig port
-      "sanchonet" -> runInstance sanchonetConfig port
-      _ -> putStrLn "Please choose a network from the following options: mainnet | preview | preprod | sanchonet"
+      -- "sanchonet" -> runInstance sanchonetConfig port
+      _ -> putStrLn "Please choose a network from the following options: preview | preprod"
     Channel (Open name addrFirst addrSecond) port -> do
       case mkCreate name addrFirst addrSecond of
         Right req -> clientRequest req port
