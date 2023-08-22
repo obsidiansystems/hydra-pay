@@ -286,11 +286,7 @@ These libraries help you kickstart DApp or LightWallet development by handling l
 
 ## 👩🏿‍💻 Hacking on Hydra Pay
 
-Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansystems/obelisk#installing-obelisk) so to contribute you must have Obelisk installed.
-
-Once you have Obelisk installed hacking on Hydra Pay is as easy as running `ob repl` in the root directory.
-
-You can enter a shell with the `hydra-pay` client with `nix-shell`.
+Working on hydra-pay means changing either the `hydra-pay` or `hydra-pay-core` libraries. To get into a nix shell with everything you need run `nix-shell default.nix -A shells.ghc`, from there you can run `cabal repl <hydra-pay/hydra-pay-core>` to hack away.
 
 ## 🤔 FAQ
 
