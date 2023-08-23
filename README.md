@@ -8,6 +8,7 @@
 * [👷🏾‍♂️ Running a Hydra Pay Instance](#running-a-hydra-pay-instance)
   * [Instances](#instances)
     + [Standardization](#standardization)
+    + [Cardano node socket](#cardano-node-socket)
   * [Running in Docker](#running-in-docker)
   * [Running with Nix](#running-with-nix)
 * [🗝 API](#-api)
@@ -75,6 +76,10 @@ This means that payment channels exist tied to an instance. The underlying Head 
 
 Currently nothing is stopping Hydra Pay Instances from cross communicating, but as outlined above there is more information on top of Hydra that Hydra Pay adds. This means that it isn't enough to make the Hydra Nodes aware of each other across instances. A standard must exist to facilitiate the communication of payment channel names, internal wallet addresses etc. This would allow not only communication across Hydra Pay Instances, but also allow other applications to communicate with Hydra Pay instances.
 
+#### Cardano node socket
+
+If you would like to communicate directly with the managed node, you can find it in `<network>-node-db/node.socket`.
+
 ### Running in Docker
 
 Pull the docker image, run it and use http://127.0.0.1:8010/ to talk to your Docker instance.
@@ -139,7 +144,7 @@ To create a payment channel you will provide the name, and addresses of the part
 {
   "tag" : "create",
   "name" : "<name-of-your-payment-channel>"
-  "addresses" : 
+  "participants" : 
    [ "<address>"
    , "<address>"
    ]
@@ -148,7 +153,7 @@ To create a payment channel you will provide the name, and addresses of the part
 
 or through the `hydra-pay` built in client, you can also do:
 
-`hydra-pay channel new <name> <list-of-addresses>`
+`hydra-pay channel open <name> <list-of-addresses>`
 
 
 ### Getting The Status of A Payment Channel
@@ -176,7 +181,7 @@ To lock, start by sending a request like so:
   "tag" : "lock",
   "name" : "<name-of-your-payment-channel>",
   "address" : "<address-of-participant>",
-  "amount" : <amount-in-lovelace>
+  "lovelace" : <amount-in-lovelace>
 }
 ```
 
@@ -202,7 +207,7 @@ To send ADA you will make this request, and receieve a transaction for the Hydra
   "tag" : "send",
   "name" : "<name-of-your-payment-channel>",
   "address" : "<address-of-sender>",
-  "amount" : <amount-in-lovelace>
+  "lovelace" : <amount-in-lovelace>
 }
 ```
 
@@ -216,13 +221,14 @@ sign this transaction and give it back to Hydra Pay, so your ADA can be transfer
 {
   "tag" : "submit",
   "name" : "<name-of-your-payment-channel>"
-  "tx" : "<signed-transaction-body>"
+  "address" : "<address-of-sender>"
+  "signed-tx" : "<signed-transaction-body>"
 }
 ```
 
 with the `hydra-pay` client this becomes:
 
-`hydra-pay channel submit <name> <signed-tx-file>`
+`hydra-pay channel submit <name> <address> <signed-tx-file>`
 
 ### Closing a Payment Channel
 
@@ -231,7 +237,7 @@ Eventually you will want to close a payment channel, and ensure funds are given 
 ``` json
 {
   "tag" : "close",
-  "name" : "<name-of-your-payment-channel",
+  "name" : "<name-of-your-payment-channel>",
 }
 ```
 
