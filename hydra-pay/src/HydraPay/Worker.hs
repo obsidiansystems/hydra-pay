@@ -121,7 +121,7 @@ spawnWorkers pool state = do
                  log $ "Failed to send Init: " <> err
 
            HydraHeadStatus_Open -> do
-             log "Checking to see if I should kick of a close"
+             log "Checking to see if I should kick off a close"
              when (head_ ^. Db.hydraHead_shouldClose) $ do
                log "Signalling payment channel to close"
                result <- sendClientInputToHead state headId Nothing $ CI.Close
