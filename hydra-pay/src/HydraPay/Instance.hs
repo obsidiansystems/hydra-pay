@@ -120,10 +120,14 @@ runInstance cfg port = do
 instanceHandler :: MonadIO m => HydraPayState -> InstanceRequest -> m InstanceResponse
 instanceHandler state = \case
   CreatePaymentChannel name addr1 addr2 -> do
-    result <- openPaymentChannel state name addr1 addr2
-    case result of
-      Right chan -> pure $ NewPaymentChannel name chan
-      Left err -> pure $ InstanceError err
+    existingInfo <- runExceptT $ getPaymentChannelAndHead state name
+    case existingInfo of
+      Right _ -> pure $ InstanceError $ "Payment channel '" <> name <> "' exists."
+      Left _ -> do
+        result <- openPaymentChannel state name addr1 addr2
+        case result of
+          Right chan -> pure $ NewPaymentChannel name chan
+          Left err -> pure $ InstanceError err
 
   GetStatus name -> do
     result <- runExceptT $ getPaymentChannelAndHead state name
