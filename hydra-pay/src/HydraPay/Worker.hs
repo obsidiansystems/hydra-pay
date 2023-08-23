@@ -38,10 +38,9 @@ import Database.Beam.Backend.SQL.BeamExtensions (SqlSerial(..))
 import qualified Database.Beam.Postgres as Pg
 import Rhyolite.Task.Beam.Worker
 
--- import Backend.App
--- import Backend.Bank
 import HydraPay.State
 import HydraPay.Bank
+import HydraPay.PaymentChannel (PaymentChannelStatus(..))
 import HydraPay.Cardano.Hydra.Api.ClientInput as CI
 import HydraPay.Database
 import qualified HydraPay.Database as Db
@@ -312,7 +311,9 @@ paymentChannelWorker state conn workerId = taskWorkerWithoutHasRun conn (_db_pay
             sign $ secondInfo ^. proxyInfo_internalWalletSigningKey
           _ <- waitForTxInput state $ mkTxInput cleanupTx 0
           untrackRunningHead state headId
-          Db.runBeam state $ updateHydraHeadStatusQ headId $ HydraHeadStatus_Done
+          Db.runBeam state $ do
+            updateHydraHeadStatusQ headId $ HydraHeadStatus_Done
+            tryUpdatePaymentChannelForHeadStatusQ headId $ PaymentChannelStatus_Done
         pure ()
       pure $ case result of
         Right _ -> do

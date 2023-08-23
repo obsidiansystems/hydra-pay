@@ -15,6 +15,7 @@
   * [Locking Funds in a Payment Channel](#locking-funds-in-a-payment-channel)
   * [Sending ADA in a Payment Channel](#sending-ada-in-a-channel)
   * [Closing a Payment Channel](#closing-a-payment-channel)
+  * [Removing a Payment Channel](#removing-a-payment-channel)
 * [🦾 Proxy Addresses](#-proxy-addresses)
 * [Haskell Library](#haskell-library)
 * [👩🏿‍💻 Hacking on Hydra Pay](#-hacking-on-hydra-pay)
@@ -239,6 +240,21 @@ with the `hydra-pay` client this is:
 `hydra-pay channel close <name>`
 
 The channel will be closed, and Hydra Pay will monitor the underlying Head for closing, contestation, fanout, and finalization (the stage at which the participants funds have exited the Head) and once finalization is met, Hydra Pay will automatically have the internal wallets pay back their balances to the respective participants.
+
+### Removing a Payment Channel
+
+If you want to remove a payment channel completely you can use the remove request.
+
+``` json
+{
+  "tag" : "remove",
+  "name" : "<name-of-your-payment-channel>"
+}
+```
+
+with the `hydra-pay` client this is:
+
+`hydra-pay channel remove <name>`
 
 ## 🦾 Proxy Addresses
 

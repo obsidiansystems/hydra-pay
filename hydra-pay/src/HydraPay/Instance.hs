@@ -251,6 +251,36 @@ instanceHandler state = \case
       Right rawTx -> pure $ SendTx name rawTx
       Left res -> pure $ InstanceError res
 
+  RemoveChannel name -> do
+    result <- Db.runBeam state $ runExceptT $ getPaymentChannelAndHead state name
+    case result of
+      Right (pc, hh) -> do
+        let
+          canRemove =
+            case pc ^. Db.paymentChannel_status of
+              PaymentChannelStatus_Done -> True
+              _ -> False
+
+        case canRemove of
+          True -> do
+            Db.runBeam state $ do
+              let
+                hydraHeadPk = Db.HeadId $ hh ^. Db.hydraHead_id
+              runDelete $ delete (Db.db ^. Db.db_proxyHead) (\p -> p ^. Db.proxyHead_head ==. val_ hydraHeadPk)
+              runDelete $ delete (Db.db ^. Db.db_transactions) (\t -> t ^. Db.transaction_head ==. val_ hydraHeadPk)
+              runDelete $ delete (Db.db ^. Db.db_observedCommits) (\c -> c ^. Db.observedCommit_head ==. val_ hydraHeadPk)
+              runDelete $ delete (Db.db ^. Db.db_paymentChannels) (\c -> c ^. Db.paymentChannel_name ==. val_ name)
+              runDelete $ delete (Db.db ^. Db.db_heads) (\h -> h ^. Db.hydraHead_id ==. val_ (hh ^. Db.hydraHead_id))
+
+            pure $ SuccessMessage $ "Head '" <> name <> "' removed"
+
+          False -> do
+            pure $ InstanceError $ "Head '" <> name <> "' can't be removed at this time, please close the head if you wish to remove it"
+
+      Left _ -> do
+        pure $ InstanceError $ "Head '" <> name <> "' doesn't exist"
+
+
 getPaymentChannelAndHead :: (MonadIO m, MonadError Text m) => HydraPayState -> Text -> m (Db.PaymentChannel, Db.HydraHead)
 getPaymentChannelAndHead state name = do
   result <- Db.runBeam state $ do

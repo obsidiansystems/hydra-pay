@@ -100,6 +100,8 @@ dbPaymentChannelToInfo addr hh pc _ =
           Just selfBalance
         PaymentChannelStatus_Closing ->
           Just selfBalance
+        PaymentChannelStatus_Done ->
+          Nothing
         PaymentChannelStatus_Error ->
           Nothing
 

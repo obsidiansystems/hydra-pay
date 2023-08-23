@@ -26,6 +26,7 @@ data InstanceRequest
   | SendInChannel Text Api.AddressAny Int32
   | SubmitInChannel Text Api.AddressAny Text
   | CloseChannel Text
+  | RemoveChannel Text
   deriving (Generic)
 
 instance Aeson.ToJSON InstanceRequest where
@@ -64,6 +65,10 @@ instance Aeson.ToJSON InstanceRequest where
       object [ mkTag "close"
              , "name" .= name
              ]
+    RemoveChannel name ->
+      object [ mkTag "remove"
+             , "name" .= name
+             ]
 
 instance Aeson.FromJSON InstanceRequest where
   parseJSON = Aeson.withObject "Instance Request" $ \o -> do
@@ -94,6 +99,9 @@ instance Aeson.FromJSON InstanceRequest where
       "close" -> do
         name <- o .: "name"
         pure $ CloseChannel name
+      "remove" -> do
+        name <- o .: "name"
+        pure $ RemoveChannel name
       t -> fail $ "Encountered Invalid mkTag " <> T.unpack t
 
 data DetailedStatus = DetailedStatus
@@ -266,6 +274,7 @@ instance Aeson.ToJSON InstanceResponse where
           PaymentChannelStatus_Open -> "open"
           PaymentChannelStatus_Closing -> "closing"
           PaymentChannelStatus_Error -> "error"
+          PaymentChannelStatus_Done -> "closed"
 
 instance Aeson.FromJSON InstanceResponse where
   parseJSON = Aeson.withObject "Instance Response" $ \o -> do
@@ -327,6 +336,7 @@ instance Aeson.FromJSON InstanceResponse where
             "open" -> pure $ PaymentChannelStatus_Open
             "closing" -> pure $ PaymentChannelStatus_Closing
             "error" -> pure $ PaymentChannelStatus_Error
+            "closed" -> pure $ PaymentChannelStatus_Done
             x -> fail $ "Invalid status text: " <> T.unpack x
 
       x -> fail $ "Invalid tag: " <> T.unpack x
@@ -381,6 +391,7 @@ makeHumanReadable = \case
       Nothing -> name <> " is open"
     PaymentChannelStatus_Closing -> name <> " is closing"
     PaymentChannelStatus_Error -> name <> " is in a failure state"
+    PaymentChannelStatus_Done -> name <> " is closed"
 
   InstanceError msg -> msg
   SuccessMessage msg -> msg
