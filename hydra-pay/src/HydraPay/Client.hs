@@ -42,6 +42,7 @@ data ChannelCommand
   | Send Text Double Text
   | Submit Text Text FilePath
   | DoClose Text
+  | Remove Text
   deriving (Show)
 
 portOption :: Parser Int
@@ -57,6 +58,7 @@ parseChannelCommand = Channel <$> channelCommands <*> portOption
       <> command "send" (info parseSend (progDesc "Send ADA in a payment channel"))
       <> command "submit" (info parseSubmit (progDesc "Submit a signed transaction received from 'send'"))
       <> command "close" (info parseClose (progDesc "Close a payment channel"))
+      <> command "remove" (info parseRemove (progDesc "Remove a payment channel"))
 
 parseClose :: Parser ChannelCommand
 parseClose = DoClose <$> argument str (metavar "<name>")
@@ -72,6 +74,9 @@ parseLock = Lock <$> argument str (metavar "<name>") <*> argument auto (metavar 
 
 parseStatus :: Parser ChannelCommand
 parseStatus = Status <$> argument str (metavar "<name>")
+
+parseRemove :: Parser ChannelCommand
+parseRemove = Remove <$> argument str (metavar "<name>")
 
 parseOpen :: Parser ChannelCommand
 parseOpen = Open <$> argument str (metavar "<name>") <*> argument str (metavar "<address>") <*> argument str (metavar "<address>")
@@ -155,6 +160,8 @@ runClient = do
         Left err -> putStrLn $ T.unpack err
     Channel (DoClose name) port ->
       clientRequest (CloseChannel name) port
+    Channel (Remove name) port ->
+      clientRequest (RemoveChannel name) port
 
 clientRequest :: InstanceRequest -> Int -> IO ()
 clientRequest req port = do

@@ -44,6 +44,7 @@ data PaymentChannelStatus
   | PaymentChannelStatus_Opening
   | PaymentChannelStatus_Open
   | PaymentChannelStatus_Closing
+  | PaymentChannelStatus_Done
   | PaymentChannelStatus_Error
   deriving (Show, Eq, Ord, Read, Generic, Enum)
 

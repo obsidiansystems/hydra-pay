@@ -8,10 +8,8 @@ import Control.Lens ((^.), to)
 import Control.Monad
 import Control.Monad.IO.Class
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 import Cardano.Transaction hiding (TxId)
 import Cardano.Transaction.Eval (evalEither)
-import qualified Data.Aeson as Aeson
 import Data.Int (Int32)
 import Data.String (fromString)
 import Data.Text (Text)

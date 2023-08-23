@@ -24,7 +24,6 @@ import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
 
 import qualified Cardano.Api as Api
-import qualified Cardano.Api.Shelley as Api
 
 -- | Provide a path and a name to use as a prefix for your signing and verification keys
 data KeyGenTemplate = KeyGenTemplate

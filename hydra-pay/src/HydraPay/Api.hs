@@ -26,6 +26,7 @@ data InstanceRequest
   | SendInChannel Text Api.AddressAny Int32
   | SubmitInChannel Text Api.AddressAny Text
   | CloseChannel Text
+  | RemoveChannel Text
   deriving (Generic)
 
 instance Aeson.ToJSON InstanceRequest where
@@ -64,6 +65,10 @@ instance Aeson.ToJSON InstanceRequest where
       object [ mkTag "close"
              , "name" .= name
              ]
+    RemoveChannel name ->
+      object [ mkTag "remove"
+             , "name" .= name
+             ]
 
 instance Aeson.FromJSON InstanceRequest where
   parseJSON = Aeson.withObject "Instance Request" $ \o -> do
@@ -94,6 +99,9 @@ instance Aeson.FromJSON InstanceRequest where
       "close" -> do
         name <- o .: "name"
         pure $ CloseChannel name
+      "remove" -> do
+        name <- o .: "name"
+        pure $ RemoveChannel name
       t -> fail $ "Encountered Invalid mkTag " <> T.unpack t
 
 data DetailedStatus = DetailedStatus
@@ -149,7 +157,7 @@ instance Aeson.FromJSON DetailedStatus where
           True -> TransactionReceived
           _ -> TransactionSent
       pure $ (tid, TransactionInfo tid time amount dir)
-    pure $ DetailedStatus firstAddr firstBalance secondAddr secondBalance ts
+    pure $ DetailedStatus firstAddr secondAddr firstBalance secondBalance ts
 
 data FundInternalWallet = FundInternalWallet
   { _fundInternal_internalWalletAddress :: Api.AddressAny
@@ -174,6 +182,7 @@ data LockResult
   = LockFundInternal FundInternalWallet
   | LockInChannel FundPaymentChannel
   | LockCreateOutput Int32 Text
+  | LockAlreadyComplete Api.AddressAny
   deriving (Generic)
 
 instance Aeson.ToJSON LockResult
@@ -226,12 +235,17 @@ instance Aeson.ToJSON InstanceResponse where
                     [ mkTag "lockTx"
                     , "lovelace" .= amount
                     , "tx" .= payload
+
                     , "witness" .= witnessPayload
                     ]
                   LockCreateOutput amount payload ->
                     [ mkTag "createOutputTx"
                     , "lovelace" .= amount
                     , "tx" .= payload
+                    ]
+                  LockAlreadyComplete addr ->
+                    [ mkTag "alreadyComplete"
+                    , "address" .= addr
                     ]
                )
 
@@ -266,6 +280,7 @@ instance Aeson.ToJSON InstanceResponse where
           PaymentChannelStatus_Open -> "open"
           PaymentChannelStatus_Closing -> "closing"
           PaymentChannelStatus_Error -> "error"
+          PaymentChannelStatus_Done -> "closed"
 
 instance Aeson.FromJSON InstanceResponse where
   parseJSON = Aeson.withObject "Instance Response" $ \o -> do
@@ -300,6 +315,11 @@ instance Aeson.FromJSON InstanceResponse where
         payload <- o .: "tx"
         pure $ LockAttempt name $ LockCreateOutput amount payload
 
+      "alreadyComplete" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        pure $ LockAttempt name $ LockAlreadyComplete addr
+
       "sendTx" -> do
         name <- o .: "name"
         fromAddr <- o .: "from"
@@ -327,6 +347,7 @@ instance Aeson.FromJSON InstanceResponse where
             "open" -> pure $ PaymentChannelStatus_Open
             "closing" -> pure $ PaymentChannelStatus_Closing
             "error" -> pure $ PaymentChannelStatus_Error
+            "closed" -> pure $ PaymentChannelStatus_Done
             x -> fail $ "Invalid status text: " <> T.unpack x
 
       x -> fail $ "Invalid tag: " <> T.unpack x
@@ -374,13 +395,14 @@ makeHumanReadable = \case
 
         T.intercalate "\n" $
           [ " --- Open Payment Channel '" <> name <> "' ---"
-          , addrFirstShort <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceFirst :: Double) / 1000000.0))
-          , addrSecondShort <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceSecond :: Double) / 1000000.0))
+          , addrFirstText <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceFirst :: Double) / 1000000.0))
+          , addrSecondText <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceSecond :: Double) / 1000000.0))
           ] <> (if Map.null txns then [] else (["Transactions:"] <> (fmap renderTxn $ reverse $ Map.elems txns)))
 
       Nothing -> name <> " is open"
     PaymentChannelStatus_Closing -> name <> " is closing"
     PaymentChannelStatus_Error -> name <> " is in a failure state"
+    PaymentChannelStatus_Done -> name <> " is closed"
 
   InstanceError msg -> msg
   SuccessMessage msg -> msg
@@ -407,14 +429,19 @@ makeHumanReadable = \case
           , payload
           ]
 
-      LockInChannel (FundPaymentChannel amount cbor witness) ->
+      LockInChannel (FundPaymentChannel amount payload witness) ->
         T.intercalate "\n"
           [ "Here is a transaction to lock " <> formatLovelaceAsAda amount <> "ADA into this payment channel"
           , ""
-          , cbor
+          , payload
           , ""
           , "Here is the witness from your Hydra Node's internal wallet, you may need this depending on how you sign and submit transactions:"
           , witness
+          ]
+
+      LockAlreadyComplete addr ->
+        T.intercalate "\n"
+          [ "Participant " <> Api.serialiseAddress addr <> " has already locked funds in this payment channel"
           ]
 
 formatLovelaceAsAda :: Int32 -> Text

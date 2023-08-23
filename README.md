@@ -8,6 +8,7 @@
 * [👷🏾‍♂️ Running a Hydra Pay Instance](#running-a-hydra-pay-instance)
   * [Instances](#instances)
     + [Standardization](#standardization)
+    + [Cardano node socket](#cardano-node-socket)
   * [Running in Docker](#running-in-docker)
   * [Running with Nix](#running-with-nix)
 * [🗝 API](#-api)
@@ -15,6 +16,7 @@
   * [Locking Funds in a Payment Channel](#locking-funds-in-a-payment-channel)
   * [Sending ADA in a Payment Channel](#sending-ada-in-a-channel)
   * [Closing a Payment Channel](#closing-a-payment-channel)
+  * [Removing a Payment Channel](#removing-a-payment-channel)
 * [🦾 Proxy Addresses](#-proxy-addresses)
 * [Haskell Library](#haskell-library)
 * [👩🏿‍💻 Hacking on Hydra Pay](#-hacking-on-hydra-pay)
@@ -73,6 +75,10 @@ This means that payment channels exist tied to an instance. The underlying Head 
 #### Standardization
 
 Currently nothing is stopping Hydra Pay Instances from cross communicating, but as outlined above there is more information on top of Hydra that Hydra Pay adds. This means that it isn't enough to make the Hydra Nodes aware of each other across instances. A standard must exist to facilitiate the communication of payment channel names, internal wallet addresses etc. This would allow not only communication across Hydra Pay Instances, but also allow other applications to communicate with Hydra Pay instances.
+
+#### Cardano node socket
+
+If you would like to communicate directly with the managed node, you can find it in `<network>-node-db/node.socket`.
 
 ### Running in Docker
 
@@ -138,7 +144,7 @@ To create a payment channel you will provide the name, and addresses of the part
 {
   "tag" : "create",
   "name" : "<name-of-your-payment-channel>"
-  "addresses" : 
+  "participants" : 
    [ "<address>"
    , "<address>"
    ]
@@ -147,7 +153,7 @@ To create a payment channel you will provide the name, and addresses of the part
 
 or through the `hydra-pay` built in client, you can also do:
 
-`hydra-pay channel new <name> <list-of-addresses>`
+`hydra-pay channel open <name> <list-of-addresses>`
 
 
 ### Getting The Status of A Payment Channel
@@ -175,7 +181,7 @@ To lock, start by sending a request like so:
   "tag" : "lock",
   "name" : "<name-of-your-payment-channel>",
   "address" : "<address-of-participant>",
-  "amount" : <amount-in-lovelace>
+  "lovelace" : <amount-in-lovelace>
 }
 ```
 
@@ -201,7 +207,7 @@ To send ADA you will make this request, and receieve a transaction for the Hydra
   "tag" : "send",
   "name" : "<name-of-your-payment-channel>",
   "address" : "<address-of-sender>",
-  "amount" : <amount-in-lovelace>
+  "lovelace" : <amount-in-lovelace>
 }
 ```
 
@@ -215,13 +221,14 @@ sign this transaction and give it back to Hydra Pay, so your ADA can be transfer
 {
   "tag" : "submit",
   "name" : "<name-of-your-payment-channel>"
-  "tx" : "<signed-transaction-body>"
+  "address" : "<address-of-sender>"
+  "signed-tx" : "<signed-transaction-body>"
 }
 ```
 
 with the `hydra-pay` client this becomes:
 
-`hydra-pay channel submit <name> <signed-tx-file>`
+`hydra-pay channel submit <name> <address> <signed-tx-file>`
 
 ### Closing a Payment Channel
 
@@ -230,7 +237,7 @@ Eventually you will want to close a payment channel, and ensure funds are given 
 ``` json
 {
   "tag" : "close",
-  "name" : "<name-of-your-payment-channel",
+  "name" : "<name-of-your-payment-channel>",
 }
 ```
 
@@ -239,6 +246,21 @@ with the `hydra-pay` client this is:
 `hydra-pay channel close <name>`
 
 The channel will be closed, and Hydra Pay will monitor the underlying Head for closing, contestation, fanout, and finalization (the stage at which the participants funds have exited the Head) and once finalization is met, Hydra Pay will automatically have the internal wallets pay back their balances to the respective participants.
+
+### Removing a Payment Channel
+
+If you want to remove a payment channel completely you can use the remove request.
+
+``` json
+{
+  "tag" : "remove",
+  "name" : "<name-of-your-payment-channel>"
+}
+```
+
+with the `hydra-pay` client this is:
+
+`hydra-pay channel remove <name>`
 
 ## 🦾 Proxy Addresses
 
@@ -286,11 +308,7 @@ These libraries help you kickstart DApp or LightWallet development by handling l
 
 ## 👩🏿‍💻 Hacking on Hydra Pay
 
-Hydra Pay is written in Haskell using [Obelisk](https://github.com/obsidiansystems/obelisk#installing-obelisk) so to contribute you must have Obelisk installed.
-
-Once you have Obelisk installed hacking on Hydra Pay is as easy as running `ob repl` in the root directory.
-
-You can enter a shell with the `hydra-pay` client with `nix-shell`.
+Working on hydra-pay means changing either the `hydra-pay` or `hydra-pay-core` libraries. To get into a nix shell with everything you need run `nix-shell default.nix -A shells.ghc`, from there you can run `cabal repl <hydra-pay/hydra-pay-core>` to hack away.
 
 ## 🤔 FAQ
 
