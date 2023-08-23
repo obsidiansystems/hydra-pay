@@ -149,7 +149,7 @@ instance Aeson.FromJSON DetailedStatus where
           True -> TransactionReceived
           _ -> TransactionSent
       pure $ (tid, TransactionInfo tid time amount dir)
-    pure $ DetailedStatus firstAddr firstBalance secondAddr secondBalance ts
+    pure $ DetailedStatus firstAddr secondAddr firstBalance secondBalance ts
 
 data FundInternalWallet = FundInternalWallet
   { _fundInternal_internalWalletAddress :: Api.AddressAny
