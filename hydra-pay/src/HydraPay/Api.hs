@@ -182,6 +182,7 @@ data LockResult
   = LockFundInternal FundInternalWallet
   | LockInChannel FundPaymentChannel
   | LockCreateOutput Int32 Text
+  | LockAlreadyComplete Api.AddressAny
   deriving (Generic)
 
 instance Aeson.ToJSON LockResult
@@ -234,12 +235,17 @@ instance Aeson.ToJSON InstanceResponse where
                     [ mkTag "lockTx"
                     , "lovelace" .= amount
                     , "tx" .= payload
+
                     , "witness" .= witnessPayload
                     ]
                   LockCreateOutput amount payload ->
                     [ mkTag "createOutputTx"
                     , "lovelace" .= amount
                     , "tx" .= payload
+                    ]
+                  LockAlreadyComplete addr ->
+                    [ mkTag "alreadyComplete"
+                    , "address" .= addr
                     ]
                )
 
@@ -308,6 +314,11 @@ instance Aeson.FromJSON InstanceResponse where
         amount <- o .: "lovelace"
         payload <- o .: "tx"
         pure $ LockAttempt name $ LockCreateOutput amount payload
+
+      "alreadyComplete" -> do
+        name <- o .: "name"
+        addr <- o .: "address"
+        pure $ LockAttempt name $ LockAlreadyComplete addr
 
       "sendTx" -> do
         name <- o .: "name"
@@ -384,8 +395,8 @@ makeHumanReadable = \case
 
         T.intercalate "\n" $
           [ " --- Open Payment Channel '" <> name <> "' ---"
-          , addrFirstShort <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceFirst :: Double) / 1000000.0))
-          , addrSecondShort <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceSecond :: Double) / 1000000.0))
+          , addrFirstText <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceFirst :: Double) / 1000000.0))
+          , addrSecondText <> " has a balance of " <> (T.pack $ printf "%.2f" $ ((fromIntegral balanceSecond :: Double) / 1000000.0))
           ] <> (if Map.null txns then [] else (["Transactions:"] <> (fmap renderTxn $ reverse $ Map.elems txns)))
 
       Nothing -> name <> " is open"
@@ -418,14 +429,19 @@ makeHumanReadable = \case
           , payload
           ]
 
-      LockInChannel (FundPaymentChannel amount cbor witness) ->
+      LockInChannel (FundPaymentChannel amount payload witness) ->
         T.intercalate "\n"
           [ "Here is a transaction to lock " <> formatLovelaceAsAda amount <> "ADA into this payment channel"
           , ""
-          , cbor
+          , payload
           , ""
           , "Here is the witness from your Hydra Node's internal wallet, you may need this depending on how you sign and submit transactions:"
           , witness
+          ]
+
+      LockAlreadyComplete addr ->
+        T.intercalate "\n"
+          [ "Participant " <> Api.serialiseAddress addr <> " has already locked funds in this payment channel"
           ]
 
 formatLovelaceAsAda :: Int32 -> Text

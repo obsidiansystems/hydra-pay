@@ -5,6 +5,7 @@
 -- |
 module HydraPay.Instance where
 
+import Data.Bifunctor (first)
 import Control.Concurrent.STM
 import Text.Printf
 import Cardano.Api.Extras
@@ -321,96 +322,66 @@ getLockTx state name addr amount = runExceptT $ do
   let
     theProxyAddress = ProxyAddress addr
 
-  runningHeadVar <- ExceptT $ getRunningHead state headId
-  port <- ExceptT $ withTMVar runningHeadVar $ \rh -> do
-    ensureHeadNodesReady state rh
-    let mNode = getNodeFor rh $ ProxyAddress addr -- proxyInfo ^. proxyInfo_address
-    result <- case mNode of
-      Just node -> do
-        pure $ Right $ node ^. hydraNode_apiPort
-      Nothing ->
-        pure $ Left "Failed to send client input, unable to locate suitable node"
-    pure (rh, result)
+  value :: Aeson.Value <- ExceptT $ first (T.pack) . Aeson.eitherDecode <$> (liftIO $ LBS.readFile $ proxyInfo ^. proxyInfo_hydraVerificationKey)
+  vkey <- ExceptT $ pure $ maybeToEither "Failed to find key 'cborHex' in Hydra Verification key" $ (value ^? key "cborHex" . _String . to (T.drop 4))
+  commits <- Db.runBeam state $ runSelectReturningList $ select $ do
+    comm <- all_ $ Db.db ^. Db.db_observedCommits
+    guard_ $ comm ^. Db.observedCommit_head ==. (val_ $ Db.HeadId $ SqlSerial $ headId)
+    pure comm
 
   let
-    adapter :: (MonadError Text m, MonadIO m) => IO a -> m a
-    adapter action = do
-      result <- liftIO $ try $ action
-      case result of
-        Left (err :: SomeException) -> throwError $ tShow err
-        Right a -> pure a
+    commitWasObserved = any (view (Db.observedCommit_vkey . to (==vkey))) commits
 
-
-  internalWalletBalance <- ExceptT $ runCardanoCli state $ queryUTxOs $ proxyInfo ^. proxyInfo_internalWalletAddress
-  pparams <- ExceptT $ runCardanoCli state getProtocolParameters
-
-  case totalLovelace internalWalletBalance > ada 10 of
+  case commitWasObserved of
+    True -> pure $ LockAlreadyComplete addr
     False -> do
-      let
-        fuelAmount :: Integer
-        fuelAmount = 30000000
-        internalAddr = proxyInfo ^. proxyInfo_internalWalletAddress
-        internalAddrStr = proxyInfo ^. proxyInfo_internalWalletAddress . to addressString
-      txPayload <- ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
-        let cfg = mkEvalConfig state paramsPath
-        ExceptT $ evalTxEither cfg $ do
-          out <- output internalAddrStr $ fromString $ show fuelAmount <> " lovelace"
-          void $ selectInputs (oValue out) addrStr
-          changeAddress addrStr
-          void $ balanceNonAdaAssets addrStr
-      pure $ LockFundInternal $ FundInternalWallet internalAddr $ T.pack txPayload
+      runningHeadVar <- ExceptT $ getRunningHead state headId
+      port <- ExceptT $ withTMVar runningHeadVar $ \rh -> do
+        ensureHeadNodesReady state rh
+        let mNode = getNodeFor rh $ ProxyAddress addr
+        result <- case mNode of
+          Just node -> do
+            pure $ Right $ node ^. hydraNode_apiPort
+          Nothing ->
+            pure $ Left "Failed to send client input, unable to locate suitable node"
+        pure (rh, result)
 
-    True -> do
-      balance <- ExceptT $ runCardanoCli state $ queryUTxOs $ theProxyAddress
       let
-        amountText = T.pack $ printf "%.2f" $ (fromIntegral amount :: Double) / 1000000.0
-        fullLovelace = totalLovelace balance
-      case amount > 0 of
+        adapter :: (MonadError Text m, MonadIO m) => IO a -> m a
+        adapter action = do
+          result <- liftIO $ try $ action
+          case result of
+            Left (err :: SomeException) -> throwError $ tShow err
+            Right a -> pure a
+
+      internalWalletBalance <- ExceptT $ runCardanoCli state $ queryUTxOs $ proxyInfo ^. proxyInfo_internalWalletAddress
+      pparams <- ExceptT $ runCardanoCli state getProtocolParameters
+
+      case totalLovelace internalWalletBalance > ada 10 of
         False -> do
           let
-            draftUtxo = mempty
-          initialRequest <- adapter $ HTTP.parseRequest $ "http://127.0.0.1:" <> show port <> "/commit"
+            fuelAmount :: Integer
+            fuelAmount = 30000000
+            internalAddr = proxyInfo ^. proxyInfo_internalWalletAddress
+            internalAddrStr = proxyInfo ^. proxyInfo_internalWalletAddress . to addressString
+          txPayload <- ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
+            let cfg = mkEvalConfig state paramsPath
+            ExceptT $ evalTxEither cfg $ do
+              out <- output internalAddrStr $ fromString $ show fuelAmount <> " lovelace"
+              void $ selectInputs (oValue out) addrStr
+              changeAddress addrStr
+              void $ balanceNonAdaAssets addrStr
+          pure $ LockFundInternal $ FundInternalWallet internalAddr $ T.pack txPayload
+
+        True -> do
+          balance <- ExceptT $ runCardanoCli state $ queryUTxOs $ theProxyAddress
           let
-            request =
-              HTTP.setRequestManager manager $ initialRequest
-              { HTTP.method = "POST", HTTP.requestBody = HTTP.RequestBodyLBS $ Aeson.encode $ DraftCommitTxRequest draftUtxo }
-
-          DraftCommitTxResponse txCbor <- fmap HTTP.getResponseBody $ adapter $ HTTP.httpJSON request
-          let
-             fileData = T.intercalate "\n"
-               [ "{"
-               , "    \"type\": \"Unwitnessed Tx BabbageEra\","
-               , "    \"description\": \"Ledger Cddl Format\","
-               , "    \"cborHex\": \"" <> txCbor <> "\""
-               , "}"
-               ]
-          internalWalletWitness <- ExceptT $ liftIO $ withTempFile "." "tx" $ \txPath txHandle -> do
-            withTempFile "." "witness-tx" $ \witnessPath witnessHandle -> runExceptT $ do
-              liftIO $ hClose txHandle >> hClose witnessHandle >> T.writeFile txPath fileData
-              ExceptT $ runCardanoCli state $ witnessTx (proxyInfo ^. proxyInfo_internalWalletSigningKey) txPath witnessPath
-              liftIO $ T.readFile witnessPath
-
-          pure $ LockInChannel $ FundPaymentChannel amount txCbor internalWalletWitness
-        True ->
-          case findUTxOWithExactly (fromIntegral amount) balance of
-            Nothing -> do
-              case fullLovelace >= fromIntegral amount of
-                False ->
-                  throwError $ "This address doesn't have enough at least " <> amountText <> "ADA to lock."
-                True -> do
-                  txPayload <- ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
-                    let cfg = mkEvalConfig state paramsPath
-                    ExceptT $ evalTxEither cfg $ do
-                      out <- output addrStr $ fromString $ show amount <> " lovelace"
-                      void $ selectInputs (oValue out) addrStr
-                      changeAddress addrStr
-                      void $ balanceNonAdaAssets addrStr
-
-                  pure $ LockCreateOutput amount $ T.pack txPayload
-
-            Just commitUtxo -> do
+            amountText = T.pack $ printf "%.2f" $ (fromIntegral amount :: Double) / 1000000.0
+            fullLovelace = totalLovelace balance
+          case amount > 0 of
+            False -> do
               let
-                draftUtxo = massageUtxo commitUtxo
+                draftUtxo = mempty
               initialRequest <- adapter $ HTTP.parseRequest $ "http://127.0.0.1:" <> show port <> "/commit"
               let
                 request =
@@ -432,7 +403,49 @@ getLockTx state name addr amount = runExceptT $ do
                   ExceptT $ runCardanoCli state $ witnessTx (proxyInfo ^. proxyInfo_internalWalletSigningKey) txPath witnessPath
                   liftIO $ T.readFile witnessPath
 
-              pure $ LockInChannel $ FundPaymentChannel amount txCbor internalWalletWitness
+              pure $ LockInChannel $ FundPaymentChannel amount fileData internalWalletWitness
+            True ->
+              case findUTxOWithExactly (fromIntegral amount) balance of
+                Nothing -> do
+                  case fullLovelace >= fromIntegral amount of
+                    False ->
+                      throwError $ "This address doesn't have enough at least " <> amountText <> "ADA to lock."
+                    True -> do
+                      txPayload <- ExceptT $ liftIO $ withProtocolParamsFile pparams $ \paramsPath -> runExceptT $ do
+                        let cfg = mkEvalConfig state paramsPath
+                        ExceptT $ evalTxEither cfg $ do
+                          out <- output addrStr $ fromString $ show amount <> " lovelace"
+                          void $ selectInputs (oValue out) addrStr
+                          changeAddress addrStr
+                          void $ balanceNonAdaAssets addrStr
+
+                      pure $ LockCreateOutput amount $ T.pack txPayload
+
+                Just commitUtxo -> do
+                  let
+                    draftUtxo = massageUtxo commitUtxo
+                  initialRequest <- adapter $ HTTP.parseRequest $ "http://127.0.0.1:" <> show port <> "/commit"
+                  let
+                    request =
+                      HTTP.setRequestManager manager $ initialRequest
+                      { HTTP.method = "POST", HTTP.requestBody = HTTP.RequestBodyLBS $ Aeson.encode $ DraftCommitTxRequest draftUtxo }
+
+                  DraftCommitTxResponse txCbor <- fmap HTTP.getResponseBody $ adapter $ HTTP.httpJSON request
+                  let
+                     fileData = T.intercalate "\n"
+                       [ "{"
+                       , "    \"type\": \"Unwitnessed Tx BabbageEra\","
+                       , "    \"description\": \"Ledger Cddl Format\","
+                       , "    \"cborHex\": \"" <> txCbor <> "\""
+                       , "}"
+                       ]
+                  internalWalletWitness <- ExceptT $ liftIO $ withTempFile "." "tx" $ \txPath txHandle -> do
+                    withTempFile "." "witness-tx" $ \witnessPath witnessHandle -> runExceptT $ do
+                      liftIO $ hClose txHandle >> hClose witnessHandle >> T.writeFile txPath fileData
+                      ExceptT $ runCardanoCli state $ witnessTx (proxyInfo ^. proxyInfo_internalWalletSigningKey) txPath witnessPath
+                      liftIO $ T.readFile witnessPath
+
+                  pure $ LockInChannel $ FundPaymentChannel amount fileData internalWalletWitness
 
 openPaymentChannel :: MonadIO m => HydraPayState -> Text -> Api.AddressAny -> Api.AddressAny -> m (Either Text FundInternalWallet)
 openPaymentChannel state name you other = do
