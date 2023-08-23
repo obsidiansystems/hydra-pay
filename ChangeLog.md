@@ -2,6 +2,14 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
+## Version v1.1.1
+
+* Fix outdated commands in README
+* Prevent same named channels to avoid ambiguity
+* Patch serialization of amounts using Int32
+* Add remove command
+* Let users know if they have already committed
+
 ## Version v1.1.0
 
 * Rework nix-pinned cardano dependencies
