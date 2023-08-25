@@ -203,7 +203,6 @@ toAddressAnyInNetwork network a = do
   where
     invalidAddrMsg = T.unwords ["Invalid", T.pack (show network), "Address"]
 
-
 nominalFuel :: Api.Lovelace
 nominalFuel = 100000000
 
