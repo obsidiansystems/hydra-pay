@@ -33,7 +33,7 @@ import HydraPay.Config
 
 data Command
   = Instance Text Int
-  | Channel ChannelCommand Int
+  | Channel ChannelCommand String Int
 
 data ChannelCommand
   = Open Text Text Text
@@ -45,11 +45,14 @@ data ChannelCommand
   | Remove Text
   deriving (Show)
 
+hostOption :: Parser String
+hostOption = option str (value "127.0.0.1" <> long "host" <> short 'h')
+
 portOption :: Parser Int
 portOption = option auto (value defaultPort <> long "port" <> short 'p')
 
 parseChannelCommand :: Parser Command
-parseChannelCommand = Channel <$> channelCommands <*> portOption
+parseChannelCommand = Channel <$> channelCommands <*> hostOption <*> portOption
   where
     channelCommands = subparser $
       command "status" (info parseStatus (progDesc "Get the status of a payment channel"))
@@ -140,32 +143,32 @@ runClient = do
       "preview" -> runInstance previewConfig port
       -- "sanchonet" -> runInstance sanchonetConfig port
       _ -> putStrLn "Please choose a network from the following options: preview | preprod"
-    Channel (Open name addrFirst addrSecond) port -> do
+    Channel (Open name addrFirst addrSecond) host port -> do
       case mkCreate name addrFirst addrSecond of
-        Right req -> clientRequest req port
+        Right req -> clientRequest req host port
         Left err -> putStrLn $ T.unpack err
-    Channel (Lock name addr amount) port -> do
+    Channel (Lock name addr amount) host port -> do
       case mkLock name addr amount of
-        Right req -> clientRequest req port
+        Right req -> clientRequest req host port
         Left err -> putStrLn $ T.unpack err
-    Channel (Status name) port -> clientRequest (GetStatus name) port
-    Channel (Send name addr amount) port ->
+    Channel (Status name) host port -> clientRequest (GetStatus name) host port
+    Channel (Send name addr amount) host port ->
       case mkSend name addr amount of
-        Right req -> clientRequest req port
+        Right req -> clientRequest req host port
         Left err -> putStrLn $ T.unpack err
-    Channel (Submit name addr file) port -> do
+    Channel (Submit name addr file) host port -> do
       result <- runExceptT $ mkSubmit name file addr
       case result of
-        Right req -> clientRequest req port
+        Right req -> clientRequest req host port
         Left err -> putStrLn $ T.unpack err
-    Channel (DoClose name) port ->
-      clientRequest (CloseChannel name) port
-    Channel (Remove name) port ->
-      clientRequest (RemoveChannel name) port
+    Channel (DoClose name) host port ->
+      clientRequest (CloseChannel name) host port
+    Channel (Remove name) host port ->
+      clientRequest (RemoveChannel name) host port
 
-clientRequest :: InstanceRequest -> Int -> IO ()
-clientRequest req port = do
-  tryRes :: (Either SomeException ()) <- try $ WS.runClient "127.0.0.1" port "/" $ \conn -> do
+clientRequest :: InstanceRequest -> String -> Int -> IO ()
+clientRequest req host port = do
+  tryRes :: (Either SomeException ()) <- try $ WS.runClient host port "/" $ \conn -> do
     WS.sendDataMessage conn $ WS.Text (Aeson.encode req) Nothing
     payload <- WS.receiveDataMessage conn
     WS.sendClose conn $ ("We are done here" :: T.Text)
