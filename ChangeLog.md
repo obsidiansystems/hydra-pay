@@ -2,6 +2,10 @@
 
 This project's release branch is `master`. This log is written from the perspective of the release branch: when changes hit `master`, they are considered released.
 
+## Version v1.1.2
+
+* Allow demo client to connect to non-local instances
+
 ## Version v1.1.1
 
 * Fix outdated commands in README
