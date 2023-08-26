@@ -90,10 +90,14 @@ docker pull obsidiansys/hydra-pay:latest
 docker run -p 127.0.0.1:8010:8010/tcp --name hydra-pay obsidiansys/hydra-pay:latest
 ```
 
-To use a custom configuration, mount a copy of the `config` directory from this repository to `/hydrapay/config`:
+By default the docker container runs a `preprod` instance of Hydra Pay, to change this you can use the `NETWORK` environment variable, the options are the same as the `hydra-pay` client:
+- mainnet
+- sanchonet
+- preprod
+- preview
 
 ```bash
-docker run -p 127.0.0.1:8010:8010/tcp --volume /path/to/hydra-pay/config:/hydrapay/config obsidiansys/hydra-pay:latest
+docker run -p 127.0.0.1:8010:8010/tcp -e NETWORK=<network> obsidiansys/hydra-pay:latest
 ```
 
 ### Running with Nix
