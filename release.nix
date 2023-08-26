@@ -8,27 +8,44 @@
     system = builtins.currentSystem;
   };
   nixpkgs = obelisk.nixpkgs;
+  pkgs = import <nixpkgs> {};
+
+  configs = pkgs.stdenv.mkDerivation
+  {
+    name = "configs";
+    src = ./config;
+
+    installPhase = ''
+      mkdir -p $out
+      cp -r * $out
+    '';
+  };
 in
 {
   dockerImage = args@{ version ? "latest", name ? "obsidiansys/hydra-pay" }:
-    nixpkgs.dockerTools.buildImage ({
+    pkgs.dockerTools.buildImage ({
       name = name;
       tag = version;
-      contents = [ nixpkgs.iana-etc
-                   nixpkgs.cacert
-                   nixpkgs.bashInteractive
-                 ];
+
       keepContentsDirlinks = true;
-      # User setup from https://unix.stackexchange.com/questions/723183/how-to-add-a-non-root-user-when-building-a-docker-image-with-nix
+
+      copyToRoot = pkgs.buildEnv {
+        name = "root";
+        paths = [ self.hydra-pay nixpkgs.bashInteractive nixpkgs.iana-etc
+                   nixpkgs.cacert];
+        pathsToLink = [ "/bin" ];
+      };
+
       runAsRoot = ''
-          #!${nixpkgs.runtimeShell}
-          ${nixpkgs.dockerTools.shadowSetup}
-          groupadd -r hydrapay
-          useradd -r -g hydrapay hydrapay
-          mkdir -p /hydrapay
-          ln -sft /hydrapay '${self.hydra-pay}'/*
-          chown -R hydrapay:hydrapay /hydrapay
-        '';
+        #!${nixpkgs.runtimeShell}
+        ${nixpkgs.dockerTools.shadowSetup}
+        mkdir -p hydra-pay/config
+        ln -sft /hydra-pay/config '${configs}'/*
+        groupadd -r hydra-pay
+        useradd -r -g hydra-pay hydra-pay
+        chown -R hydra-pay:hydra-pay /hydra-pay
+      '';
+
       config = {
         Env = [
           ("PATH=" + builtins.concatStringsSep(":")(
@@ -40,11 +57,13 @@ in
             map (pkg: "${pkg}/bin") nixpkgs.stdenv.initialPath # put common tools in path so docker exec is useful
           ))
           "LANG=C.UTF-8"
+          "NETWORK=preprod"
         ];
-        Expose = 8000;
-        Entrypoint = ["/hydrapay/backend"];
-        WorkingDir = "/hydrapay";
-        User = "hydrapay:hydrapay";
+
+        Cmd = [ "sh" "-c" "/bin/hydra-pay instance $NETWORK" ];
+        WorkingDir = "/hydra-pay";
+        Expose = 8010;
+        User = "hydra-pay:hydra-pay";
       };
     });
 })
