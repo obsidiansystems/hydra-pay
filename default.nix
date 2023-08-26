@@ -70,4 +70,4 @@ let
       };
     });
 in
-p // { hydra-pay = p.ghc.hydra-pay; inherit cardano-node hydra deps;}
+p // { hydra-pay = pkgs.haskell.lib.justStaticExecutables p.ghc.hydra-pay; inherit cardano-node hydra deps;}
